@@ -192,9 +192,9 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W2 — Monitoring & UX
 
 #### W2-1 — Frontend: app shell + device list
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-22  ·  **Done:** TBD
 - **Depends on:** W0-1
 - **Effort/Impact:** M / Medium
 - Tauri/React shell, authenticated nav, device list view.
