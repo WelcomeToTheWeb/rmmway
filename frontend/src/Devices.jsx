@@ -48,11 +48,19 @@ function DeviceRow({ d }) {
   );
 }
 
-export default function Devices({ token, onUnauthorized }) {
+export default function Devices({ token, onUnauthorized, focusFilter, focusKey }) {
   const [devices, setDevices] = useState(null);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
   const [tick, setTick] = useState(0);
+
+  // When the palette triggers "go to device", the parent bumps focusKey and
+  // sets focusFilter to the hostname; we sync the local filter here.
+  useEffect(() => {
+    if (focusKey !== null && focusFilter !== null) {
+      setQ(focusFilter);
+    }
+  }, [focusKey, focusFilter]);
 
   const load = useCallback(async () => {
     try {

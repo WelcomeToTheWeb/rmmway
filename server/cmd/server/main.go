@@ -259,6 +259,7 @@ func main() {
 	})
 
 	// W2-1: operator login + auth-gated device list + legacy /admin/*.
+	// W2-2: + /api/search (Cmd-K) and /api/devices/{id}/commands (dispatch).
 	apiSrv := httpapi.New(httpapi.Config{
 		Devices:       devicesStore,
 		Search:        mSearch,
@@ -266,6 +267,7 @@ func main() {
 		AdminUser:     adminUser,
 		AdminPassword: adminPassword,
 		MintBootstrap: svc.MintBootstrapToken,
+		Dispatch:      svc.Dispatcher().Dispatch,
 	})
 	apiSrv.Register(mux)
 

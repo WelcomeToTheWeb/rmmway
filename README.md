@@ -120,6 +120,40 @@ curl -fsS http://localhost:8080/api/devices -H "Authorization: Bearer $TOKEN"
 frontend polls `/api/devices` every 5 s and re-logs the operator out if the
 token goes invalid (e.g. a server restart rotated `RMMWAY_JWT_SECRET`).
 
+## Cmd-K palette (W2-2)
+
+From any signed-in screen, **Ctrl+K / ⌘K** (or the `Search` nav item) opens a
+command palette:
+
+- **Type a hostname, id, or IP** → debounced `GET /api/search?q=…` (the same
+  Meilisearch index, now auth-gated); each hit is a device row.
+- **Enter on a device row** → closes the palette and filters the device list
+  to that host.
+- **Run an action** — `Reboot selected device` / `Run script on selected
+  device` target the highlighted device (or the top hit) and call
+  `POST /api/devices/{id}/commands`, which pushes the command to the device's
+  live gRPC stream via the Dispatcher.
+
+```bash
+# search (auth-gated)
+curl -fsS "localhost:8080/api/search?q=fileserver" -H "Authorization: Bearer ***"
+# -> {"hits":[{"id":"dev-…","hostname":"fileserver-01","ip":[…],"online":true}],…}
+
+# dispatch a command (auth-gated)
+curl -fsS -X POST localhost:8080/api/devices/dev-…/commands \
+  -H "Authorization: Bearer ***" -H 'Content-Type: application/json' \
+  -d '{"action":"run_script","lang":"sh","script":"ZWNobyBoaQ=="}'
+# -> {"command_id":"cmd-N","device_id":"dev-…"}
+```
+
+Status codes: `401` no/bad token, `404` unknown device, `400` unknown action,
+`502` device offline (no live stream), `503` search index down (degraded).
+
+> **Scope note:** the agent *executes* dispatched commands and reports
+> results back (W5-1). Today it only logs receipt — the server side of the
+> dispatch path (mint → push to live stream) is what W2-2 delivers, and the
+> e2e proves the command reaches an open stream end-to-end.
+
 ## Conventions
 
 - Claims: `TASKS.md` is the coordination of record — claim before coding.

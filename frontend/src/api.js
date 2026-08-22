@@ -43,4 +43,19 @@ export const api = {
   // GET /api/devices -> Device[] (each has id, hostname, os, arch,
   // agent_version, interfaces[], tags[], online, first_seen, last_seen)
   devices: (token) => request("/api/devices", { token }),
+
+  // GET /api/search?q=... -> Meilisearch payload { hits[], estimatedTotalHits }.
+  // Each hit is a device doc (id, hostname, ip[], tags[], os, arch, ...).
+  // Backing for the Cmd-K palette.
+  search: (token, q) =>
+    request(`/api/search?q=${encodeURIComponent(q || "")}`, { token }),
+
+  // POST /api/devices/{id}/commands -> { command_id } (200) or error status.
+  // body: { action:"run_script"|"reboot", lang?, script? (base64), args? }
+  dispatch: (token, deviceId, body) =>
+    request(`/api/devices/${encodeURIComponent(deviceId)}/commands`, {
+      method: "POST",
+      token,
+      body,
+    }),
 };

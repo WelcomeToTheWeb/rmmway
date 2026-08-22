@@ -1,7 +1,8 @@
-// Command e2e verifies W1-5+W1-6+W1-7 against a RUNNING rmmway-server:
-// mint bootstrap (HTTP) -> enroll (gRPC) -> stream metrics -> dispatch a
-// command back down the stream -> device + samples visible in TimescaleDB
-// -> device immediately findable in Meilisearch (hostname + id).
+// Command e2e verifies W1-5+W1-6+W1-7+W2-2 against a RUNNING rmmway-server:
+// mint bootstrap (HTTP) -> enroll (gRPC) -> stream metrics -> operator login
+// + dispatch a command through the real HTTP endpoint and assert it arrives
+// on the live agent stream -> device + samples visible in TimescaleDB ->
+// device immediately findable in Meilisearch (hostname + id).
 //
 // Usage: go run ./cmd/e2e [grpc-host:port] [http-host:port] [pg-dsn]
 package main
@@ -9,12 +10,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -91,7 +94,8 @@ func main() {
 	}
 	fmt.Printf("enrolled device=%s jwt=%s...\n", enroll.DeviceId, enroll.Jwt[:24])
 
-	// 3. open stream, send heartbeat + metrics.
+	// 3. open stream; a drain goroutine owns Recv() for the rest of the run
+	// so the main flow can send metrics AND receive dispatched commands.
 	mdCtx := metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+enroll.Jwt))
 	stream, err := client.Stream(mdCtx)
 	if err != nil {
@@ -109,15 +113,46 @@ func main() {
 	}); err != nil {
 		die("send: %v", err)
 	}
-	if ack, err := stream.Recv(); err != nil || ack.GetHeartbeatAck() == nil {
-		die("no ack: %v", err)
+	// Drain: capture every downlink frame. The heartbeat ack arrives first;
+	// any dispatched command arrives as a StreamResponse_Command.
+	ackCh := make(chan *agentv1.HeartbeatAck, 1)
+	drainCtx, drainCancel := context.WithCancel(ctx)
+	drainDone := make(chan struct{})
+	var gotCmds []string
+	var cmdMu sync.Mutex
+	go func() {
+		defer close(drainDone)
+		for {
+			resp, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			select {
+			case <-drainCtx.Done():
+				return
+			default:
+			}
+			if ack := resp.GetHeartbeatAck(); ack != nil {
+				select {
+				case ackCh <- ack:
+				default:
+				}
+			}
+			if cmd := resp.GetCommand(); cmd != nil {
+				cmdMu.Lock()
+				gotCmds = append(gotCmds, cmd.GetId())
+				cmdMu.Unlock()
+			}
+		}
+	}()
+	select {
+	case <-ackCh:
+		fmt.Println("heartbeat ack received")
+	case <-time.After(5 * time.Second):
+		die("no heartbeat ack")
 	}
-	fmt.Println("heartbeat ack received")
 
-	// 4. command dispatch: the server can push a command down this stream.
-	// (e2e has no admin endpoint for dispatch yet — W1-5 ships the Dispatcher;
-	// this leg is covered by unit tests + W2's command UI. We at least prove
-	// the stream stays alive after a second frame.)
+	// 4. metrics batch (server persists to Timescale).
 	if err := stream.Send(&agentv1.StreamRequest{
 		Payload: &agentv1.StreamRequest_Metrics{Metrics: &agentv1.MetricBatch{
 			CollectedAtMs: now,
@@ -126,9 +161,69 @@ func main() {
 	}); err != nil {
 		die("send metrics batch: %v", err)
 	}
-	_ = stream.CloseSend()
 
-	// 5. device visible in admin JSON.
+	// 5. W2-2: operator login + dispatch a command through the REAL HTTP
+	// endpoint; assert it arrives on this live stream. The agent only logs
+	// receipt (execution + CommandResult reporting is W5-1); proving the
+	// dispatch half reaches the owning agent's stream is the W2-2 bar.
+	{
+		lb, _ := json.Marshal(map[string]string{"username": "admin", "password": "admin"})
+		lresp, err := http.Post(httpAddr+"/api/login", "application/json", bytes.NewReader(lb))
+		if err != nil {
+			die("login: %v", err)
+		}
+		var loginOut struct {
+			Token string `json:"token"`
+		}
+		_ = json.NewDecoder(lresp.Body).Decode(&loginOut)
+		lresp.Body.Close()
+		if lresp.StatusCode != 200 || loginOut.Token == "" {
+			die("login failed: status %d, no token", lresp.StatusCode)
+		}
+		scriptB64 := base64.StdEncoding.EncodeToString([]byte("echo w22 e2e ping"))
+		db, _ := json.Marshal(map[string]any{
+			"action": "run_script", "lang": "sh", "script": scriptB64,
+		})
+		req, _ := http.NewRequest("POST", httpAddr+"/api/devices/"+boot.DeviceID+"/commands", bytes.NewReader(db))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+loginOut.Token)
+		dresp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			die("dispatch: %v", err)
+		}
+		var dOut struct {
+			CommandID string `json:"command_id"`
+			DeviceID  string `json:"device_id"`
+			Error     string `json:"error"`
+		}
+		_ = json.NewDecoder(dresp.Body).Decode(&dOut)
+		dresp.Body.Close()
+		if dresp.StatusCode != 200 {
+			die("dispatch: status %d (%s)", dresp.StatusCode, dOut.Error)
+		}
+		fmt.Printf("dispatched command %s to %s (via /api/devices/{id}/commands)\n", dOut.CommandID, boot.DeviceID)
+		// Wait for the drain goroutine to see it.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			cmdMu.Lock()
+			n := len(gotCmds)
+			cmdMu.Unlock()
+			if n > 0 {
+				fmt.Printf("command %s received on the live stream (agent uplink drain)\n", gotCmds[0])
+				break
+			}
+			if time.Now().After(deadline) {
+				die("command %s did not arrive on the stream within 5s", dOut.CommandID)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	drainCancel()
+	_ = stream.CloseSend()
+	<-drainDone
+
+	// 6. device visible in admin JSON.
 	time.Sleep(200 * time.Millisecond)
 	resp, err = http.Get(httpAddr + "/admin/devices")
 	if err != nil {
@@ -232,7 +327,7 @@ func main() {
 					die("device with ip 10.0.0.99 not in search hits")
 				}
 			}
-			fmt.Println("PASS: W1-5+W1-6+W1-7 e2e — enroll, stream, metrics in Timescale, device searchable in Meilisearch")
+			fmt.Println("PASS: W1-5+W1-6+W1-7+W2-2 e2e — enroll, stream, command dispatched to live stream, metrics in Timescale, device searchable in Meilisearch")
 			return
 		}
 		lastErr = fmt.Errorf("search for %q returned 0 hits yet", enrollHost)

@@ -13,7 +13,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +23,7 @@ import (
 
 	"golang.org/x/crypto/pbkdf2"
 
+	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
@@ -45,6 +48,9 @@ type Server struct {
 	adminHash []byte
 
 	mintBootstrap func() (token, deviceID string)
+	// dispatch mints + pushes a command to a device's live stream (W2-2).
+	// Nil disables /api/devices/{id}/commands.
+	dispatch func(deviceID string, action any) (commandID string, err error)
 }
 
 // Config wires a Server. AdminPassword is hashed with a fresh per-boot salt
@@ -58,6 +64,9 @@ type Config struct {
 	AdminPassword string
 	// MintBootstrap mints a one-time enroll code; nil disables /admin/bootstrap.
 	MintBootstrap func() (token, deviceID string)
+	// Dispatch mints + pushes a command to a device's live stream (W2-2);
+	// nil disables /api/devices/{id}/commands.
+	Dispatch func(deviceID string, action any) (commandID string, err error)
 }
 
 // New builds a Server. A nil Devices falls back to an in-memory store.
@@ -92,6 +101,7 @@ func New(cfg Config) *Server {
 		adminSalt:     salt,
 		adminHash:     pbkdf2.Key([]byte(cfg.AdminPassword), salt, pbkdf2Iterations, pbkdf2KeyLen, sha256.New),
 		mintBootstrap: cfg.MintBootstrap,
+		dispatch:      cfg.Dispatch,
 	}
 }
 
@@ -99,6 +109,9 @@ func New(cfg Config) *Server {
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/devices", s.requireOperator(s.deviceList))
+	// W2-2: fuzzy device search (Cmd-K backing) + command dispatch, both auth-gated.
+	mux.HandleFunc("/api/search", s.requireOperator(s.handleSearch))
+	mux.HandleFunc("/api/devices/", s.requireOperator(s.dispatchCommand))
 	mux.HandleFunc("/admin/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("/admin/devices", s.deviceList) // open: installer / e2e / README
 	mux.HandleFunc("/admin/search", s.handleSearch)
@@ -226,6 +239,104 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+// dispatchCommand mints a command for a device and pushes it to its live
+// stream (W2-2 "a known action is runnable from the palette"). The agent
+// executes the action and reports a CommandResult — that execution +
+// reporting path lands with W5-1; here we prove the dispatch half: the
+// command reaches the owning agent's stream.
+//
+// POST /api/devices/{id}/commands   {"action":"run_script"|"reboot", "lang":"sh", "script":"…", "timeout_s":0}
+//
+//	200 {command_id}            — pushed to the live stream
+//	503                          — dispatch not wired (tests) or search-less
+//	400                          — bad body / unknown action / unsupported lang
+//	404                          — unknown device
+//	502                          — device has no live stream (offline)
+func (s *Server) dispatchCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.dispatch == nil {
+		http.Error(w, "command dispatch not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// /api/devices/{id}/commands
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// parts: ["api","devices","<id>","commands"]
+	if len(parts) != 4 || parts[3] != "commands" || parts[2] == "" {
+		http.Error(w, "expected /api/devices/{id}/commands", http.StatusNotFound)
+		return
+	}
+	deviceID := parts[2]
+	ok, err := s.devices.Contains(r.Context(), deviceID)
+	if err != nil {
+		http.Error(w, "device lookup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	var in dispatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	action, err := buildCommandAction(in)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	cmdID, err := s.dispatch(deviceID, action)
+	if err != nil {
+		if strings.Contains(err.Error(), "not reachable") {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "device is offline (no live stream)"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"command_id": cmdID, "device_id": deviceID})
+}
+
+// dispatchRequest is the JSON body for POST /api/devices/{id}/commands.
+type dispatchRequest struct {
+	Action   string   `json:"action"`
+	Lang     string   `json:"lang"`
+	Script   string   `json:"script"` // base64
+	Args     []string `json:"args"`
+	TimeoutS int32    `json:"timeout_s"`
+}
+
+// buildCommandAction maps the JSON body onto the proto oneof action.
+func buildCommandAction(in dispatchRequest) (any, error) {
+	switch in.Action {
+	case "run_script":
+		lang := in.Lang
+		if lang == "" {
+			lang = "sh"
+		}
+		switch lang {
+		case "sh", "powershell", "python":
+		default:
+			return nil, fmt.Errorf("unsupported script lang %q (want sh|powershell|python)", lang)
+		}
+		if _, err := base64.StdEncoding.DecodeString(in.Script); err != nil {
+			return nil, fmt.Errorf("script must be base64: %v", err)
+		}
+		return &agentv1.Command_RunScript{RunScript: &agentv1.RunScript{
+			Lang:      lang,
+			ScriptB64: in.Script,
+			Args:      in.Args,
+		}}, nil
+	case "reboot":
+		return &agentv1.Command_Reboot{Reboot: &agentv1.Reboot{DelayS: 0}}, nil
+	default:
+		return nil, fmt.Errorf("unknown action %q (want run_script|reboot)", in.Action)
+	}
 }
 
 // handleBootstrap mints a one-time enroll code (W1-3 installer / e2e).

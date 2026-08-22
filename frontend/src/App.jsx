@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { AuthProvider, useAuth } from "./auth.jsx";
 import Login from "./Login.jsx";
 import Devices from "./Devices.jsx";
+import Palette from "./Palette.jsx";
 
-function Header() {
+function Header({ onOpenPalette }) {
   const { token, logout } = useAuth();
   const [health, setHealth] = useState(null);
   useEffect(() => {
@@ -28,8 +29,14 @@ function Header() {
       <div className="brand">RMMWay</div>
       <nav className="nav">
         <a className="nav-item active" href="#/devices">Devices</a>
-        <a className="nav-item disabled" title="Comes in W2-2 (Cmd-K palette)">
-          Search
+        <a
+          className="nav-item"
+          href="#/search"
+          role="button"
+          onClick={(e) => { e.preventDefault(); onOpenPalette(); }}
+          title="Search devices & run actions (Ctrl+K)"
+        >
+          Search <kbd className="kbd">⌘K</kbd>
         </a>
         <a className="nav-item disabled" title="Comes in W2-4 (alerts inbox)">
           Alerts
@@ -53,13 +60,51 @@ function Header() {
 
 function Shell() {
   const { token, logout } = useAuth();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [focusKey, setFocusKey] = useState(0);
+  const [focusFilter, setFocusFilter] = useState(null);
+
+  // Global ⌘K / Ctrl+K opens the palette (only when signed in).
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  useEffect(() => {
+    if (!token) return;
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [token]);
+
+  const goToDevice = useCallback((id, hostname) => {
+    setFocusFilter(hostname || id);
+    setFocusKey((k) => k + 1);
+  }, []);
+  const goToAll = useCallback(() => {
+    setFocusFilter("");
+    setFocusKey((k) => k + 1);
+  }, []);
+
   if (!token) return <Login />;
   return (
     <div className="shell">
-      <Header />
+      <Header onOpenPalette={openPalette} />
       <main className="content">
-        <Devices token={token} onUnauthorized={logout} />
+        <Devices
+          token={token}
+          onUnauthorized={logout}
+          focusFilter={focusFilter}
+          focusKey={focusKey}
+        />
       </main>
+      <Palette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onGoToDevice={goToDevice}
+        onGoToAll={goToAll}
+      />
     </div>
   );
 }
