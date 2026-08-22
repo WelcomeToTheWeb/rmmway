@@ -224,6 +224,54 @@ func DeviceIDFromContext(ctx context.Context) (string, bool) {
 	return id, ok
 }
 
+// ---- operator (human/UI) JWT — W2-1 --------------------------------------
+//
+// Agent JWTs (above) carry a device id as their subject; operator JWTs
+// carry the literal subject "operator" so a token can't be mistaken for the
+// other kind (the issuer/subject checks are what make that guarantee).
+// httpapi.Mint signs them; httpapi.OperatorJWT verifies them.
+
+const (
+	// OperatorSubject is the JWT subject of every operator token.
+	OperatorSubject = "operator"
+	// JWTIssuer identifies RMMWay-issued tokens to the verifier.
+	JWTIssuer = "rmmway"
+)
+
+// OperatorJWT is the operator variant of JWTClaims.
+type OperatorJWT struct {
+	jwt.RegisteredClaims
+}
+
+// MintOperatorJWT signs an operator token valid for lifetime.
+func MintOperatorJWT(secret []byte, lifetime time.Duration) (string, error) {
+	now := time.Now()
+	claims := OperatorJWT{RegisteredClaims: jwt.RegisteredClaims{
+		Subject:   OperatorSubject,
+		Issuer:    JWTIssuer,
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(now.Add(lifetime)),
+	}}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)
+}
+
+// ParseOperatorJWT validates a Bearer-style operator token. It returns false
+// for any token that isn't a well-formed, correctly signed, unexpired
+// operator token (wrong kind, bad signature, expired, or malformed).
+func ParseOperatorJWT(secret []byte, tok string) bool {
+	claims := &OperatorJWT{}
+	_, err := jwt.ParseWithClaims(tok, claims, func(t *jwt.Token) (any, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method %v", t.Header["alg"])
+		}
+		return secret, nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+	if err != nil {
+		return false
+	}
+	return claims.Subject == OperatorSubject && claims.Issuer == JWTIssuer
+}
+
 // ---- AgentService implementation -------------------------------------------
 
 // Enroll exchanges a one-time bootstrap token for the device's persistent

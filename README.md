@@ -87,7 +87,38 @@ Server env knobs (defaults shown):
 | `RMMWAY_MEILI_ENDPOINT` | `http://localhost:7700` |
 | `RMMWAY_MEILI_KEY` | `` (dev instance; set the master key in prod) |
 | `RMMWAY_JWT_SECRET` | random per boot (tokens rotate on restart — dev only) |
+| `RMMWAY_ADMIN_USER` | `admin` (operator UI login username) |
+| `RMMWAY_ADMIN_PASSWORD` | `admin` (operator UI login password) |
 | `RMMWAY_HTTP_ADDR` / `RMMWAY_GRPC_ADDR` | `:8080` / `:50051` |
+
+## Operator UI (W2-1)
+
+The React frontend (Vite, `make frontend` → `http://localhost:5173`) is a small
+operator app: a login screen, then a device list with live status. The Vite dev
+server proxies `/api/*` to the Go server, so the browser only ever talks to
+`:5173`.
+
+**Login** mints a short-lived operator JWT (subject `operator`, issuer
+`rmmway`), distinct from the agent JWTs:
+
+```bash
+curl -fsS -X POST http://localhost:8080/api/login \
+  -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}'
+# -> {"token":"eyJ...","expiry":"2026-08-23T05:00:00Z"}
+```
+
+**Device list** is auth-gated on that token:
+
+```bash
+TOKEN=*** -s -X POST localhost:8080/api/login -d '{"username":"admin","password":"admin"}' -H 'Content-Type: application/json' | jq -r .token)
+curl -fsS http://localhost:8080/api/devices -H "Authorization: Bearer $TOKEN"
+# -> [{"id":"dev-…","hostname":"…","online":true,"last_seen":"…", …}]
+```
+
+`/admin/*` (bootstrap mint, device list, search) stays open for machine callers
+(the `curl|sh` installer, the e2e harness, the search examples above). The
+frontend polls `/api/devices` every 5 s and re-logs the operator out if the
+token goes invalid (e.g. a server restart rotated `RMMWAY_JWT_SECRET`).
 
 ## Conventions
 

@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
+	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
@@ -162,6 +162,10 @@ func main() {
 	httpAddr := env("RMMWAY_ADDR", ":8080")
 	grpcAddr := env("RMMWAY_GRPC_ADDR", ":50051")
 	jwtSecret := []byte(env("RMMWAY_JWT_SECRET", "rmmway-dev-secret-change-me"))
+	// Operator (human/UI) credentials for the frontend login (W2-1).
+	// Single admin account; override both in prod.
+	adminUser := env("RMMWAY_ADMIN_USER", "admin")
+	adminPassword := env("RMMWAY_ADMIN_PASSWORD", "admin")
 
 	// ---- data layer (W1-6) ---------------------------------------------
 	dsn := env("RMMWAY_PG_DSN", "postgres://rmmway:rmmway@localhost:5432/rmmway?sslmode=disable")
@@ -233,7 +237,7 @@ func main() {
 		}
 	}()
 
-	// ---- HTTP (health + admin JSON) ------------------------------------
+	// ---- HTTP (health + operator API + admin JSON) ---------------------
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -254,62 +258,16 @@ func main() {
 		_ = json.NewEncoder(w).Encode(h)
 	})
 
-	// Admin: mint a bootstrap token (W1-3's curl|sh line will fetch this).
-	mux.HandleFunc("/admin/bootstrap", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
-			return
-		}
-		tok, devID := svc.MintBootstrapToken()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"bootstrap_token": tok, "device_id": devID})
+	// W2-1: operator login + auth-gated device list + legacy /admin/*.
+	apiSrv := httpapi.New(httpapi.Config{
+		Devices:       devicesStore,
+		Search:        mSearch,
+		JWTSecret:     jwtSecret,
+		AdminUser:     adminUser,
+		AdminPassword: adminPassword,
+		MintBootstrap: svc.MintBootstrapToken,
 	})
-
-	// Admin: device list (W2-1 frontend will consume this).
-	mux.HandleFunc("/admin/devices", func(w http.ResponseWriter, r *http.Request) {
-		type devOut struct {
-			ID           string    `json:"id"`
-			Hostname     string    `json:"hostname"`
-			OS           string    `json:"os"`
-			Arch         string    `json:"arch"`
-			AgentVersion string    `json:"agent_version"`
-			Online       bool      `json:"online"`
-			LastSeen     time.Time `json:"last_seen"`
-		}
-		out := []devOut{}
-		list, err := devicesStore.List(r.Context())
-		if err != nil {
-			http.Error(w, "device list: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, d := range list {
-			out = append(out, devOut{d.ID, d.Hostname, d.OS, d.Arch, d.AgentVersion, d.Online, d.LastSeen})
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(out)
-	})
-
-	// Admin: device search over Meilisearch (W1-7 / W2-2 Cmd-K backing).
-	mux.HandleFunc("/admin/search", func(w http.ResponseWriter, r *http.Request) {
-		if mSearch == nil {
-			http.Error(w, "search index not available (meilisearch down or disabled)", http.StatusServiceUnavailable)
-			return
-		}
-		q := r.URL.Query().Get("q")
-		limit := 20
-		if v := r.URL.Query().Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				limit = n
-			}
-		}
-		res, err := mSearch.Search(r.Context(), q, limit)
-		if err != nil {
-			http.Error(w, "search: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(res)
-	})
+	apiSrv.Register(mux)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
