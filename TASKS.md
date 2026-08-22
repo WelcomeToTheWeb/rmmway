@@ -137,9 +137,9 @@ parallel. Within a track, respect `Depends on` ordering.
 - **Definition of done:** agent emits all five metric families over the wire.
 
 #### W1-3 — One-line bootstrap installer
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng1way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W1-1
 - **Effort/Impact:** M / High
 - `curl | sh` (Linux/macOS) and a PowerShell one-liner (Windows).
