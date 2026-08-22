@@ -111,7 +111,7 @@ func main() {
 	if err := stream.Send(&agentv1.StreamRequest{
 		Payload: &agentv1.StreamRequest_Metrics{Metrics: &agentv1.MetricBatch{
 			CollectedAtMs: now,
-			Samples: []*agentv1.Metric{{Name: "system.uptime_seconds", Value: 1234, TimestampMs: now}},
+			Samples:       []*agentv1.Metric{{Name: "system.uptime_seconds", Value: 1234, TimestampMs: now}},
 		}},
 	}); err != nil {
 		die("send metrics batch: %v", err)
