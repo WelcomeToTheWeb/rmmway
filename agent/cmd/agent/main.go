@@ -12,12 +12,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/welcometotheweb/rmmway/agent/internal/collectors"
 )
 
 // Injected at build time: -ldflags "-X main.version=... -X main.commit=... -X main.date=..."
@@ -57,8 +60,26 @@ func main() {
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusServiceUnavailable {
 			os.Exit(1)
 		}
+	case "collect":
+		// W1-2: sample all five core metric families once, print as text.
+		batch, err := collectors.NewCollector().Collect(context.Background())
+		if err != nil && len(batch.Samples) == 0 {
+			fmt.Fprintf(os.Stderr, "collect: %v\n", err)
+			os.Exit(1)
+		}
+		for _, s := range batch.Samples {
+			if s.Source != "" {
+				fmt.Printf("%s[%s] = %g\n", s.Name, s.Source, s.Value)
+			} else {
+				fmt.Printf("%s = %g\n", s.Name, s.Value)
+			}
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "(partial: %v)\n", err)
+			os.Exit(1)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "usage: rmmway-agent [--version|ping [server-url]]\n")
+		fmt.Fprintf(os.Stderr, "usage: rmmway-agent [--version|ping [server-url]|collect]\n")
 		os.Exit(2)
 	}
 }
