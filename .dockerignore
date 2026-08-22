@@ -1,0 +1,7 @@
+.git
+**/node_modules
+**/bin
+agent/agent
+server/server
+frontend/dist
+frontend/.vite
