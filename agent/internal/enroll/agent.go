@@ -51,8 +51,8 @@ func New(client Enroller, store *Store, facts Facts, bootstrap string, opts ...O
 
 // Result reports what EnsureEnrolled did, for logging / the status command.
 type Result struct {
-	Identity  *Identity
-	Enrolled  bool // true only if a fresh enroll happened this call (first boot)
+	Identity *Identity
+	Enrolled bool // true only if a fresh enroll happened this call (first boot)
 }
 
 // EnsureEnrolled returns this agent's Identity, enrolling on first boot and

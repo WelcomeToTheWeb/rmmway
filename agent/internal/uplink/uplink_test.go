@@ -19,8 +19,8 @@ import (
 // fakeBidi implements agentv1.AgentService_StreamClient (a type alias for
 // grpc.BidiStreamingClient[StreamRequest, StreamResponse]).
 type fakeBidi struct {
-	sentMu sync.Mutex
-	sent   []*agentv1.StreamRequest
+	sentMu  sync.Mutex
+	sent    []*agentv1.StreamRequest
 	recvOut chan *agentv1.StreamResponse
 	recvErr chan error
 	ctx     context.Context
@@ -48,14 +48,14 @@ func (f *fakeBidi) Recv() (*agentv1.StreamResponse, error) {
 }
 
 // low-level transport methods (embedded ClientStream) — unused by the loop.
-func (f *fakeBidi) SendMsg(m any) error { return nil }
-func (f *fakeBidi) RecvMsg(m any) error { return nil }
-func (f *fakeBidi) CloseSend() error          { return nil }
+func (f *fakeBidi) SendMsg(m any) error                            { return nil }
+func (f *fakeBidi) RecvMsg(m any) error                            { return nil }
+func (f *fakeBidi) CloseSend() error                               { return nil }
 func (f *fakeBidi) CloseAndRecv() (*agentv1.StreamResponse, error) { return f.Recv() }
-func (f *fakeBidi) Context() context.Context  { return f.ctx }
-func (f *fakeBidi) Header() (metadata.MD, error) { return nil, nil }
-func (f *fakeBidi) Trailer() metadata.MD      { return nil }
-func (f *fakeBidi) Close() error              { return nil }
+func (f *fakeBidi) Context() context.Context                       { return f.ctx }
+func (f *fakeBidi) Header() (metadata.MD, error)                   { return nil, nil }
+func (f *fakeBidi) Trailer() metadata.MD                           { return nil }
+func (f *fakeBidi) Close() error                                   { return nil }
 
 var _ agentv1.AgentService_StreamClient = (*fakeBidi)(nil)
 

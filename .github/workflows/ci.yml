@@ -33,7 +33,7 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: go vet (agent)
         working-directory: agent
-        run: go vet ./...
+        run: go vet -tags integration ./...
       - name: go vet (server)
         working-directory: server
         run: go vet ./...
@@ -54,7 +54,9 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - name: go test (agent)
         working-directory: agent
-        run: go test ./...
+        # -tags integration also runs the W1-4 enroll/uplink end-to-end test
+        # (real gRPC server over a socket); it is fast and self-contained.
+        run: go test -tags integration ./...
       - name: go test (server)
         working-directory: server
         run: go test ./...

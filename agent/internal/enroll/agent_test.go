@@ -32,6 +32,7 @@ func (f *fakeEnroller) Enroll(_ context.Context, in *agentv1.EnrollRequest, _ ..
 }
 
 var _ Enroller = (*fakeEnroller)(nil)
+
 // Compile-time proof the real generated client interface also satisfies Enroller.
 var _ Enroller = (agentv1.AgentServiceClient)(nil)
 
