@@ -91,9 +91,9 @@ parallel. Within a track, respect `Depends on` ordering.
   server + React app build and run against them.
 
 #### W0-2 — Agent protocol (gRPC protos)
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W0-1
 - **Effort/Impact:** S / High
 - Define `proto/` for the agent protocol: enroll, heartbeat, metrics push,
