@@ -74,6 +74,23 @@ jobs:
       - name: go build (server)
         working-directory: server
         run: go build -o bin/server ./cmd/server
+      - name: Cross-compile agent (static, 5 targets)
+        run: |
+          make agent
+          ls -lh agent/dist/
+          file agent/dist/*
+      - name: "Verify static (linux/amd64): ldd + version"
+        run: |
+          file agent/dist/rmmway-agent-linux-amd64
+          ldd agent/dist/rmmway-agent-linux-amd64 2>&1 | grep -Ei 'not a dynamic|statically linked'
+          ./agent/dist/rmmway-agent-linux-amd64 --version
+      - name: Upload agent binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmmway-agent
+          path: agent/dist/*
+          retention-days: 7
 
   frontend:
     name: Frontend
@@ -103,7 +120,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ toLower(github.repository) }}
           tags: |
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
@@ -112,6 +129,7 @@ jobs:
         with:
           context: .
           file: server/Dockerfile
+          registry: ghcr.io
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -65,6 +65,20 @@ check: ## W0-1 DoD: build everything + verify /healthz reports all services ok
 	@curl -fsS http://localhost:8080/healthz || \
 		{ echo "server not running — try: make run-server (background)"; exit 1; }
 
+.PHONY: agent
+agent: ## Cross-compile static agent binaries (linux/darwin/windows × amd64/arm64)
+	@scripts/build-agent.sh $(VERSION)
+
+.PHONY: verify-agent
+verify-agent: ## W1-1 DoD: confirm the built binaries are static (no shared libs)
+	@echo "== file (linux/amd64)"
+	@file agent/dist/rmmway-agent-linux-amd64
+	@echo "== ldd (should report not a dynamic executable)"
+	@ldd agent/dist/rmmway-agent-linux-amd64 2>&1 | grep -Ei 'not a dynamic|statically linked' || \
+		{ echo "FAIL: linux binary is dynamically linked"; exit 1; }
+	@echo "== version (runs on this host)"
+	@./agent/dist/rmmway-agent-linux-amd64 --version
+
 ## ---- Protos ----------------------------------------------------------------
 
 .PHONY: proto

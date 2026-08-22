@@ -1,10 +1,14 @@
-// Package main is the RMMWay agent (W0-1 scaffold).
+// Package main is the RMMWay agent.
 //
-// W0-1 only needs "a trivial Go server + React app build and run". The real
-// agent (static binary, collectors, bootstrap, enrollment) is W1-1 → W1-4.
+// W1-1: single static binary per OS, zero runtime deps. Build via
+// `make agent` (or scripts/build-agent.sh) which cross-compiles
+// linux/darwin/windows × amd64/arm64 as static binaries with the version
+// stamped in.
 //
-// For now: `rmmway-agent --version` prints the version; `rmmway-agent ping`
-// checks reachability of the server's /healthz endpoint.
+// Subcommands:
+//
+//	rmmway-agent --version   print version
+//	rmmway-agent ping [url]  check the server's /healthz
 package main
 
 import (
@@ -12,10 +16,16 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 )
 
-const version = "0.0.0-scaffold"
+// Injected at build time: -ldflags "-X main.version=... -X main.commit=... -X main.date=..."
+var (
+	version = "0.0.0-dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 func main() {
 	args := os.Args[1:]
@@ -25,7 +35,11 @@ func main() {
 	}
 	switch cmd {
 	case "--version", "version":
-		fmt.Printf("rmmway-agent %s (W0-1 scaffold)\n", version)
+		if len(args) > 1 && args[1] == "-v" {
+			fmt.Printf("rmmway-agent %s (commit %s, built %s, %s/%s)\n", version, commit, date, runtime.GOOS, runtime.GOARCH)
+			return
+		}
+		fmt.Printf("rmmway-agent %s\n", version)
 	case "ping":
 		server := "http://localhost:8080/healthz"
 		if len(args) > 1 {
