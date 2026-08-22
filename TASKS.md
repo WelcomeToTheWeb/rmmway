@@ -147,9 +147,9 @@ parallel. Within a track, respect `Depends on` ordering.
   pasted line on each OS.
 
 #### W1-4 — Agent self-enrollment
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng1way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W0-2, W1-5
 - **Effort/Impact:** M / High
 - Request an agent JWT from the server, persist it, report back.
