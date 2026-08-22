@@ -93,7 +93,7 @@ parallel. Within a track, respect `Depends on` ordering.
 #### W0-2 — Agent protocol (gRPC protos)
 - **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (see `W0-2` commit on `main`)
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit `265c35f` on `main`)
 - **Depends on:** W0-1
 - **Effort/Impact:** S / High
 - Define `proto/` for the agent protocol: enroll, heartbeat, metrics push,
