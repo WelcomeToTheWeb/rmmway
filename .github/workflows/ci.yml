@@ -120,7 +120,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ toLower(github.repository) }}
+          # GHCR repo names must be lowercase; github.repository keeps the
+          # owner's case (WelcomeToTheWeb/rmmway). Hardcoded lowercase to
+          # keep the expression simple (the repo name is stable).
+          images: ghcr.io/welcometotheweb/rmmway
           tags: |
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
