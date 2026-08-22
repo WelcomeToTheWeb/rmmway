@@ -102,9 +102,9 @@ parallel. Within a track, respect `Depends on` ordering.
   agent and server sides.
 
 #### W0-3 — CI skeleton
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng1way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W0-1
 - **Effort/Impact:** S / Medium
 - GitHub Actions: build+test for Go agent + server, lint, Docker image
