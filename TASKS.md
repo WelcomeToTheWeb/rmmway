@@ -54,11 +54,11 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 
 ### Progress at a glance
 - **W0 Scaffolding:** 2 / 3
-- **W1 The Agent:**    0 / 7
+- **W1 The Agent:**    1 / 7
 - **W2 Monitoring+UX:** 0 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 2 / 28
+- **Total:** 3 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -157,9 +157,9 @@ parallel. Within a track, respect `Depends on` ordering.
   a device with a valid token; restart doesn't re-enroll.
 
 #### W1-5 — Server: gRPC agent ingest service
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-22  ·  **Done:** —
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit on `main`, `server/internal/ingest` + `server/cmd/e2e`)
 - **Depends on:** W0-2
 - **Effort/Impact:** M / High
 - Auth (JWT) + metric receive + command dispatch.

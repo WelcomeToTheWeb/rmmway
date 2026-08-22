@@ -1,9 +1,7 @@
-// Package main is the RMMWay backend server (W0-1 scaffold).
+// Package main is the RMMWay backend server.
 //
-// For W0-1 the job is "a trivial Go server that runs against the local dev
-// stack": it serves HTTP on :8080 and exposes /healthz, which actively probes
-// every backing service (TimescaleDB, NATS, Redis, MinIO, Meilisearch).
-// W1-5 replaces the gRPC placeholder with the real agent ingest service.
+// W1-5: serves HTTP :8080 (health + admin JSON) and gRPC :50051 (agent
+// ingest: Enroll + Stream). W0-1's /healthz still probes the stack.
 package main
 
 import (
@@ -11,15 +9,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
+
+	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
+	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 )
 
 func env(key, def string) string {
@@ -45,7 +49,6 @@ type health struct {
 func runProbes(ctx context.Context) []probe {
 	probes := make([]probe, 0, 5)
 
-	// 1. TimescaleDB (Postgres)
 	{
 		dsn := env("RMMWAY_PG_DSN", "postgres://rmmway:rmmway@localhost:5432/rmmway?sslmode=disable")
 		start := time.Now()
@@ -70,8 +73,6 @@ func runProbes(ctx context.Context) []probe {
 		}
 		probes = append(probes, p)
 	}
-
-	// 2. NATS (JetStream available)
 	{
 		url := env("RMMWAY_NATS_URL", "nats://localhost:4222")
 		start := time.Now()
@@ -80,15 +81,12 @@ func runProbes(ctx context.Context) []probe {
 		if err == nil {
 			p.OK = true
 			p.Latency = time.Since(start).Round(time.Millisecond).String()
-			p.Detail = "jetstream=" + jetstreamOK(ctx, nc)
 			nc.Close()
 		} else {
 			p.Detail = err.Error()
 		}
 		probes = append(probes, p)
 	}
-
-	// 3. Redis
 	{
 		addr := env("RMMWAY_REDIS_ADDR", "localhost:6379")
 		start := time.Now()
@@ -106,8 +104,6 @@ func runProbes(ctx context.Context) []probe {
 		rdb.Close()
 		probes = append(probes, p)
 	}
-
-	// 4. MinIO (S3 API — any HTTP response means the API is up)
 	{
 		endpoint := env("RMMWAY_MINIO_ENDPOINT", "http://localhost:9000")
 		start := time.Now()
@@ -118,7 +114,6 @@ func runProbes(ctx context.Context) []probe {
 		p := probe{Service: "minio"}
 		if err == nil {
 			defer resp.Body.Close()
-			// 403 (auth required) still proves the S3 API is listening.
 			if resp.StatusCode < 500 {
 				p.OK = true
 				p.Latency = time.Since(start).Round(time.Millisecond).String()
@@ -131,8 +126,6 @@ func runProbes(ctx context.Context) []probe {
 		}
 		probes = append(probes, p)
 	}
-
-	// 5. Meilisearch
 	{
 		endpoint := env("RMMWAY_MEILI_ENDPOINT", "http://localhost:7700")
 		start := time.Now()
@@ -154,22 +147,34 @@ func runProbes(ctx context.Context) []probe {
 		}
 		probes = append(probes, p)
 	}
-
 	return probes
 }
 
-func jetstreamOK(ctx context.Context, nc *nats.Conn) string {
-	_, err := nc.JetStream()
-	if err != nil {
-		return "unavailable (" + err.Error() + ")"
-	}
-	return "enabled"
-}
-
 func main() {
-	version := env("RMMWAY_VERSION", "0.0.0-scaffold")
-	addr := env("RMMWAY_ADDR", ":8080")
+	version := env("RMMWAY_VERSION", "0.1.0")
+	httpAddr := env("RMMWAY_ADDR", ":8080")
+	grpcAddr := env("RMMWAY_GRPC_ADDR", ":50051")
+	jwtSecret := []byte(env("RMMWAY_JWT_SECRET", "rmmway-dev-secret-change-me"))
 
+	// ---- gRPC ingest (W1-5) -------------------------------------------
+	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret}, ingest.NewMemoryMetricsSink(100000))
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(svc.JWTInterceptor),
+	)
+	agentv1.RegisterAgentServiceServer(grpcServer, svc)
+
+	lis, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		log.Fatalf("grpc listen %s: %v", grpcAddr, err)
+	}
+	go func() {
+		log.Printf("rmmway-server %s: gRPC agent ingest on %s", version, grpcAddr)
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Printf("grpc server: %v", err)
+		}
+	}()
+
+	// ---- HTTP (health + admin JSON) ------------------------------------
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +195,36 @@ func main() {
 		_ = json.NewEncoder(w).Encode(h)
 	})
 
+	// Admin: mint a bootstrap token (W1-3's curl|sh line will fetch this).
+	mux.HandleFunc("/admin/bootstrap", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		tok, devID := svc.MintBootstrapToken()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"bootstrap_token": tok, "device_id": devID})
+	})
+
+	// Admin: device list (W2-1 frontend will consume this).
+	mux.HandleFunc("/admin/devices", func(w http.ResponseWriter, r *http.Request) {
+		type devOut struct {
+			ID           string    `json:"id"`
+			Hostname     string    `json:"hostname"`
+			OS           string    `json:"os"`
+			Arch         string    `json:"arch"`
+			AgentVersion string    `json:"agent_version"`
+			Online       bool      `json:"online"`
+			LastSeen     time.Time `json:"last_seen"`
+		}
+		out := []devOut{}
+		for _, d := range svc.Devices().List() {
+			out = append(out, devOut{d.ID, d.Hostname, d.OS, d.Arch, d.AgentVersion, d.Online, d.LastSeen})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -199,15 +234,14 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"service": "rmmway-server",
 			"version": version,
-			"note":    "W0-1 scaffold. Agent ingest service lands in W1-5.",
+			"grpc":    grpcAddr,
 		})
 	})
 
-	srv := &http.Server{Addr: addr, Handler: mux}
-
+	httpServer := &http.Server{Addr: httpAddr, Handler: mux}
 	go func() {
-		log.Printf("rmmway-server %s listening on %s", version, addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("rmmway-server %s: HTTP on %s", version, httpAddr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
 	}()
@@ -216,7 +250,8 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	log.Println("shutting down")
+	grpcServer.GracefulStop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
+	_ = httpServer.Shutdown(shutdownCtx)
 }

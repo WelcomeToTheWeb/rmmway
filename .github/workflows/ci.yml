@@ -1,0 +1,119 @@
+# W0-3: CI skeleton.
+# A push runs lint + test + build for both Go modules, builds the frontend,
+# and builds (and on main: pushes) the server Docker image.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One in-flight run per ref (latest wins).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.24.5"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: gofmt (agent)
+        working-directory: agent
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: gofmt (server)
+        working-directory: server
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet (agent)
+        working-directory: agent
+        run: go vet ./...
+      - name: go vet (server)
+        working-directory: server
+        run: go vet ./...
+      - name: buf lint
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: latest
+      - run: buf lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go test (agent)
+        working-directory: agent
+        run: go test ./...
+      - name: go test (server)
+        working-directory: server
+        run: go test ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: go build (agent)
+        working-directory: agent
+        run: go build -o bin/agent ./cmd/agent
+      - name: go build (server)
+        working-directory: server
+        run: go build -o bin/server ./cmd/server
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci + build
+        working-directory: frontend
+        run: npm ci && npm run build
+
+  docker:
+    name: Docker image (server)
+    runs-on: ubuntu-latest
+    needs: [lint, test, build]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Build (and push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
