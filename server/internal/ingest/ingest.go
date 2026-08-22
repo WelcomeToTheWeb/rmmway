@@ -30,6 +30,9 @@ type Config struct {
 	// DefaultHeartbeatIntS / DefaultMetricIntS seed a new device's cadence.
 	DefaultHeartbeatIntS int32
 	DefaultMetricIntS    int32
+	// Indexer (W1-7) fires a debounced Meilisearch re-index of a device
+	// on enroll and on stream open. Nil = indexing disabled (tests).
+	Indexer *store.IndexerHook
 }
 
 func (c *Config) withDefaults() {
@@ -255,6 +258,8 @@ func (s *Service) Enroll(ctx context.Context, req *agentv1.EnrollRequest) (*agen
 	); err != nil {
 		return nil, status.Errorf(codes.Internal, "persist device: %v", err)
 	}
+	// W1-7: the new device must be searchable right away.
+	s.cfg.Indexer.Touch(devID)
 	return &agentv1.EnrollResponse{
 		DeviceId:           devID,
 		Jwt:                tok,
@@ -306,6 +311,7 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 	}()
 
 	_ = s.devices.Touch(stream.Context(), devID)
+	s.cfg.Indexer.Touch(devID) // re-index on (re)connect: online/last_seen flipped
 	for {
 		frame, err := stream.Recv()
 		if err != nil {

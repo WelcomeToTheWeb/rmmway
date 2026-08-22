@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -163,7 +164,7 @@ func main() {
 	jwtSecret := []byte(env("RMMWAY_JWT_SECRET", "rmmway-dev-secret-change-me"))
 
 	// ---- data layer (W1-6) ---------------------------------------------
-	dsn := env("RMMWAY_PG_DSN", "postgres://rmmway:***@localhost:5432/rmmway?sslmode=disable")
+	dsn := env("RMMWAY_PG_DSN", "postgres://rmmway:rmmway@localhost:5432/rmmway?sslmode=disable")
 	pgPool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
 		log.Fatalf("pg pool: %v", err)
@@ -190,8 +191,32 @@ func main() {
 		return
 	}
 
+	// ---- device search index (W1-7) ------------------------------------
+	// FullSync at boot heals any drift (Meili was down, data changed by
+	// hand); IndexerHook keeps it current on enroll + (re)connect.
+	// RMMWAY_MEILI_ENDPOINT empty (or "off") disables indexing entirely.
+	var (
+		indexer *store.IndexerHook
+		mSearch *store.Meili
+	)
+	meiliEndpoint := env("RMMWAY_MEILI_ENDPOINT", "http://localhost:7700")
+	if meiliEndpoint != "" && meiliEndpoint != "off" {
+		m := store.NewMeili(meiliEndpoint, env("RMMWAY_MEILI_MASTER_KEY", "rmmway-dev-master-key"))
+		fctx, fcancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := m.FullSync(fctx, devicesStore); err != nil {
+			log.Printf("WARN: meilisearch FullSync failed (%v) — device search disabled until next boot", err)
+		} else {
+			indexer = store.NewIndexerHook(m, devicesStore)
+			mSearch = m
+			log.Printf("meilisearch: full sync ok (endpoint=%s)", meiliEndpoint)
+		}
+		fcancel()
+	} else {
+		log.Println("meilisearch: disabled (RMMWAY_MEILI_ENDPOINT empty/off)")
+	}
+
 	// ---- gRPC ingest (W1-5) -------------------------------------------
-	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret}, metricsSink, devicesStore)
+	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer}, metricsSink, devicesStore)
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(svc.JWTInterceptor),
 	)
@@ -264,6 +289,28 @@ func main() {
 		_ = json.NewEncoder(w).Encode(out)
 	})
 
+	// Admin: device search over Meilisearch (W1-7 / W2-2 Cmd-K backing).
+	mux.HandleFunc("/admin/search", func(w http.ResponseWriter, r *http.Request) {
+		if mSearch == nil {
+			http.Error(w, "search index not available (meilisearch down or disabled)", http.StatusServiceUnavailable)
+			return
+		}
+		q := r.URL.Query().Get("q")
+		limit := 20
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		res, err := mSearch.Search(r.Context(), q, limit)
+		if err != nil {
+			http.Error(w, "search: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(res)
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -289,6 +336,7 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	log.Println("shutting down")
+	indexer.Stop()
 	grpcServer.GracefulStop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

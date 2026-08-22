@@ -1,6 +1,7 @@
-// Command e2e verifies W1-5+W1-6 against a RUNNING rmmway-server:
+// Command e2e verifies W1-5+W1-6+W1-7 against a RUNNING rmmway-server:
 // mint bootstrap (HTTP) -> enroll (gRPC) -> stream metrics -> dispatch a
-// command back down the stream -> device + samples visible in TimescaleDB.
+// command back down the stream -> device + samples visible in TimescaleDB
+// -> device immediately findable in Meilisearch (hostname + id).
 //
 // Usage: go run ./cmd/e2e [grpc-host:port] [http-host:port] [pg-dsn]
 package main
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -67,7 +69,9 @@ func main() {
 	resp.Body.Close()
 	fmt.Printf("bootstrap token=%s device=%s\n", boot.BootstrapToken[:12]+"...", boot.DeviceID)
 
-	// 2. enroll over gRPC.
+	// 2. enroll over gRPC (unique hostname so the W1-7 search assertion
+	// can't collide with earlier e2e devices).
+	enrollHost := "e2e-demo-host-" + boot.DeviceID
 	conn, err := grpc.NewClient(grpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		die("dial grpc: %v", err)
@@ -76,10 +80,11 @@ func main() {
 	client := agentv1.NewAgentServiceClient(conn)
 	enroll, err := client.Enroll(ctx, &agentv1.EnrollRequest{
 		BootstrapToken: boot.BootstrapToken,
-		Hostname:       "e2e-demo-host",
+		Hostname:       enrollHost,
 		Os:             "linux",
 		Arch:           "amd64",
 		AgentVersion:   "0.1.0-e2e",
+		Interfaces:     []string{"10.0.0.99"},
 	})
 	if err != nil {
 		die("enroll: %v", err)
@@ -160,5 +165,78 @@ func main() {
 		die("expected >=3 metric samples in Timescale, got %d", n)
 	}
 	fmt.Printf("timescale: device present, %d metric samples\n", n)
-	fmt.Println("PASS: W1-5+W1-6 e2e — enroll, stream, metrics persisted to TimescaleDB")
+
+	// 7. W1-7: the freshly enrolled device is findable in Meilisearch by
+	// hostname and by id — the IndexerHook's debounced sync (500ms) should
+	// have landed by now; give it a few seconds of slack.
+	deadline := time.Now().Add(8 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		sresp, err := http.Get(httpAddr + "/admin/search?q=" + url.QueryEscape(enrollHost))
+		if err != nil {
+			lastErr = err
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		var res struct {
+			EstimatedTotalHits int              `json:"estimatedTotalHits"`
+			Hits               []map[string]any `json:"hits"`
+		}
+		sbody, _ := io.ReadAll(sresp.Body)
+		sresp.Body.Close()
+		if sresp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("search status %d: %s", sresp.StatusCode, sbody)
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		_ = json.Unmarshal(sbody, &res)
+		// The fresh device's hostname is unique (includes its id), so the
+		// top hit for this query must be it.
+		if len(res.Hits) >= 1 && res.Hits[0]["id"] == boot.DeviceID {
+			fmt.Printf("meilisearch: found %d hit(s) for hostname %q (top hit = %v)\n", len(res.Hits), enrollHost, boot.DeviceID)
+			// also by id: top hit for an exact-id query must be this device
+			idResp, err := http.Get(httpAddr + "/admin/search?q=" + url.QueryEscape(boot.DeviceID))
+			if err == nil {
+				var idRes struct {
+					Hits []map[string]any `json:"hits"`
+				}
+				idBody, _ := io.ReadAll(idResp.Body)
+				idResp.Body.Close()
+				_ = json.Unmarshal(idBody, &idRes)
+				if len(idRes.Hits) >= 1 && idRes.Hits[0]["id"] == boot.DeviceID {
+					fmt.Printf("meilisearch: found %d hit(s) for id %q (top hit = %v)\n", len(idRes.Hits), boot.DeviceID, boot.DeviceID)
+				} else {
+					die("device %s not top hit for its own id", boot.DeviceID)
+				}
+			}
+			// and by IP: the fresh device registered interfaces=["10.0.0.99"];
+			// the fresh device must be among the hits for that query.
+			ipResp, err := http.Get(httpAddr + "/admin/search?q=10.0.0.99")
+			if err == nil {
+				var ipRes struct {
+					Hits []map[string]any `json:"hits"`
+				}
+				ipBody, _ := io.ReadAll(ipResp.Body)
+				ipResp.Body.Close()
+				_ = json.Unmarshal(ipBody, &ipRes)
+				found := false
+				for _, h := range ipRes.Hits {
+					if fmt.Sprint(h["id"]) == boot.DeviceID {
+						found = true
+						break
+					}
+				}
+				if found {
+					fmt.Printf("meilisearch: device %q found for ip 10.0.0.99\n", boot.DeviceID)
+				} else {
+					die("device with ip 10.0.0.99 not in search hits")
+				}
+			}
+			fmt.Println("PASS: W1-5+W1-6+W1-7 e2e — enroll, stream, metrics in Timescale, device searchable in Meilisearch")
+			return
+		}
+		lastErr = fmt.Errorf("search for %q returned 0 hits yet", enrollHost)
+		time.Sleep(300 * time.Millisecond)
+	}
+	die("device %q not findable in Meilisearch after 8s: %v", enrollHost, lastErr)
 }
