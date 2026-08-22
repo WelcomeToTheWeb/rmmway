@@ -53,12 +53,12 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 | ⛔ `blocked`| Waiting on another task / external dep |
 
 ### Progress at a glance
-- **W0 Scaffolding:** 2 / 3
-- **W1 The Agent:**    1 / 7
+- **W0 Scaffolding:** 3 / 3
+- **W1 The Agent:**    4 / 7
 - **W2 Monitoring+UX:** 0 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 3 / 28
+- **Total:** 7 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -102,9 +102,9 @@ parallel. Within a track, respect `Depends on` ordering.
   agent and server sides.
 
 #### W0-3 — CI skeleton
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng1way
-- **Started:** 2026-08-22  ·  **Done:** —
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commits `ef1b63a`…`6d7babb`; CI green on `46a6c94`)
 - **Depends on:** W0-1
 - **Effort/Impact:** S / Medium
 - GitHub Actions: build+test for Go agent + server, lint, Docker image
@@ -117,9 +117,9 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W1 — The Agent  *(Track A = agent side, Track B = server side; overlap freely)*
 
 #### W1-1 — Static Go agent binary + cross-compile
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng1way
-- **Started:** 2026-08-22  ·  **Done:** —
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit `2d3f911`; CI builds 5 static binaries, verifies `ldd`, on `46a6c94`)
 - **Depends on:** W0-1, W0-2
 - **Effort/Impact:** M / High
 - Single static Go binary per OS (Windows/Linux/macOS), zero runtime deps,
@@ -128,18 +128,18 @@ parallel. Within a track, respect `Depends on` ordering.
   version, no external shared libs (verify with `ldd`/`file`).
 
 #### W1-2 — Core collectors
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng1way
-- **Started:** 2026-08-22  ·  **Done:** —
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit `4435ded`; all five families emitted, tested, CI-green)
 - **Depends on:** W1-1
 - **Effort/Impact:** M / High
 - CPU, memory, per-volume disk, network, uptime.
 - **Definition of done:** agent emits all five metric families over the wire.
 
 #### W1-3 — One-line bootstrap installer
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng1way
-- **Started:** 2026-08-22  ·  **Done:** —
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit `6a9b094`; CI-green on `6a9b094`)
 - **Depends on:** W1-1
 - **Effort/Impact:** M / High
 - `curl | sh` (Linux/macOS) and a PowerShell one-liner (Windows).
