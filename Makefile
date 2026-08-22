@@ -57,6 +57,10 @@ test: ## Run Go tests
 run-server: ## Run the backend server locally (needs the stack up)
 	cd server && go run ./cmd/server
 
+.PHONY: migrate
+migrate: ## Apply pending SQL migrations from server/migrations
+	cd server && go run ./cmd/server --migrate-only
+
 .PHONY: check
 check: ## W0-1 DoD: build everything + verify /healthz reports all services ok
 	$(MAKE) build

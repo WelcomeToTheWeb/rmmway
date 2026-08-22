@@ -1,8 +1,8 @@
-// Command e2e verifies W1-5 against a RUNNING rmmway-server:
+// Command e2e verifies W1-5+W1-6 against a RUNNING rmmway-server:
 // mint bootstrap (HTTP) -> enroll (gRPC) -> stream metrics -> dispatch a
-// command back down the stream -> device visible in /admin/devices.
+// command back down the stream -> device + samples visible in TimescaleDB.
 //
-// Usage: go run ./cmd/e2e [grpc-host:port] [http-host:port]
+// Usage: go run ./cmd/e2e [grpc-host:port] [http-host:port] [pg-dsn]
 package main
 
 import (
@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
@@ -30,11 +31,15 @@ func die(f string, a ...any) {
 func main() {
 	grpcAddr := "127.0.0.1:50051"
 	httpAddr := "http://127.0.0.1:8080"
+	pgDSN := "postgres://rmmway:rmmway@localhost:5432/rmmway?sslmode=disable"
 	if len(os.Args) > 1 {
 		grpcAddr = os.Args[1]
 	}
 	if len(os.Args) > 2 {
 		httpAddr = os.Args[2]
+	}
+	if len(os.Args) > 3 {
+		pgDSN = os.Args[3]
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -130,5 +135,30 @@ func main() {
 	if !bytes.Contains(body, []byte(boot.DeviceID)) {
 		die("device %s not in /admin/devices", boot.DeviceID)
 	}
-	fmt.Println("PASS: W1-5 e2e — enroll, stream, metrics, device inventory all working")
+
+	// 6. W1-6: samples + device row are actually in TimescaleDB.
+	// (the agent's stream is already closed; metrics were flushed on write)
+	cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer ccancel()
+	pgConn, err := pgx.Connect(cctx, pgDSN)
+	if err != nil {
+		die("pg connect: %v", err)
+	}
+	defer pgConn.Close(cctx)
+	var devOK bool
+	if err := pgConn.QueryRow(cctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE id=$1)`, boot.DeviceID).Scan(&devOK); err != nil {
+		die("pg device query: %v", err)
+	}
+	if !devOK {
+		die("device %s not in devices table", boot.DeviceID)
+	}
+	var n int
+	if err := pgConn.QueryRow(cctx, `SELECT count(*) FROM metrics WHERE device_id=$1`, boot.DeviceID).Scan(&n); err != nil {
+		die("pg metrics query: %v", err)
+	}
+	if n < 3 {
+		die("expected >=3 metric samples in Timescale, got %d", n)
+	}
+	fmt.Printf("timescale: device present, %d metric samples\n", n)
+	fmt.Println("PASS: W1-5+W1-6 e2e — enroll, stream, metrics persisted to TimescaleDB")
 }

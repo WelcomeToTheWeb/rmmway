@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -19,11 +20,13 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
+	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
 func env(key, def string) string {
@@ -151,13 +154,44 @@ func runProbes(ctx context.Context) []probe {
 }
 
 func main() {
+	migrateOnly := flag.Bool("migrate-only", false, "apply SQL migrations and exit")
+	flag.Parse()
+
 	version := env("RMMWAY_VERSION", "0.1.0")
 	httpAddr := env("RMMWAY_ADDR", ":8080")
 	grpcAddr := env("RMMWAY_GRPC_ADDR", ":50051")
 	jwtSecret := []byte(env("RMMWAY_JWT_SECRET", "rmmway-dev-secret-change-me"))
 
+	// ---- data layer (W1-6) ---------------------------------------------
+	dsn := env("RMMWAY_PG_DSN", "postgres://rmmway:***@localhost:5432/rmmway?sslmode=disable")
+	pgPool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		log.Fatalf("pg pool: %v", err)
+	}
+	var devicesStore store.DeviceStore
+	var metricsSink store.MetricsSink
+	migrationsDir := env("RMMWAY_MIGRATIONS_DIR", "migrations")
+	ctxBg, cancelBg := context.WithTimeout(context.Background(), 5*time.Second)
+	if n, err := store.Migrate(ctxBg, pgPool, migrationsDir); err != nil {
+		if *migrateOnly {
+			log.Fatalf("migrations failed: %v", err)
+		}
+		log.Printf("WARN: migrations failed (%v) — running with in-memory stores (Postgres down?)", err)
+		devicesStore = store.NewMemoryDeviceStore()
+		metricsSink = store.NewMemoryMetricsSink(100000)
+	} else {
+		log.Printf("migrations: %d applied (dir=%s)", n, migrationsDir)
+		devicesStore = store.NewPostgresDevices(pgPool)
+		metricsSink = store.NewPostgresMetricsSink(pgPool)
+	}
+	cancelBg()
+	if *migrateOnly {
+		log.Println("migrate-only: done")
+		return
+	}
+
 	// ---- gRPC ingest (W1-5) -------------------------------------------
-	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret}, ingest.NewMemoryMetricsSink(100000))
+	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret}, metricsSink, devicesStore)
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(svc.JWTInterceptor),
 	)
@@ -218,7 +252,12 @@ func main() {
 			LastSeen     time.Time `json:"last_seen"`
 		}
 		out := []devOut{}
-		for _, d := range svc.Devices().List() {
+		list, err := devicesStore.List(r.Context())
+		if err != nil {
+			http.Error(w, "device list: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, d := range list {
 			out = append(out, devOut{d.ID, d.Hostname, d.OS, d.Arch, d.AgentVersion, d.Online, d.LastSeen})
 		}
 		w.Header().Set("Content-Type", "application/json")

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
+	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
 // Config holds ingest service settings.
@@ -50,8 +52,8 @@ type Service struct {
 	agentv1.UnimplementedAgentServiceServer
 
 	cfg      Config
-	devices  *DeviceRegistry
-	metrics  MetricsSink
+	devices  store.DeviceStore
+	metrics  store.MetricsSink
 	dispatch *Dispatcher
 
 	// bootstrapTokens: one-time enroll codes -> pre-allocated device_id.
@@ -71,11 +73,14 @@ type streamWriter struct {
 	ch    chan *agentv1.StreamResponse
 }
 
-// NewService builds an AgentService with in-memory sinks. W1-6 injects the
-// Timescale-backed MetricsSink + DeviceRegistry here.
-func NewService(cfg Config, metrics MetricsSink) *Service {
+// NewService builds an AgentService. When devices is nil, an in-memory
+// device store is used (tests / standalone). W1-6 passes the
+// store.PostgresDevices backed by the devices table.
+func NewService(cfg Config, metrics store.MetricsSink, devices store.DeviceStore) *Service {
 	cfg.withDefaults()
-	devices := NewDeviceRegistry()
+	if devices == nil {
+		devices = store.NewMemoryDeviceStore()
+	}
 	s := &Service{
 		cfg:             cfg,
 		devices:         devices,
@@ -88,14 +93,14 @@ func NewService(cfg Config, metrics MetricsSink) *Service {
 	return s
 }
 
-// Devices exposes the registry for tests/admin.
-func (s *Service) Devices() *DeviceRegistry { return s.devices }
+// Devices exposes the store for tests/admin.
+func (s *Service) Devices() store.DeviceStore { return s.devices }
 
 // Dispatcher exposes the command dispatcher for tests/admin.
 func (s *Service) Dispatcher() *Dispatcher { return s.dispatch }
 
 // MetricsSink exposes the metrics sink for tests/admin.
-func (s *Service) Metrics() MetricsSink { return s.metrics }
+func (s *Service) Metrics() store.MetricsSink { return s.metrics }
 
 // CommandSink implementation: push a minted command to the live stream.
 func (s *Service) Push(deviceID string, cmd *agentv1.Command) bool {
@@ -197,7 +202,7 @@ func (s *Service) JWTInterceptor(ctx context.Context, req any, info *grpc.UnaryS
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "invalid agent token: "+err.Error())
 	}
-	if _, ok := s.devices.Get(devID); !ok {
+	if ok, _ := s.devices.Contains(ctx, devID); !ok {
 		return nil, status.Error(codes.Unauthenticated, "unknown device")
 	}
 	// Bind the authenticated device to the context for the handler.
@@ -242,19 +247,14 @@ func (s *Service) Enroll(ctx context.Context, req *agentv1.EnrollRequest) (*agen
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "mint jwt: %v", err)
 	}
-	now := time.Now().UTC()
-	s.devices.Upsert(&Device{
-		ID:            devID,
-		Hostname:      req.GetHostname(),
-		OS:            req.GetOs(),
-		Arch:          req.GetArch(),
-		AgentVersion:  req.GetAgentVersion(),
-		Interfaces:    req.GetInterfaces(),
-		Online:        true,
-		LastSeen:      now,
-		HeartbeatIntS: s.cfg.DefaultHeartbeatIntS,
-		MetricIntS:    s.cfg.DefaultMetricIntS,
-	})
+	if err := s.devices.Register(ctx,
+		devID,
+		req.GetHostname(), req.GetOs(), req.GetArch(), req.GetAgentVersion(),
+		req.GetInterfaces(),
+		s.cfg.DefaultHeartbeatIntS, s.cfg.DefaultMetricIntS,
+	); err != nil {
+		return nil, status.Errorf(codes.Internal, "persist device: %v", err)
+	}
 	return &agentv1.EnrollResponse{
 		DeviceId:           devID,
 		Jwt:                tok,
@@ -273,7 +273,7 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 	if err != nil {
 		return status.Error(codes.Unauthenticated, "invalid agent token: "+err.Error())
 	}
-	if _, ok := s.devices.Get(devID); !ok {
+	if ok, _ := s.devices.Contains(stream.Context(), devID); !ok {
 		return status.Error(codes.Unauthenticated, "unknown device")
 	}
 
@@ -305,7 +305,7 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 		}
 	}()
 
-	s.devices.Touch(devID)
+	_ = s.devices.Touch(stream.Context(), devID)
 	for {
 		frame, err := stream.Recv()
 		if err != nil {
@@ -314,9 +314,11 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 		switch p := frame.GetPayload().(type) {
 		case *agentv1.StreamRequest_Heartbeat:
 			hb := p.Heartbeat
-			s.devices.Touch(devID)
+			_ = s.devices.Touch(stream.Context(), devID)
 			if b := hb.GetMetrics(); b != nil && len(b.GetSamples()) > 0 {
-				_ = s.metrics.Write(devID, b)
+				if werr := s.metrics.Write(devID, b); werr != nil {
+					log.Printf("metrics write (heartbeat) %s: %v", devID, werr)
+				}
 			}
 			ack := &agentv1.StreamResponse{Payload: &agentv1.StreamResponse_HeartbeatAck{
 				HeartbeatAck: &agentv1.HeartbeatAck{
