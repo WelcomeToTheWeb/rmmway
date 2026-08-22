@@ -159,7 +159,7 @@ parallel. Within a track, respect `Depends on` ordering.
 #### W1-5 — Server: gRPC agent ingest service
 - **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit on `main`, `server/internal/ingest` + `server/cmd/e2e`)
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit `899174e` on `main`)
 - **Depends on:** W0-2
 - **Effort/Impact:** M / High
 - Auth (JWT) + metric receive + command dispatch.
