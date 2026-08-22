@@ -167,9 +167,9 @@ parallel. Within a track, respect `Depends on` ordering.
   rejects unauthenticated agents.
 
 #### W1-6 — Server: TimescaleDB schema
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W0-1
 - **Effort/Impact:** M / High
 - Metrics hypertable(s), devices table, continuous aggregates.
