@@ -54,11 +54,11 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 
 ### Progress at a glance
 - **W0 Scaffolding:** 3 / 3
-- **W1 The Agent:**    6 / 7
+- **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 0 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 10 / 28
+- **Total:** 11 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -177,14 +177,15 @@ parallel. Within a track, respect `Depends on` ordering.
   hypertable and a continuous aggregate rolls up.
 
 #### W1-7 — Device inventory → Meilisearch
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** ✅ done
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit `042347a` on `main`; e2e enrolls a fresh device and asserts it is the top `/admin/search` hit by hostname, id, and IP; live Meilisearch tests in `internal/store`)
 - **Depends on:** W1-6
 - **Effort/Impact:** S / Medium
 - Index devices + inventory into Meilisearch on change.
 - **Definition of done:** enroll a device → it's immediately findable by name,
-  IP, tag, hostname.
+  IP, tag, hostname. ✅ verified: top-hit by hostname/id/IP in e2e; tag +
+  IP + self-heal covered by live tests in `server/internal/store/meili_test.go`.
 
 ---
 
