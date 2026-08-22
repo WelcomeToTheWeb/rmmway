@@ -211,9 +211,9 @@ parallel. Within a track, respect `Depends on` ordering.
   known action is runnable from the palette.
 
 #### W2-3 — Dynamic baselining engine
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W1-6
 - **Effort/Impact:** M / High
 - Per-metric rolling baseline by day-of-week/hour; MAD/robust z-score + EWMA
