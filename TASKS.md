@@ -201,9 +201,9 @@ parallel. Within a track, respect `Depends on` ordering.
 - **Definition of done:** logs in, lists live devices with status. ✅ verified: `POST /api/login` (admin/admin → operator JWT), `GET /api/devices` returns the e2e-enrolled device `online:true` with last_seen; wrong creds / no token / garbage token all 401; agent-shaped JWT rejected on the operator route; React build + SSR render pass.
 
 #### W2-2 — Cmd-K command palette
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-22  ·  **Done:** TBD
 - **Depends on:** W2-1, W1-7
 - **Effort/Impact:** M / High
 - Fuzzy device/script/action search over Meilisearch; type-and-go.
