@@ -40,7 +40,7 @@ jobs:
       - name: buf lint
         uses: bufbuild/buf-setup-action@v1
         with:
-          version: latest
+          version: v1.72.0
       - run: buf lint
 
   test:

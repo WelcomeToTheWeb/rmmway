@@ -117,9 +117,9 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W1 — The Agent  *(Track A = agent side, Track B = server side; overlap freely)*
 
 #### W1-1 — Static Go agent binary + cross-compile
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng1way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W0-1, W0-2
 - **Effort/Impact:** M / High
 - Single static Go binary per OS (Windows/Linux/macOS), zero runtime deps,
