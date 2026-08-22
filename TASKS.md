@@ -79,9 +79,9 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W0 — Scaffolding  *(foundation — must land before most tracks start)*
 
 #### W0-1 — Monorepo scaffold + local dev stack
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** —
 - **Effort/Impact:** M / High
 - Monorepo: Go backend + React/Tauri frontend + shared `proto/` + `Makefile`.
