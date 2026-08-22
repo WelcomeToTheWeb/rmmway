@@ -1,0 +1,35 @@
+# W1-3: cut a GitHub release from a vX.Y.Z tag so the one-line installers
+# (scripts/install.sh / install.ps1) have a real artifact to fetch.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build + publish agent release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.5"
+      - name: Cross-compile agent (static)
+        run: make agent VERSION=${GITHUB_REF_NAME#v}
+      - name: Checksums
+        run: |
+          cd agent/dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            agent/dist/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
