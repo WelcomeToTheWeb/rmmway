@@ -128,9 +128,9 @@ parallel. Within a track, respect `Depends on` ordering.
   version, no external shared libs (verify with `ldd`/`file`).
 
 #### W1-2 — Core collectors
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng1way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W1-1
 - **Effort/Impact:** M / High
 - CPU, memory, per-volume disk, network, uptime.
