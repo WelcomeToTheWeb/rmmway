@@ -157,9 +157,9 @@ parallel. Within a track, respect `Depends on` ordering.
   a device with a valid token; restart doesn't re-enroll.
 
 #### W1-5 — Server: gRPC agent ingest service
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-22  ·  **Done:** —
 - **Depends on:** W0-2
 - **Effort/Impact:** M / High
 - Auth (JWT) + metric receive + command dispatch.
