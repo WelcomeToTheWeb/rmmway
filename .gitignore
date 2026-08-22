@@ -1,0 +1,25 @@
+# Go
+bin/
+dist/
+*.test
+*.out
+server/gen/          # generated gRPC stubs (W0-2) — keep out of git
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local env overrides
+.env
+.env.local
+
+# Build artifacts
+agent/bin/
+server/bin/

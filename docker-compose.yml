@@ -1,0 +1,88 @@
+name: rmmway
+
+services:
+  timescale:
+    image: timescale/timescaledb:latest-pg16
+    container_name: rmmway-timescale
+    environment:
+      POSTGRES_DB: rmmway
+      POSTGRES_USER: rmmway
+      POSTGRES_PASSWORD: rmmway
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rmmway -d rmmway"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  nats:
+    image: nats:2.11-alpine
+    container_name: rmmway-nats
+    command: ["--jetstream", "--store_dir", "/data"]
+    ports:
+      - "4222:4222"   # client
+      - "8222:8222"   # monitoring
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4222"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+    container_name: rmmway-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    container_name: rmmway-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: rmmway
+      MINIO_ROOT_PASSWORD: rmmway-dev-secret
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    container_name: rmmway-meilisearch
+    environment:
+      MEILI_MASTER_KEY: rmmway-dev-master-key
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili-data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  timescale-data:
+  nats-data:
+  redis-data:
+  minio-data:
+  meili-data:

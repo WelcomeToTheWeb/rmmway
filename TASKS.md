@@ -53,12 +53,12 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 | ⛔ `blocked`| Waiting on another task / external dep |
 
 ### Progress at a glance
-- **W0 Scaffolding:** 0 / 3
+- **W0 Scaffolding:** 1 / 3
 - **W1 The Agent:**    0 / 7
 - **W2 Monitoring+UX:** 0 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 0 / 28
+- **Total:** 1 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -79,9 +79,9 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W0 — Scaffolding  *(foundation — must land before most tracks start)*
 
 #### W0-1 — Monorepo scaffold + local dev stack
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-22  ·  **Done:** —
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commits `b00549a..`, monorepo scaffold + `make dev`)
 - **Depends on:** —
 - **Effort/Impact:** M / High
 - Monorepo: Go backend + React/Tauri frontend + shared `proto/` + `Makefile`.
