@@ -55,10 +55,10 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 ### Progress at a glance
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
-- **W2 Monitoring+UX:** 0 / 5
+- **W2 Monitoring+UX:** 1 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 11 / 28
+- **Total:** 12 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -192,13 +192,13 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W2 — Monitoring & UX
 
 #### W2-1 — Frontend: app shell + device list
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-22  ·  **Done:** TBD
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit `7f72ccd` on `main`; live e2e: operator login mints a JWT, `/api/devices` lists the freshly enrolled device online, agent token rejected, `/admin/*` unchanged)
 - **Depends on:** W0-1
 - **Effort/Impact:** M / Medium
 - Tauri/React shell, authenticated nav, device list view.
-- **Definition of done:** logs in, lists live devices with status.
+- **Definition of done:** logs in, lists live devices with status. ✅ verified: `POST /api/login` (admin/admin → operator JWT), `GET /api/devices` returns the e2e-enrolled device `online:true` with last_seen; wrong creds / no token / garbage token all 401; agent-shaped JWT rejected on the operator route; React build + SSR render pass.
 
 #### W2-2 — Cmd-K command palette
 - **Status:** ⬜ pending
