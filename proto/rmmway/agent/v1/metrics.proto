@@ -1,0 +1,32 @@
+// Metrics — the metric push contract shared by heartbeat attachment and
+// bulk MetricBatch frames. W1-2 produces these on the agent; W1-5 ingests
+// them into the W1-6 TimescaleDB hypertables.
+syntax = "proto3";
+
+package rmmway.agent.v1;
+
+option go_package = "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1";
+
+// MetricBatch is one push of sampled metrics. The server deduplicates by
+// (device_id, name, source, timestamp_ms), so replay after a reconnect is
+// safe (at-least-once delivery, idempotent ingest).
+message MetricBatch {
+  // Epoch seconds of the batch's collection window start. Individual
+  // samples carry their own timestamp_ms.
+  int64 collected_at_ms = 1;
+
+  repeated Metric samples = 2;
+}
+
+// Metric is a single labeled sample. `name` is the family (W1-2 defines the
+// five: cpu.utilization_percent, memory.used_percent, disk.used_percent,
+// net.bytes_total, system.uptime_seconds); `source` disambiguates
+// (e.g. disk device "sda1", interface "eth0", "" for host-wide).
+message Metric {
+  string name = 1;
+  string source = 2;
+  double value = 3;
+  int64 timestamp_ms = 4;
+  // Optional string labels for future use (e.g. filesystem "ext4").
+  map<string, string> labels = 5;
+}

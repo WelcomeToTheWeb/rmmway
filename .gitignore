@@ -3,7 +3,6 @@ bin/
 dist/
 *.test
 *.out
-server/gen/          # generated gRPC stubs (W0-2) — keep out of git
 
 # Node / frontend
 node_modules/

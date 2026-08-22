@@ -1,0 +1,69 @@
+// Commands — server→agent dispatch over the Stream downlink. W1-5 mints and
+// sends commands; W3-3 adds per-action capability tokens that gate which
+// commands an agent may execute.
+syntax = "proto3";
+
+package rmmway.agent.v1;
+
+option go_package = "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1";
+
+// Command is one requested action. The agent acknowledges receipt with a
+// CommandResult(status=RECEIVED), executes, then sends a final
+// CommandResult with the outcome. Unknown types must be answered with
+// UNSUPPORTED (not silently dropped) so the server can retry or escalate.
+message Command {
+  string id = 1;                // server-unique, used to correlate results
+  int64 issued_at_ms = 2;
+
+  oneof action {
+    RunScript run_script = 10;
+    Reboot reboot = 11;
+    // Reserved range 20-29: inventory / log-collection commands (W6-1).
+    // Reserved range 30-39: remediation actions (W5-1 playbooks).
+  }
+
+  // Max seconds before the server considers this command failed. 0 = agent
+  // default.
+  int32 timeout_s = 40;
+}
+
+// RunScript executes a small, signed script (base64 payload; the signing +
+// verification story is W3-4/W4-2). v1 is read-only by default.
+message RunScript {
+  string lang = 1;      // "sh" | "powershell" | "python"
+  string script_b64 = 2;
+  repeated string args = 3;
+  // W3-3: capability token that authorizes this specific action type.
+  string capability_token = 4;
+}
+
+// Reboot restarts the agent host. High-impact: gated by W3-3 capability
+// tokens once those land.
+message Reboot {
+  int32 delay_s = 1;    // 0 = immediate
+  string capability_token = 2;
+}
+
+// CommandResult is the agent's report back (sent as a future StreamRequest
+// extension; the field is defined here for versioning stability).
+message CommandResult {
+  string command_id = 1;
+
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    RECEIVED = 1;
+    RUNNING = 2;
+    SUCCEEDED = 3;
+    FAILED = 4;
+    TIMED_OUT = 5;
+    UNSUPPORTED = 6;
+    REFUSED = 7;   // capability check failed (W3-3)
+  }
+
+  Status status = 2;
+  int32 exit_code = 3;
+  string stdout_tail = 4;  // last 4KB
+  string stderr_tail = 5;
+  string error = 6;
+  int64 completed_at_ms = 7;
+}

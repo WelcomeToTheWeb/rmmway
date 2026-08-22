@@ -53,12 +53,12 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 | ⛔ `blocked`| Waiting on another task / external dep |
 
 ### Progress at a glance
-- **W0 Scaffolding:** 1 / 3
+- **W0 Scaffolding:** 2 / 3
 - **W1 The Agent:**    0 / 7
 - **W2 Monitoring+UX:** 0 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 1 / 28
+- **Total:** 2 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -81,7 +81,7 @@ parallel. Within a track, respect `Depends on` ordering.
 #### W0-1 — Monorepo scaffold + local dev stack
 - **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commits `b00549a..`, monorepo scaffold + `make dev`)
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (commit `e4c2785` on `main`)
 - **Depends on:** —
 - **Effort/Impact:** M / High
 - Monorepo: Go backend + React/Tauri frontend + shared `proto/` + `Makefile`.
@@ -91,9 +91,9 @@ parallel. Within a track, respect `Depends on` ordering.
   server + React app build and run against them.
 
 #### W0-2 — Agent protocol (gRPC protos)
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-22  ·  **Done:** —
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-22 (see `W0-2` commit on `main`)
 - **Depends on:** W0-1
 - **Effort/Impact:** S / High
 - Define `proto/` for the agent protocol: enroll, heartbeat, metrics push,

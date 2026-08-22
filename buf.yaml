@@ -1,0 +1,11 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    - ENUM_VALUE_PREFIX   # per-message enums are fine for our small set
+breaking:
+  use:
+    - FILE

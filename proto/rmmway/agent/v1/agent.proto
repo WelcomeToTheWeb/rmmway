@@ -1,0 +1,90 @@
+// AgentService — the single gRPC surface between an RMMWay agent and the
+// server. W0-2 defines the contract; W1-4 (agent enroll) and W1-5 (server
+// ingest) implement it.
+//
+// Auth model (W1-5): the agent authenticates every RPC with the enroll JWT in
+// the `Authorization: Bearer <token>` metadata header. mTLS hardening
+// arrives in W3-1 and does not change this API.
+syntax = "proto3";
+
+package rmmway.agent.v1;
+
+option go_package = "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1";
+
+import "rmmway/agent/v1/metrics.proto";
+import "rmmway/agent/v1/commands.proto";
+
+service AgentService {
+  // Enroll is the first contact for a freshly bootstrapped agent. It proves
+  // the bootstrap token (a one-time code minted at bootstrap time) and
+  // receives the device's persistent identity: a device_id and a long-lived
+  // agent JWT used for every subsequent RPC. A device that already has a
+  // persisted token never calls Enroll again (restart must not re-enroll).
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+
+  // Stream is the agent's long-lived uplink. The agent sends Heartbeats
+  // (with optional MetricBatches attached) and receives Commands. If the
+  // connection drops, the agent reconnects with exponential backoff and
+  // replays spooled metrics (server-side dedup by (device_id, metric, ts)).
+  rpc Stream(stream StreamRequest) returns (stream StreamResponse);
+}
+
+// EnrollRequest proves a fresh agent's right to join the estate.
+message EnrollRequest {
+  // One-time bootstrap token embedded in the curl|sh bootstrap line.
+  string bootstrap_token = 1;
+
+  // Host facts reported up front so the server can create the device row
+  // (W1-6) before the first heartbeat.
+  string hostname = 2;
+  string os = 3;       // "linux" | "windows" | "darwin"
+  string arch = 4;     // "amd64" | "arm64" | ...
+  string agent_version = 5;
+
+  // First pass at static inventory; full inventory arrives with heartbeats.
+  // Kept intentionally small in v1 — richer inventory lands with W1-7.
+  repeated string interfaces = 6;  // "eth0:10.0.0.5/24" style
+}
+
+// EnrollResponse hands the agent its persistent identity.
+message EnrollResponse {
+  string device_id = 1;      // server-assigned, stable across restarts
+  string jwt = 2;            // agent token; persisted on the agent's disk
+  int32 heartbeat_interval_s = 3;
+  int32 metric_interval_s = 4;
+}
+
+// StreamRequest is one uplink frame on Stream.
+message StreamRequest {
+  oneof payload {
+    Heartbeat heartbeat = 1;
+    MetricBatch metrics = 2;
+  }
+}
+
+// StreamResponse is one downlink frame on Stream.
+message StreamResponse {
+  oneof payload {
+    HeartbeatAck heartbeat_ack = 1;
+    Command command = 2;
+  }
+}
+
+// Heartbeat keeps the device "online" and can piggyback metrics to save
+// round-trips.
+message Heartbeat {
+  int64 timestamp_ms = 1;            // agent wall clock, Unix ms
+  double cpu_percent = 2;            // convenience: current CPU load
+  double memory_percent = 3;
+  string state = 4;                  // "active" | "degraded" | "offline" (agent self-report)
+  // Optional metrics attached to this beat; a dedicated MetricBatch frame
+  // is used for bulk pushes.
+  MetricBatch metrics = 5;
+}
+
+// HeartbeatAck lets the server steer the agent's cadence live.
+message HeartbeatAck {
+  int64 server_time_ms = 1;          // for clock skew correction
+  int32 heartbeat_interval_s = 2;    // 0 = keep current
+  int32 metric_interval_s = 3;
+}

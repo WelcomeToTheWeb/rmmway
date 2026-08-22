@@ -1,0 +1,13 @@
+# buf codegen config (v2). `make proto` runs `buf generate` from the repo
+# root, emitting Go into proto/gen/ mirroring the proto package paths
+# (rmmway/agent/v1/*.pb.go + *_grpc.pb.go).
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: proto/gen
+    opt:
+      - paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: proto/gen
+    opt:
+      - paths=source_relative
