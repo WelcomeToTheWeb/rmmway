@@ -58,4 +58,26 @@ export const api = {
       token,
       body,
     }),
+
+  // ---- W2-4: baseline-driven alerts + inbox ---------------------------
+  // GET /api/alerts?status=open|acked|resolved&device_id=...&limit=...
+  // -> Alert[] (id, device_id, hostname, name, source, status, channel,
+  // score, value, expected, events, first_at, last_at, resolved_at, acked_at)
+  alerts: (token, { status = "", device_id = "", limit = 200 } = {}) => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    if (device_id) q.set("device_id", device_id);
+    if (limit) q.set("limit", String(limit));
+    const qs = q.toString();
+    return request(`/api/alerts${qs ? `?${qs}` : ""}`, { token });
+  },
+
+  // GET /api/alerts/counts -> { open, acked, resolved } (drives the nav badge)
+  alertCounts: (token) => request("/api/alerts/counts", { token }),
+
+  // PATCH /api/alerts/{id} { status: "acked" | "resolved" } -> the Alert.
+  // Transitions: open -> acked | resolved, acked -> resolved. Re-opening
+  // is refused by the server.
+  setAlertStatus: (token, id, status) =>
+    request(`/api/alerts/${id}`, { method: "PATCH", token, body: { status } }),
 };

@@ -190,6 +190,44 @@ The e2e (`make e2e`) seeds two 44-day synthetic weekly-pattern series and
 asserts the engine flags exactly the spiked series' final hour (z ≥ 4,
 seasonal channel) while the clean series stays quiet.
 
+## Alert inbox (W2-4)
+
+The engine flags a series on **every** pass while it stays anomalous — so
+raw anomalies would storm. The alert layer folds them into **one deduped
+inbox alert per (device, metric, source)**, enforced by a partial unique
+index (`0003_alerts.sql`). Repeated anomalies on the same series bump the
+existing alert (`events++`, highest `score` / most recent `value`) instead
+of stacking a new row; a **re-fire** after the series returns to baseline is
+a genuinely new incident and starts a fresh alert.
+
+- **Auto-resolve** — when a series comes back on-baseline, its open alert
+  auto-resolves after a short quiet streak. Disable with
+  `RMMWAY_ALERT_AUTO_RESOLVE=off` so only manual triage clears the inbox.
+- **Manual triage** — `open → acked | resolved`, `acked → resolved`
+  (re-opening is refused). Acked alerts leave the "open" tab but stay in the
+  inbox for the record.
+- **Inbox UI** — the `# /alerts` route (nav item + live open-count badge)
+  lists alerts with status tabs, a metric/host filter, the deviation badge,
+  the dedup `×N` pass count, and inline ack/resolve actions.
+
+```bash
+# inbox (open by default), newest first (also /api/alerts, auth-gated)
+curl -fsS "localhost:8080/admin/alerts?status=open&limit=100"
+# badge counts
+curl -fsS "localhost:8080/admin/alerts/counts"
+# -> {"open":1,"acked":0,"resolved":3}
+
+# triage
+curl -fsS -X PATCH localhost:8080/admin/alerts/1 -d '{"status":"acked"}'
+curl -fsS -X PATCH localhost:8080/admin/alerts/1 -d '{"status":"resolved"}'
+```
+
+The e2e (`make e2e`) walks the live pipeline: spike the current hour →
+exactly **1** open alert; re-run → still 1, bumped (no storm); clean the
+hour → it auto-resolves; spike again → a fresh alert; then ack/resolve via
+the auth-gated API (and assert `/api/alerts` is 401 without a token, 200
+with one).
+
 ## Conventions
 
 - Claims: `TASKS.md` is the coordination of record — claim before coding.

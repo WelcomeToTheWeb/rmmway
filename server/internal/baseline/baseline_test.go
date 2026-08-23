@@ -131,6 +131,60 @@ func anomalyCountFor(a []Anomaly, device, name string) int {
 	return n
 }
 
+// TestPostRunHookReceivesAnomaliesAndScoredSeries verifies the W2-4 hook
+// contract: after a pass, PostRun is called exactly once with the pass's
+// anomalies AND the full set of scored series (quiet ones included), and
+// LastScored mirrors it.
+func TestPostRunHookReceivesAnomaliesAndScoredSeries(t *testing.T) {
+	// Two series: one spiked (anomalous), one clean (quiet).
+	now := time.Date(2026, 8, 21, 15, 0, 0, 0, time.UTC)
+	clean := TimeSeries{DeviceID: "dev-clean", Name: "m.clean", Source: ""}
+	clean.Points = buildWeekly(now.Add(-44*24*time.Hour), now)
+	spike := TimeSeries{DeviceID: "dev-spike", Name: "m.spike", Source: ""}
+	spike.Points = buildWeekly(now.Add(-44*24*time.Hour), now)
+	spike.Points[len(spike.Points)-1].Mean += 35 // final-hour spike
+
+	var calls int
+	var hookAnoms []Anomaly
+	var hookScored map[SeriesKey]bool
+	j := &Job{
+		Source: &multiSource{ts: []TimeSeries{clean, spike}},
+		PostRun: func(anoms []Anomaly, scored map[SeriesKey]bool) {
+			calls++
+			hookAnoms = append([]Anomaly(nil), anoms...)
+			hookScored = make(map[SeriesKey]bool, len(scored))
+			for k := range scored {
+				hookScored[k] = true
+			}
+		},
+	}
+	anoms, err := j.RunOnce(context.Background(), now)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("PostRun called %d times, want 1", calls)
+	}
+	if n := anomalyCountFor(anoms, "dev-spike", "m.spike"); n != 1 {
+		t.Fatalf("spike series should be flagged once, got %d", n)
+	}
+	if n := anomalyCountFor(anoms, "dev-clean", "m.clean"); n != 0 {
+		t.Fatalf("clean series must be quiet, got %d", n)
+	}
+	// Hook saw the anomaly AND both series (the quiet one is essential for
+	// auto-resolve: "scored but not flagged" is the recovery signal).
+	if len(hookAnoms) != 1 {
+		t.Fatalf("hook anomalies = %d, want 1: %+v", len(hookAnoms), hookAnoms)
+	}
+	if len(hookScored) != 2 || !hookScored[SeriesKey{DeviceID: "dev-clean", Name: "m.clean", Source: ""}] {
+		t.Fatalf("hook scored set must include the quiet series: %+v", hookScored)
+	}
+	last := j.LastScored()
+	if len(last) != 2 {
+		t.Fatalf("LastScored = %d series, want 2: %+v", len(last), last)
+	}
+}
+
 // TestWeeklyPatternFlaggedAtRightTime is the W2-3 definition of done: for a
 // synthetic metric with a known weekly pattern, anomalies are flagged at the
 // right times and quiet otherwise.
@@ -231,6 +285,7 @@ func TestSeasonalSlotIsDayOfWeekScoped(t *testing.T) {
 	}
 	_ = slotNow
 }
+
 // TestTrendChannelCatchesSuddenShift verifies the short-lookback channel
 // fires before the seasonal baseline has cells (a device only a few hours
 // old, then a jump) — and stays quiet when the level just settles.

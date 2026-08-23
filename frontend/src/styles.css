@@ -214,3 +214,50 @@ table.devices tbody tr:last-child td { border-bottom: none; }
   background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
   padding: 1px 5px; margin-left: 4px; color: var(--muted);
 }
+
+/* ---- W2-4: alerts inbox -------------------------------------------------- */
+.badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; margin-left: 6px;
+  border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 1;
+  background: var(--err); color: #fff;
+  box-shadow: 0 0 8px rgba(239,68,68,0.5);
+}
+.nav-item .badge { margin-left: 7px; }
+
+.tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.tab {
+  background: transparent; color: var(--muted); cursor: pointer;
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 14px; font-size: 13px; font-weight: 500;
+}
+.tab:hover { color: var(--fg); border-color: var(--accent); }
+.tab.active { color: var(--fg); background: var(--bg-elev2); border-color: var(--accent); }
+.tab .badge { margin-left: 7px; }
+
+.score {
+  font-family: var(--mono); font-weight: 700; font-size: 13px;
+  padding: 2px 8px; border-radius: 6px;
+}
+.score.hot  { color: #fecaca; background: rgba(239,68,68,0.18); border: 1px solid rgba(239,68,68,0.4); }
+.score.warm { color: #fde68a; background: rgba(245,158,11,0.16); border: 1px solid rgba(245,158,11,0.4); }
+.score.cool { color: #bae6fd; background: rgba(56,189,248,0.14); border: 1px solid rgba(56,189,248,0.35); }
+
+.events {
+  font-family: var(--mono); font-weight: 600; color: var(--muted);
+  padding: 1px 7px; border: 1px solid var(--border); border-radius: 6px;
+}
+
+.pill {
+  display: inline-block; padding: 2px 10px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
+}
+.pill-open     { color: #fecaca; background: rgba(239,68,68,0.16); border: 1px solid rgba(239,68,68,0.4); }
+.pill-acked    { color: #fde68a; background: rgba(245,158,11,0.14); border: 1px solid rgba(245,158,11,0.38); }
+.pill-resolved { color: #a7f3d0; background: rgba(52,211,153,0.14); border: 1px solid rgba(52,211,153,0.38); }
+
+.alert-resolved { opacity: 0.62; }
+.alert-acked    { opacity: 0.85; }
+.row-actions { display: flex; gap: 6px; }
+.row-actions .btn { padding: 5px 10px; font-size: 12px; }
+.row-err { color: #fca5a5; font-size: 11px; margin-top: 4px; }

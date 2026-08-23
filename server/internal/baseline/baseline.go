@@ -94,7 +94,7 @@ func robustZ(x, med, mad float64) (float64, bool) {
 	if scale == 0 {
 		return 0, false // unreachable: floor >= 1e-3
 	}
-	return m/scale, true
+	return m / scale, true
 }
 
 // ---- cell: per (device, metric, source, dow, hour) rolling stats -----------
@@ -168,23 +168,23 @@ type seriesData struct {
 
 // Anomaly is one flagged observation.
 type Anomaly struct {
-	At       time.Time   // observation time (UTC)
-	DeviceID string      `json:"device_id"`
-	Name     string      `json:"name"`
-	Source   string      `json:"source"`
-	Value    float64     `json:"value"`
-	Seasonal *CellScore  `json:"seasonal,omitempty"`
-	Trend    *CellScore  `json:"trend,omitempty"`
-	Score    float64     `json:"score"` // max(zSeasonal, zTrend) of the fired channels
+	At       time.Time  // observation time (UTC)
+	DeviceID string     `json:"device_id"`
+	Name     string     `json:"name"`
+	Source   string     `json:"source"`
+	Value    float64    `json:"value"`
+	Seasonal *CellScore `json:"seasonal,omitempty"`
+	Trend    *CellScore `json:"trend,omitempty"`
+	Score    float64    `json:"score"` // max(zSeasonal, zTrend) of the fired channels
 }
 
 // CellScore is the summary of one scoring channel for an Anomaly.
 type CellScore struct {
-	Z        float64 `json:"z"`
-	Median   float64 `json:"median"`
-	MAD      float64 `json:"mad"`
-	EWMA     float64 `json:"ewma"`
-	Cells    int     `json:"cells"`
+	Z      float64 `json:"z"`
+	Median float64 `json:"median"`
+	MAD    float64 `json:"mad"`
+	EWMA   float64 `json:"ewma"`
+	Cells  int     `json:"cells"`
 }
 
 // ---- data source -----------------------------------------------------------
@@ -207,7 +207,7 @@ type TimeSeries struct {
 
 // Point is one hourly mean sample.
 type Point struct {
-	At  time.Time
+	At   time.Time
 	Mean float64
 }
 
@@ -225,11 +225,20 @@ type Job struct {
 	// Handle, if set, is invoked for every anomaly (in run order).
 	Handle func(Anomaly)
 
+	// PostRun, if set, is invoked once after each pass with the anomalies
+	// found and the set of series the source actually scored this pass —
+	// including quiet ones. W2-4's alert reconciler uses this to bump
+	// open alerts, create new ones, and auto-resolve the rest. It must
+	// be non-blocking (the job calls it synchronously in run order).
+	// Nil keeps the engine a pure scorer.
+	PostRun func(anomalies []Anomaly, scored map[SeriesKey]bool)
+
 	// interval for Run (background mode).
 	interval time.Duration
 
 	mu       sync.Mutex
 	anoms    []Anomaly
+	scored   map[SeriesKey]bool // series scored in the latest pass
 	runCount int
 	series   map[SeriesKey]bool
 }
@@ -375,6 +384,7 @@ func (j *Job) RunOnce(ctx context.Context, now time.Time) ([]Anomaly, error) {
 
 	j.mu.Lock()
 	j.anoms = out
+	j.scored = seriesSeen
 	j.runCount++
 	if seriesSeen != nil {
 		for k := range seriesSeen {
@@ -382,6 +392,19 @@ func (j *Job) RunOnce(ctx context.Context, now time.Time) ([]Anomaly, error) {
 		}
 	}
 	j.mu.Unlock()
+
+	// PostRun (W2-4) sees the pass's anomalies plus EVERY series scored
+	// this pass — quiet ones too — so the alert reconciler can bump open
+	// alerts, create new ones, and auto-resolve series that came back to
+	// baseline. A copy is handed over so the callback can't alias the
+	// job's internal state.
+	if j.PostRun != nil && seriesSeen != nil {
+		scoredCopy := make(map[SeriesKey]bool, len(seriesSeen))
+		for k := range seriesSeen {
+			scoredCopy[k] = true
+		}
+		j.PostRun(out, scoredCopy)
+	}
 
 	return out, nil
 }
@@ -433,6 +456,21 @@ func (j *Job) Series() []SeriesKey {
 		out = append(out, k)
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].String() < out[k].String() })
+	return out
+}
+
+// LastScored returns the set of series scored in the most recent pass —
+// quiet ones included — as a copy. Nil before the first pass.
+func (j *Job) LastScored() map[SeriesKey]bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.scored == nil {
+		return nil
+	}
+	out := make(map[SeriesKey]bool, len(j.scored))
+	for k := range j.scored {
+		out[k] = true
+	}
 	return out
 }
 

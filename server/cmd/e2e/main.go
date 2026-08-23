@@ -1,8 +1,10 @@
-// Command e2e verifies W1-5+W1-6+W1-7+W2-2+W2-3 against a RUNNING
+// Command e2e verifies W1-5+W1-6+W1-7+W2-2+W2-3+W2-4 against a RUNNING
 // rmmway-server: mint bootstrap (HTTP) -> enroll (gRPC) -> stream metrics
 // -> operator login + dispatch a command through the real HTTP endpoint and
 // assert it arrives on the live agent stream -> baseline engine flags a
 // synthetic weekly-pattern spike and stays quiet on the clean series ->
+// the flagged anomaly becomes ONE deduped inbox alert (repeated passes
+// bump it, a clean pass resolves it, re-fire + ack/resolve via the API) ->
 // device + samples visible in TimescaleDB -> device immediately findable in
 // Meilisearch (hostname + id).
 //
@@ -247,6 +249,11 @@ func main() {
 	// over the real hypertable via the live API, and assert the anomaly.
 	baselineE2E(httpAddr, pgDSN)
 
+	// 6c. W2-4: the flagged anomaly must become ONE deduped inbox alert —
+	// repeated passes bump it (no storm), a clean pass resolves it, a new
+	// spike re-fires, and ack/resolve work through the auth-gated API.
+	alertE2E(httpAddr, pgDSN)
+
 	// 6. W1-6: samples + device row are actually in TimescaleDB.
 	// (the agent's stream is already closed; metrics were flushed on write)
 	cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -338,7 +345,7 @@ func main() {
 					die("device with ip 10.0.0.99 not in search hits")
 				}
 			}
-			fmt.Println("PASS: W1-5+W1-6+W1-7+W2-2+W2-3 e2e — enroll, stream, command dispatched to live stream, metrics in Timescale, baseline anomaly flagged, device searchable in Meilisearch")
+			fmt.Println("PASS: W1-5+W1-6+W1-7+W2-2+W2-3+W2-4 e2e — enroll, stream, command dispatched to live stream, metrics in Timescale, baseline anomaly flagged -> one deduped inbox alert, device searchable in Meilisearch")
 			return
 		}
 		lastErr = fmt.Errorf("search for %q returned 0 hits yet", enrollHost)
@@ -402,11 +409,11 @@ func baselineE2E(httpAddr, pgDSN string) {
 	}
 	var runOut struct {
 		Anomalies []struct {
-			DeviceID string   `json:"device_id"`
-			Name     string   `json:"name"`
-			At       string   `json:"at"`
-			Value    float64  `json:"value"`
-			Score    float64  `json:"score"`
+			DeviceID string  `json:"device_id"`
+			Name     string  `json:"name"`
+			At       string  `json:"at"`
+			Value    float64 `json:"value"`
+			Score    float64 `json:"score"`
 			Seasonal *struct {
 				Z float64 `json:"z"`
 			} `json:"seasonal"`
@@ -485,7 +492,316 @@ func baselineE2E(httpAddr, pgDSN string) {
 	if _, err := pgConn.Exec(ctx, `DELETE FROM baseline_anomalies WHERE device_id LIKE $1`, devID+"%"); err != nil {
 		die("baseline tidy anomalies: %v", err)
 	}
+	// The spike above also produced inbox alerts (W2-4) — drop those too so
+	// e2e runs don't leave phantom alerts in the dev inbox.
+	if _, err := pgConn.Exec(ctx, `DELETE FROM alerts WHERE device_id LIKE $1`, devID+"%"); err != nil {
+		die("baseline tidy alerts: %v", err)
+	}
 	if _, err := pgConn.Exec(ctx, `DELETE FROM devices WHERE id LIKE $1`, devID+"%"); err != nil {
 		die("baseline tidy devices: %v", err)
 	}
+}
+
+// alertE2E is the W2-4 definition-of-done check against the LIVE server:
+// "a real metric anomaly produces ONE deduped alert in the inbox (no
+// storm)". It seeds a fresh device with a 44-day weekly pattern, then flips
+// the CURRENT hour's samples between spiked and clean (the engine scores
+// that hour's mean — future hours are beyond its window) and walks the real
+// baseline + alert pipeline through the live API:
+//
+//	pass 1 (spike hour)  -> exactly 1 open alert appears
+//	pass 2 (same hour)   -> still exactly 1 alert, bumped (events=2)
+//	pass 3 (clean hour)  -> the alert auto-resolves; inbox empty
+//	pass 4 (spike again) -> a NEW alert (re-fire is a new incident)
+//	/admin/alerts/counts -> open count matches
+//	PATCH ack / resolve  -> manual transitions work (auth-gated)
+//
+// It reuses W2-3's synthetic series shape so the same engine output feeds
+// both checks.
+func alertE2E(httpAddr, pgDSN string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	pgConn, err := pgx.Connect(ctx, pgDSN)
+	if err != nil {
+		die("alert e2e pg connect: %v", err)
+	}
+	defer pgConn.Close(ctx)
+
+	devID := "e2e-alert-" + time.Now().Format("20060102150405")
+	metric := "synth.alert_pattern"
+	now := time.Now().UTC().Truncate(time.Hour)
+	weekly := func(at time.Time) float64 {
+		return 40 + float64(at.Weekday())*8 + 15*math.Sin(2*math.Pi*float64(at.Hour())/24)
+	}
+
+	// Seed 44 days of pattern ending at the current hour (the spike is
+	// applied to the current hour separately via setNow, since the engine
+	// scores the hourly MEAN of the latest hour in its window).
+	seedHistory := func() {
+		if _, err := pgConn.Exec(ctx, `INSERT INTO devices (id, hostname, os, arch)
+			VALUES ($1, $2, 'linux', 'amd64') ON CONFLICT (id) DO NOTHING`, devID, "e2e-alert-host"); err != nil {
+			die("alert seed device: %v", err)
+		}
+		start := now.Add(-44 * 24 * time.Hour)
+		const ins = `INSERT INTO metrics (device_id, name, source, value, labels, timestamp_ms, ts)
+			VALUES ($1, $2, '', $3::double precision, '{}', $4::bigint, to_timestamp($4::bigint / 1000.0)) ON CONFLICT DO NOTHING`
+		for at := start; !at.After(now); at = at.Add(time.Hour) {
+			if at.Equal(now) {
+				continue // current hour is set by setNow
+			}
+			if _, err := pgConn.Exec(ctx, ins, devID, metric, weekly(at), at.UnixMilli()); err != nil {
+				die("alert seed: %v", err)
+			}
+		}
+	}
+	// setNow replaces the current hour's samples with one clean or spiked
+	// sample, changing the hour's mean the engine scores. The sample is
+	// stamped exactly at the hour floor (`now`), which is always <= the
+	// real clock, so it's never treated as future-dated/skipped.
+	setNow := func(spike bool) {
+		if _, err := pgConn.Exec(ctx, `DELETE FROM metrics WHERE device_id=$1 AND name=$2 AND ts >= $3 AND ts < $4`,
+			devID, metric, now, now.Add(time.Hour)); err != nil {
+			die("alert set-now delete: %v", err)
+		}
+		v := weekly(now)
+		if spike {
+			v += 35
+		}
+		if _, err := pgConn.Exec(ctx, `INSERT INTO metrics (device_id, name, source, value, labels, timestamp_ms, ts)
+			VALUES ($1, $2, '', $3::double precision, '{}', $4::bigint, to_timestamp($4::bigint / 1000.0))`,
+			devID, metric, v, now.UnixMilli()); err != nil {
+			die("alert set-now insert: %v", err)
+		}
+	}
+
+	// ---- helpers: force a pass, list alerts, patch a status -------------
+	forcePass := func() {
+		resp, err := http.Post(httpAddr+"/admin/baseline/run", "application/json", nil)
+		if err != nil {
+			die("alert pass: %v", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			die("alert pass: status %d: %s", resp.StatusCode, body)
+		}
+	}
+	openAlerts := func() []map[string]any {
+		resp, err := http.Get(httpAddr + "/admin/alerts?status=open")
+		if err != nil {
+			die("alert list: %v", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			die("alert list: status %d: %s", resp.StatusCode, body)
+		}
+		var out []map[string]any
+		if err := json.Unmarshal(body, &out); err != nil {
+			die("alert list: decode: %v", err)
+		}
+		var mine []map[string]any
+		for _, a := range out {
+			if fmt.Sprint(a["device_id"]) == devID && fmt.Sprint(a["name"]) == metric {
+				mine = append(mine, a)
+			}
+		}
+		return mine
+	}
+	patchAlert := func(id int64, status string) int {
+		b, _ := json.Marshal(map[string]string{"status": status})
+		req, _ := http.NewRequest("PATCH", fmt.Sprintf("%s/admin/alerts/%d", httpAddr, id), bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			die("alert patch: %v", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			die("alert patch %s: status %d: %s", status, resp.StatusCode, body)
+		}
+		return resp.StatusCode
+	}
+
+	// ---- Pass 1: the spike hour -> exactly one open alert --------------
+	seedHistory()
+	setNow(true)
+	forcePass()
+	alerts := openAlerts()
+	if len(alerts) != 1 {
+		die("pass1: expected exactly 1 open alert, got %d: %v", len(alerts), alerts)
+	}
+	ev1, _ := alerts[0]["events"].(float64)
+	if ev1 < 1 {
+		die("pass1: events should be >= 1, got %v", alerts[0]["events"])
+	}
+	fmt.Printf("alerts: pass1 -> 1 open alert (score %v, channel %v, events %v) for %s\n",
+		alerts[0]["score"], alerts[0]["channel"], alerts[0]["events"], devID)
+
+	// ---- Pass 2: re-run the same spike hour -> bump, still 1 (no storm) -
+	// A concurrent background pass could also bump; dedup means the COUNT
+	// can only stay 1 no matter what.
+	forcePass()
+	alerts = openAlerts()
+	if len(alerts) != 1 {
+		die("pass2 (no storm): expected still exactly 1 open alert, got %d: %v", len(alerts), alerts)
+	}
+	ev2, _ := alerts[0]["events"].(float64)
+	if ev2 <= ev1 {
+		die("pass2: events should have bumped (%v -> %v)", ev1, ev2)
+	}
+	fmt.Printf("alerts: pass2 -> same alert bumped to events=%v (no storm)\n", alerts[0]["events"])
+
+	// ---- Pass 3: series clean this hour -> auto-resolves ---------------
+	setNow(false)
+	forcePass()
+	if alerts = openAlerts(); len(alerts) != 0 {
+		die("pass3: expected auto-resolve (0 open alerts), got %d: %v", len(alerts), alerts)
+	}
+	// The resolved row is queryable by status.
+	resResp, err := http.Get(httpAddr + "/admin/alerts?status=resolved")
+	if err != nil {
+		die("alert resolved list: %v", err)
+	}
+	resBody, _ := io.ReadAll(resResp.Body)
+	resResp.Body.Close()
+	if resResp.StatusCode != 200 {
+		die("alert resolved list: status %d", resResp.StatusCode)
+	}
+	if !bytes.Contains(resBody, []byte(devID)) {
+		die("pass3: resolved alert for %s not found in status=resolved feed", devID)
+	}
+	fmt.Printf("alerts: pass3 -> alert auto-resolved (series returned to baseline)\n")
+
+	// ---- Pass 4: spike again re-fires a FRESH alert ---------------------
+	setNow(true)
+	forcePass()
+	alerts = openAlerts()
+	if len(alerts) != 1 {
+		die("pass4: expected a fresh open alert on re-fire, got %d: %v", len(alerts), alerts)
+	}
+	fmt.Printf("alerts: pass4 -> fresh alert fired on the new anomaly (re-fire allowed)\n")
+
+	// ---- counts endpoint agrees (scoped to our device) ------------------
+	cntResp, err := http.Get(httpAddr + "/admin/alerts/counts")
+	if err != nil {
+		die("alert counts: %v", err)
+	}
+	var counts map[string]int
+	_ = json.NewDecoder(cntResp.Body).Decode(&counts)
+	cntResp.Body.Close()
+	if cntResp.StatusCode != 200 {
+		die("counts: status %d", cntResp.StatusCode)
+	}
+	// The global open count may include other devices' alerts (e.g. W2-3's
+	// spike), so assert the scoped view: our device must show exactly 1.
+	scResp, err := http.Get(httpAddr + "/admin/alerts?status=open&device_id=" + devID)
+	if err != nil {
+		die("alert scoped list: %v", err)
+	}
+	scBody, _ := io.ReadAll(scResp.Body)
+	scResp.Body.Close()
+	if scResp.StatusCode != 200 {
+		die("alert scoped list: status %d", scResp.StatusCode)
+	}
+	var scoped []map[string]any
+	_ = json.Unmarshal(scBody, &scoped)
+	if len(scoped) != 1 {
+		die("counts: scoped open alerts for %s should be 1, got %d: %s", devID, len(scoped), scBody)
+	}
+	fmt.Printf("alerts: counts endpoint reports %d open (global); %d for our device\n", counts["open"], len(scoped))
+
+	// ---- manual ack then resolve via the auth-gated API -----------------
+	idInt, ok := alerts[0]["id"].(float64)
+	if !ok {
+		die("alert id not numeric: %v", alerts[0]["id"])
+	}
+	patchAlert(int64(idInt), "acked")
+	// Ack'd alerts leave the "open" filter (strict statuses) and appear
+	// under status=acked.
+	if got := openAlerts(); len(got) != 0 {
+		die("ack: expected 0 open alerts after ack, got %d: %v", len(got), got)
+	}
+	ackResp, err := http.Get(httpAddr + "/admin/alerts?status=acked&device_id=" + devID)
+	if err != nil {
+		die("alert acked list: %v", err)
+	}
+	ackBody, _ := io.ReadAll(ackResp.Body)
+	ackResp.Body.Close()
+	if ackResp.StatusCode != 200 {
+		die("alert acked list: status %d", ackResp.StatusCode)
+	}
+	var acked []map[string]any
+	_ = json.Unmarshal(ackBody, &acked)
+	if len(acked) != 1 || acked[0]["status"] != "acked" {
+		die("ack: expected exactly 1 acked alert, got %v", acked)
+	}
+	patchAlert(int64(idInt), "resolved")
+	if alerts = openAlerts(); len(alerts) != 0 {
+		die("manual resolve: expected 0 open alerts, got %d: %v", len(alerts), alerts)
+	}
+	resResp2, err := http.Get(httpAddr + "/admin/alerts?status=resolved&device_id=" + devID)
+	if err != nil {
+		die("alert resolved list 2: %v", err)
+	}
+	resBody2, _ := io.ReadAll(resResp2.Body)
+	resResp2.Body.Close()
+	if !bytes.Contains(resBody2, []byte(fmt.Sprint(idInt))) {
+		die("manual resolve: the resolved alert is not in status=resolved")
+	}
+	fmt.Printf("alerts: manual ack -> resolve via /admin/alerts/{id} verified\n")
+
+	// ---- the auth gate actually gates -----------------------------------
+	unauthed, err := http.Get(httpAddr + "/api/alerts")
+	if err != nil {
+		die("unauthed alerts: %v", err)
+	}
+	unauthed.Body.Close()
+	if unauthed.StatusCode != http.StatusUnauthorized {
+		die("auth gate: GET /api/alerts without a token should be 401, got %d", unauthed.StatusCode)
+	}
+	// And an operator JWT (not an agent token) gets through.
+	lb, _ := json.Marshal(map[string]string{"username": "admin", "password": "admin"})
+	lresp, err := http.Post(httpAddr+"/api/login", "application/json", bytes.NewReader(lb))
+	if err != nil {
+		die("alert login: %v", err)
+	}
+	var loginOut struct {
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(lresp.Body).Decode(&loginOut)
+	lresp.Body.Close()
+	if lresp.StatusCode != 200 || loginOut.Token == "" {
+		die("alert login: no token")
+	}
+	ar, err := http.NewRequest("GET", httpAddr+"/api/alerts?status=resolved", nil)
+	if err != nil {
+		die("authed alerts req: %v", err)
+	}
+	ar.Header.Set("Authorization", "Bearer "+loginOut.Token)
+	aresp, err := http.DefaultClient.Do(ar)
+	if err != nil {
+		die("authed alerts: %v", err)
+	}
+	aresp.Body.Close()
+	if aresp.StatusCode != 200 {
+		die("auth gate: GET /api/alerts with operator token should be 200, got %d", aresp.StatusCode)
+	}
+	fmt.Println("alerts: /api/alerts 401 without token, 200 with operator token")
+
+	// ---- tidy -------------------------------------------------------------
+	if _, err := pgConn.Exec(ctx, `DELETE FROM metrics WHERE device_id=$1`, devID); err != nil {
+		die("alert tidy metrics: %v", err)
+	}
+	if _, err := pgConn.Exec(ctx, `DELETE FROM baseline_anomalies WHERE device_id=$1`, devID); err != nil {
+		die("alert tidy anomalies: %v", err)
+	}
+	if _, err := pgConn.Exec(ctx, `DELETE FROM alerts WHERE device_id=$1`, devID); err != nil {
+		die("alert tidy alerts: %v", err)
+	}
+	if _, err := pgConn.Exec(ctx, `DELETE FROM devices WHERE id=$1`, devID); err != nil {
+		die("alert tidy device: %v", err)
+	}
+	fmt.Println("alerts: W2-4 DoD satisfied — one deduped inbox alert, no storm, auto-resolve + manual ack/resolve")
 }

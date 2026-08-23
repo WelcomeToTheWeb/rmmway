@@ -59,8 +59,8 @@ func TestBaselineSchemaSourceAndSink(t *testing.T) {
 	t.Chdir("../../..")
 	if n, err := Migrate(ctx, db, "server/migrations"); err != nil {
 		t.Fatalf("migrate: %v", err)
-	} else if n != 2 {
-		t.Fatalf("expected 2 migrations applied, got %d", n)
+	} else if n != 3 {
+		t.Fatalf("expected 3 migrations applied, got %d", n)
 	}
 
 	var count int

@@ -47,8 +47,8 @@ func (s *PostgresBaselineSource) Samples(ctx context.Context, since, until time.
 	for rows.Next() {
 		var (
 			dev, name, source string
-			hr                 time.Time
-			mean               float64
+			hr                time.Time
+			mean              float64
 		)
 		if err := rows.Scan(&dev, &name, &source, &hr, &mean); err != nil {
 			return nil, fmt.Errorf("baseline sample scan: %w", err)
@@ -127,17 +127,17 @@ func (s *PostgresAnomalySink) Record(a baseline.Anomaly) {
 
 // StoredAnomaly is a row of baseline_anomalies for the API/e2e.
 type StoredAnomaly struct {
-	ID          int64      `json:"id"`
-	DeviceID    string     `json:"device_id"`
-	Name        string     `json:"name"`
-	Source      string     `json:"source"`
-	At          time.Time  `json:"at"`
-	Value       float64    `json:"value"`
-	Score       float64    `json:"score"`
-	Channel     string     `json:"channel"`
-	SeasonalZ   *float64   `json:"seasonal_z,omitempty"`
-	TrendZ      *float64   `json:"trend_z,omitempty"`
-	DetectedAt  time.Time  `json:"detected_at"`
+	ID         int64     `json:"id"`
+	DeviceID   string    `json:"device_id"`
+	Name       string    `json:"name"`
+	Source     string    `json:"source"`
+	At         time.Time `json:"at"`
+	Value      float64   `json:"value"`
+	Score      float64   `json:"score"`
+	Channel    string    `json:"channel"`
+	SeasonalZ  *float64  `json:"seasonal_z,omitempty"`
+	TrendZ     *float64  `json:"trend_z,omitempty"`
+	DetectedAt time.Time `json:"detected_at"`
 }
 
 // Recent returns the most recent stored anomalies (newest first).
@@ -170,22 +170,27 @@ func (s *PostgresAnomalySink) Recent(ctx context.Context, limit int) ([]StoredAn
 // ---- baseline job wiring ----------------------------------------------------
 
 // Baseline couples the deterministic engine (internal/baseline.Job) to the
-// Postgres anomaly sink so the server can run passes, expose state, and
-// persist findings. Nil-safe when Postgres is down (in-memory mode): the
-// engine still runs on whatever source is wired, and Record becomes a no-op
-// logger.
+// Postgres anomaly sink + alert store (W2-4) so the server can run passes,
+// expose state, persist findings, and reconcile the deduped alert inbox.
+// Nil-safe when Postgres is down (in-memory mode): the engine still runs on
+// whatever source is wired, and Record/Reconcile become no-op loggers.
 type Baseline struct {
-	Job  *baseline.Job
-	Sink *PostgresAnomalySink
+	Job    *baseline.Job
+	Sink   *PostgresAnomalySink
+	Alerts *AlertStore // nil = alerting disabled (anomaly feed only)
 }
 
-// NewBaseline builds a Baseline whose anomaly handle persists to sink.
-func NewBaseline(src baseline.Source, sink *PostgresAnomalySink) *Baseline {
+// NewBaseline builds a Baseline whose anomaly handle persists to sink and
+// whose post-pass hook reconciles the alert inbox (when alerts != nil).
+func NewBaseline(src baseline.Source, sink *PostgresAnomalySink, alerts *AlertStore) *Baseline {
 	j := &baseline.Job{Source: src}
 	if sink != nil {
 		j.Handle = sink.Record
 	}
-	return &Baseline{Job: j, Sink: sink}
+	if alerts != nil {
+		j.PostRun = alerts.Reconcile
+	}
+	return &Baseline{Job: j, Sink: sink, Alerts: alerts}
 }
 
 // RunNow performs one scoring pass at the current time.

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -48,6 +49,23 @@ func baselineInterval() time.Duration {
 		log.Printf("WARN: bad RMMWAY_BASELINE_INTERVAL %q — using 5m", v)
 	}
 	return 5 * time.Minute
+}
+
+// alertAutoResolve is the number of consecutive clean passes before an
+// open alert auto-resolves (RMMWAY_ALERT_AUTO_RESOLVE, default 1). With the
+// default 5-min engine cadence, 1 = an alert closes ~5 min after the metric
+// returns to baseline. 0 disables auto-resolve (manual only).
+func alertAutoResolve() int {
+	v := os.Getenv("RMMWAY_ALERT_AUTO_RESOLVE")
+	if v == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		log.Printf("WARN: bad RMMWAY_ALERT_AUTO_RESOLVE %q — using 1", v)
+		return 1
+	}
+	return n
 }
 
 type probe struct {
@@ -210,17 +228,21 @@ func main() {
 		return
 	}
 
-	// ---- dynamic baselining (W2-3) -------------------------------------
+	// ---- dynamic baselining (W2-3) + alerts (W2-4) -------------------
 	// Deterministic background job: scores every series' latest hourly
 	// mean against its (dow, hour) seasonal baseline + a same-day trend
-	// baseline, persisting findings to baseline_anomalies. Runs against
-	// the metrics hypertable whenever Postgres is up; with in-memory
-	// stores (PG down) there is no source, so the engine is disabled.
+	// baseline, persisting findings to baseline_anomalies and folding them
+	// into the deduped alert inbox (one open alert per anomalous series).
+	// Runs against the metrics hypertable whenever Postgres is up; with
+	// in-memory stores (PG down) there is no source, so it's disabled.
 	var baselineJob *store.Baseline
+	var alertStore *store.AlertStore
 	if hasPG {
+		alertStore = store.NewAlertStore(pgPool, alertAutoResolve())
 		baselineJob = store.NewBaseline(
 			store.NewPostgresBaselineSource(pgPool),
 			store.NewPostgresAnomalySink(pgPool),
+			alertStore,
 		)
 		baseErrCh := make(chan error, 1)
 		go func() {
@@ -308,6 +330,7 @@ func main() {
 		MintBootstrap: svc.MintBootstrapToken,
 		Dispatch:      svc.Dispatcher().Dispatch,
 		Baseline:      baselineJob,
+		Alerts:        alertStore,
 	})
 	apiSrv.Register(mux)
 

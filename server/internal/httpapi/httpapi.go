@@ -41,6 +41,7 @@ type Server struct {
 	devices  store.DeviceStore
 	search   *store.Meili
 	baseline *store.Baseline
+	alerts   *store.AlertStore
 
 	jwtSecret     []byte
 	tokenLifetime time.Duration
@@ -72,6 +73,9 @@ type Config struct {
 	// Baseline is the W2-3 dynamic baselining job; nil disables
 	// /api/baseline/* and /admin/baseline/*.
 	Baseline *store.Baseline
+	// Alerts is the W2-4 deduped alert inbox; nil disables /api/alerts*
+	// and /admin/alerts*.
+	Alerts *store.AlertStore
 }
 
 // New builds a Server. A nil Devices falls back to an in-memory store.
@@ -101,6 +105,7 @@ func New(cfg Config) *Server {
 		devices:       devices,
 		search:        cfg.Search,
 		baseline:      cfg.Baseline,
+		alerts:        cfg.Alerts,
 		jwtSecret:     cfg.JWTSecret,
 		tokenLifetime: cfg.TokenLifetime,
 		adminUser:     cfg.AdminUser,
@@ -121,11 +126,16 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// W2-3: dynamic baselining — anomaly feed (auth-gated) + manual pass.
 	mux.HandleFunc("/api/baseline/anomalies", s.requireOperator(s.handleBaselineAnomalies))
 	mux.HandleFunc("/api/baseline/run", s.requireOperator(s.handleBaselineRun))
+	// W2-4: deduped alert inbox (auth-gated) + ack/resolve + counts.
+	mux.HandleFunc("/api/alerts", s.requireOperator(s.handleAlerts))
+	mux.HandleFunc("/api/alerts/", s.requireOperator(s.handleAlertSub))
 	mux.HandleFunc("/admin/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("/admin/devices", s.deviceList) // open: installer / e2e / README
 	mux.HandleFunc("/admin/search", s.handleSearch)
 	mux.HandleFunc("/admin/baseline/anomalies", s.handleBaselineAnomalies) // open: e2e
 	mux.HandleFunc("/admin/baseline/run", s.handleBaselineRun)             // open: e2e
+	mux.HandleFunc("/admin/alerts", s.handleAlerts)                        // open: e2e
+	mux.HandleFunc("/admin/alerts/", s.handleAlertSub)                     // open: e2e
 }
 
 // ---- operator auth ----------------------------------------------------------
@@ -413,6 +423,124 @@ func (s *Server) handleBaselineRun(w http.ResponseWriter, r *http.Request) {
 		"series":    len(s.baseline.Job.Series()),
 		"runs":      s.baseline.Job.RunCount(),
 	})
+}
+
+// ---- W2-4: alert inbox -----------------------------------------------------
+
+// handleAlerts serves the deduped alert inbox.
+//
+// GET /api/alerts?status=open&device_id=...&limit=100
+//
+// \t200 [{id, device_id, hostname, name, source, status, score, channel,
+// \t      value, expected, events, first_at, last_at, resolved_at, …}]
+// \t400  unknown status
+// \t503  alert store not wired
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.alerts == nil {
+		http.Error(w, "alert inbox not configured", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	status := q.Get("status")
+	deviceID := q.Get("device_id")
+	limit := 100
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	rows, err := s.alerts.List(r.Context(), status, deviceID, limit)
+	if err != nil {
+		http.Error(w, "alerts: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if rows == nil {
+		rows = []store.Alert{}
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// alertCounts returns the per-status counts for the inbox badge.
+//
+// GET /api/alerts/counts
+//
+// \t200 {open: n, acked: n, resolved: n}
+// \t503  alert store not wired
+func (s *Server) alertCounts(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		http.Error(w, "alert inbox not configured", http.StatusServiceUnavailable)
+		return
+	}
+	counts, err := s.alerts.Counts(r.Context())
+	if err != nil {
+		http.Error(w, "alert counts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, counts)
+}
+
+// handleAlertSub routes the /api/alerts/{sub} paths: "counts" -> the
+// per-status badge counts, otherwise the alert id for a status PATCH.
+func (s *Server) handleAlertSub(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// parts: ["api","alerts","<id|counts>"]
+	if len(parts) == 3 && parts[2] == "counts" {
+		s.alertCounts(w, r)
+		return
+	}
+	s.handleAlertStatus(w, r)
+}
+
+// handleAlertStatus applies a manual inbox transition.
+//
+// PATCH /api/alerts/{id}   {"status":"acked"|"resolved"}
+//
+// \t200 {alert}
+// \t400  bad body / invalid transition
+// \t404  unknown id
+// \t503  alert store not wired
+func (s *Server) handleAlertStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "PATCH only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.alerts == nil {
+		http.Error(w, "alert inbox not configured", http.StatusServiceUnavailable)
+		return
+	}
+	// /api/alerts/{id}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// parts: ["api","alerts","<id>"]
+	if len(parts) != 3 || parts[2] == "" {
+		http.Error(w, "expected /api/alerts/{id}", http.StatusNotFound)
+		return
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "alert id must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	var in struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	a, err := s.alerts.SetStatus(r.Context(), id, in.Status)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
 }
 
 // handleBootstrap mints a one-time enroll code (W1-3 installer / e2e).

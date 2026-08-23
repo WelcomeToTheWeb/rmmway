@@ -1,10 +1,19 @@
 import { useEffect, useState, useCallback } from "react";
 import { AuthProvider, useAuth } from "./auth.jsx";
+import { api } from "./api.js";
 import Login from "./Login.jsx";
 import Devices from "./Devices.jsx";
+import Alerts from "./Alerts.jsx";
 import Palette from "./Palette.jsx";
 
-function Header({ onOpenPalette }) {
+// ---- tiny hash router: #/devices (default) and #/alerts -------------------
+function parseRoute() {
+  const h = window.location.hash;
+  if (h.startsWith("#/alerts")) return "alerts";
+  return "devices";
+}
+
+function Header({ route, openCount, onOpenPalette }) {
   const { token, logout } = useAuth();
   const [health, setHealth] = useState(null);
   useEffect(() => {
@@ -28,7 +37,16 @@ function Header({ onOpenPalette }) {
     <header className="topbar">
       <div className="brand">RMMWay</div>
       <nav className="nav">
-        <a className="nav-item active" href="#/devices">Devices</a>
+        <a className={"nav-item" + (route === "devices" ? " active" : "")} href="#/devices">
+          Devices
+        </a>
+        <a
+          className={"nav-item" + (route === "alerts" ? " active" : "")}
+          href="#/alerts"
+        >
+          Alerts
+          {openCount > 0 && <span className="badge">{openCount}</span>}
+        </a>
         <a
           className="nav-item"
           href="#/search"
@@ -37,9 +55,6 @@ function Header({ onOpenPalette }) {
           title="Search devices & run actions (Ctrl+K)"
         >
           Search <kbd className="kbd">⌘K</kbd>
-        </a>
-        <a className="nav-item disabled" title="Comes in W2-4 (alerts inbox)">
-          Alerts
         </a>
       </nav>
       <div className="topbar-right">
@@ -63,6 +78,32 @@ function Shell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [focusKey, setFocusKey] = useState(0);
   const [focusFilter, setFocusFilter] = useState(null);
+  const [route, setRoute] = useState(parseRoute);
+  const [openCount, setOpenCount] = useState(0);
+
+  // Route follows the location hash (back/forward + nav links).
+  useEffect(() => {
+    const onHash = () => setRoute(parseRoute());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // The nav badge: poll the open-alert count while signed in.
+  useEffect(() => {
+    if (!token) { setOpenCount(0); return; }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const c = await api.alertCounts(token);
+        if (alive) setOpenCount(c && c.open ? c.open : 0);
+      } catch {
+        /* keep the last known count */
+      }
+    };
+    tick();
+    const id = setInterval(tick, 15000);
+    return () => { alive = false; clearInterval(id); };
+  }, [token]);
 
   // Global ⌘K / Ctrl+K opens the palette (only when signed in).
   const openPalette = useCallback(() => setPaletteOpen(true), []);
@@ -79,10 +120,12 @@ function Shell() {
   }, [token]);
 
   const goToDevice = useCallback((id, hostname) => {
+    window.location.hash = "#/devices";
     setFocusFilter(hostname || id);
     setFocusKey((k) => k + 1);
   }, []);
   const goToAll = useCallback(() => {
+    window.location.hash = "#/devices";
     setFocusFilter("");
     setFocusKey((k) => k + 1);
   }, []);
@@ -90,14 +133,18 @@ function Shell() {
   if (!token) return <Login />;
   return (
     <div className="shell">
-      <Header onOpenPalette={openPalette} />
+      <Header route={route} openCount={openCount} onOpenPalette={openPalette} />
       <main className="content">
-        <Devices
-          token={token}
-          onUnauthorized={logout}
-          focusFilter={focusFilter}
-          focusKey={focusKey}
-        />
+        {route === "alerts" ? (
+          <Alerts token={token} onUnauthorized={logout} />
+        ) : (
+          <Devices
+            token={token}
+            onUnauthorized={logout}
+            focusFilter={focusFilter}
+            focusKey={focusKey}
+          />
+        )}
       </main>
       <Palette
         open={paletteOpen}
