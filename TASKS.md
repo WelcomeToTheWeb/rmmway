@@ -55,10 +55,10 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 ### Progress at a glance
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
-- **W2 Monitoring+UX:** 3 / 5
+- **W2 Monitoring+UX:** 4 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 14 / 28
+- **Total:** 15 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -222,14 +222,17 @@ parallel. Within a track, respect `Depends on` ordering.
   anomalies are flagged at the right times and quiet otherwise.
 
 #### W2-4 — Baseline-driven alerts + inbox
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-23  ·  **Done:** —
+- **Started:** 2026-08-23  ·  **Done:** 2026-08-23 (commit `4a1fcbf` on `main`; live e2e: spike hour → exactly 1 open alert, re-run bumps it (no storm), clean hour auto-resolves, re-spike fires fresh alert, ack/resolve via auth-gated API)
 - **Depends on:** W2-3
 - **Effort/Impact:** M / High
 - Alert generation from the baseline engine; alert inbox in the UI.
 - **Definition of done:** a real metric anomaly produces one deduped alert in
-  the inbox (no storm).
+  the inbox (no storm). ✅ `0003_alerts.sql` + `store.AlertStore` reconciler
+  (one open alert per series, `events++` on repeats, auto-resolve on quiet
+  streak), `GET/PATCH /api/alerts` (+ `/admin`), `#/alerts` inbox UI with
+  open-count badge, unit + live-Postgres + e2e proof.
 
 #### W2-5 — 🎯 MILESTONE: "monitored in 5 min" E2E demo
 - **Status:** ⬜ pending
