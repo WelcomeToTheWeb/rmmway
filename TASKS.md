@@ -222,9 +222,9 @@ parallel. Within a track, respect `Depends on` ordering.
   anomalies are flagged at the right times and quiet otherwise.
 
 #### W2-4 — Baseline-driven alerts + inbox
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-23  ·  **Done:** —
 - **Depends on:** W2-3
 - **Effort/Impact:** M / High
 - Alert generation from the baseline engine; alert inbox in the UI.
