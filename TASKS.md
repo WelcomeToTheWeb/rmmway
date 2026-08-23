@@ -235,9 +235,9 @@ parallel. Within a track, respect `Depends on` ordering.
   open-count badge, unit + live-Postgres + e2e proof.
 
 #### W2-5 — 🎯 MILESTONE: "monitored in 5 min" E2E demo
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-23  ·  **Done:** —
 - **Depends on:** W1-1…W1-7, W2-1…W2-4
 - **Effort/Impact:** S / High
 - End-to-end: bootstrap agent → live metrics → baseline alerts → near-zero
