@@ -5,6 +5,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.sh \
 #     | bash -s -- --server https://rmm.example.com --bootstrap <TOKEN>
 #
+#   Optional: --grpc-addr host:port when the server's gRPC port differs from
+#   the --server URL's port (split-port deployments).
+#
 # What it does (all in one pasted line):
 #   1. Detect OS + arch (linux/darwin × amd64/arm64).
 #   2. Download the matching static agent from the GitHub release (default:
@@ -23,6 +26,7 @@ REPO="welcometotheweb/rmmway"
 VERSION="latest"          # resolved via the GitHub API
 SERVER=""
 BOOTSTRAP=""
+GRPC_ADDR=""            # optional explicit agent->server gRPC host:port
 CONFIG_DIR="/etc/rmmway"
 SERVICE_USER="root"
 # Base URLs are overridable so the installer works against a self-hosted
@@ -36,6 +40,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --server)     SERVER="${2:?--server needs a value}"; shift 2 ;;
     --bootstrap)  BOOTSTRAP="${2:?--bootstrap needs a value}"; shift 2 ;;
+    --grpc-addr)  GRPC_ADDR="${2:?--grpc-addr needs a value}"; shift 2 ;;
     --version)    VERSION="${2:?--version needs a value}"; shift 2 ;;
     --config-dir) CONFIG_DIR="${2:?--config-dir needs a value}"; shift 2 ;;
     -h|--help)
@@ -104,6 +109,10 @@ CFG="${CONFIG_DIR}/agent.env"
   printf 'RMMWAY_SERVER=%s\n'      "${SERVER:-https://rmm.local}"
   printf 'RMMWAY_BOOTSTRAP_TOKEN=%s\n' "${BOOTSTRAP:-}"
   printf 'RMMWAY_DEVICE_ID=%s\n'    "$(hostname)"
+  # Optional explicit gRPC endpoint. When set, the agent connects here
+  # directly instead of deriving host:port from RMMWAY_SERVER (needed for
+  # split-port deployments where HTTP and gRPC listen on different ports).
+  [ -n "${GRPC_ADDR}" ] && printf 'RMMWAY_GRPC_ADDR=%s\n' "${GRPC_ADDR}"
 } > "$CFG"
 chmod 0600 "$CFG"
 chown root:root "$CFG" 2>/dev/null || true
