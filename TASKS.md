@@ -256,9 +256,9 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W3/W4 — Trust & Supply Chain
 
 #### W3-1 — mTLS agent channel
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-23  ·  **Done:** —
 - **Depends on:** W0-2, W1-1
 - **Effort/Impact:** M / High
 - Org root CA + per-device leaf certs; agent↔server over mTLS.
