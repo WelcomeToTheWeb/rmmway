@@ -154,6 +154,42 @@ Status codes: `401` no/bad token, `404` unknown device, `400` unknown action,
 > dispatch path (mint → push to live stream) is what W2-2 delivers, and the
 > e2e proves the command reaches an open stream end-to-end.
 
+## Dynamic baselining engine (W2-3)
+
+A deterministic Go background job (`server/internal/baseline`) scores every
+(device, metric, source) series' latest hourly mean against **this device's
+own** rolling baseline — no ML deps, no thresholds to tune:
+
+- **Seasonal channel** — per (day-of-week, hour) slot over a 45-day
+  lookback: robust z-score of the latest hourly mean vs the slot's
+  median/MAD ("this CPU is 4σ above *this server's* 3pm-Friday norm").
+- **Trend channel** — same-day 4-hour lookback: catches sudden shifts
+  before the seasonal history has enough cells (restricted to the same
+  calendar day so a normal weekly step at midnight isn't a "spike").
+- **EWMA** per slot tracks the smoothed level (trend signal; alerting
+  input for W2-4).
+- An observation flags when either channel's z ≥ 4.0 (`DefaultZFlag`).
+  Flat baselines (MAD 0) use a 1%-of-level scale floor, so "flat metric
+  moved ≥ 4%" flags and normal jitter doesn't.
+
+Findings persist to the `baseline_anomalies` hypertable (upsert keyed on
+series + hour — repeated runs can't storm). The engine runs every 5 min
+(`RMMWAY_BASELINE_INTERVAL`) and needs ≥ 3 same-slot observations
+(`DefaultMinCells`) before the seasonal channel arms.
+
+```bash
+# force one deterministic scoring pass (also /api/baseline/run, auth-gated)
+curl -fsS -X POST localhost:8080/admin/baseline/run
+# -> {"anomalies":[…],"series":N,"runs":M}
+
+# anomaly feed, newest first (also /api/baseline/anomalies, auth-gated)
+curl -fsS "localhost:8080/admin/baseline/anomalies?limit=100"
+```
+
+The e2e (`make e2e`) seeds two 44-day synthetic weekly-pattern series and
+asserts the engine flags exactly the spiked series' final hour (z ≥ 4,
+seasonal channel) while the clean series stays quiet.
+
 ## Conventions
 
 - Claims: `TASKS.md` is the coordination of record — claim before coding.

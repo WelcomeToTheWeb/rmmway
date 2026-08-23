@@ -37,6 +37,19 @@ func env(key, def string) string {
 	return def
 }
 
+// baselineInterval is the W2-3 scoring cadence (RMMWAY_BASELINE_INTERVAL,
+// default 5m). One pass re-scores every series' latest hourly mean against
+// its rolling baseline — cheap on the hourly-bucketed hypertable.
+func baselineInterval() time.Duration {
+	if v := os.Getenv("RMMWAY_BASELINE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+		log.Printf("WARN: bad RMMWAY_BASELINE_INTERVAL %q — using 5m", v)
+	}
+	return 5 * time.Minute
+}
+
 type probe struct {
 	Service string `json:"service"`
 	OK      bool   `json:"ok"`
@@ -175,6 +188,7 @@ func main() {
 	}
 	var devicesStore store.DeviceStore
 	var metricsSink store.MetricsSink
+	hasPG := false
 	migrationsDir := env("RMMWAY_MIGRATIONS_DIR", "migrations")
 	ctxBg, cancelBg := context.WithTimeout(context.Background(), 5*time.Second)
 	if n, err := store.Migrate(ctxBg, pgPool, migrationsDir); err != nil {
@@ -186,6 +200,7 @@ func main() {
 		metricsSink = store.NewMemoryMetricsSink(100000)
 	} else {
 		log.Printf("migrations: %d applied (dir=%s)", n, migrationsDir)
+		hasPG = true
 		devicesStore = store.NewPostgresDevices(pgPool)
 		metricsSink = store.NewPostgresMetricsSink(pgPool)
 	}
@@ -193,6 +208,30 @@ func main() {
 	if *migrateOnly {
 		log.Println("migrate-only: done")
 		return
+	}
+
+	// ---- dynamic baselining (W2-3) -------------------------------------
+	// Deterministic background job: scores every series' latest hourly
+	// mean against its (dow, hour) seasonal baseline + a same-day trend
+	// baseline, persisting findings to baseline_anomalies. Runs against
+	// the metrics hypertable whenever Postgres is up; with in-memory
+	// stores (PG down) there is no source, so the engine is disabled.
+	var baselineJob *store.Baseline
+	if hasPG {
+		baselineJob = store.NewBaseline(
+			store.NewPostgresBaselineSource(pgPool),
+			store.NewPostgresAnomalySink(pgPool),
+		)
+		baseErrCh := make(chan error, 1)
+		go func() {
+			baselineJob.Start(context.Background(), baselineInterval(), baseErrCh)
+		}()
+		go func() {
+			for err := range baseErrCh {
+				log.Printf("baseline: pass failed: %v", err)
+			}
+		}()
+		log.Println("baseline: dynamic baselining engine started")
 	}
 
 	// ---- device search index (W1-7) ------------------------------------
@@ -268,6 +307,7 @@ func main() {
 		AdminPassword: adminPassword,
 		MintBootstrap: svc.MintBootstrapToken,
 		Dispatch:      svc.Dispatcher().Dispatch,
+		Baseline:      baselineJob,
 	})
 	apiSrv.Register(mux)
 

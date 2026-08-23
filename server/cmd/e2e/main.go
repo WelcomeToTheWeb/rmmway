@@ -1,8 +1,10 @@
-// Command e2e verifies W1-5+W1-6+W1-7+W2-2 against a RUNNING rmmway-server:
-// mint bootstrap (HTTP) -> enroll (gRPC) -> stream metrics -> operator login
-// + dispatch a command through the real HTTP endpoint and assert it arrives
-// on the live agent stream -> device + samples visible in TimescaleDB ->
-// device immediately findable in Meilisearch (hostname + id).
+// Command e2e verifies W1-5+W1-6+W1-7+W2-2+W2-3 against a RUNNING
+// rmmway-server: mint bootstrap (HTTP) -> enroll (gRPC) -> stream metrics
+// -> operator login + dispatch a command through the real HTTP endpoint and
+// assert it arrives on the live agent stream -> baseline engine flags a
+// synthetic weekly-pattern spike and stays quiet on the clean series ->
+// device + samples visible in TimescaleDB -> device immediately findable in
+// Meilisearch (hostname + id).
 //
 // Usage: go run ./cmd/e2e [grpc-host:port] [http-host:port] [pg-dsn]
 package main
@@ -14,9 +16,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -236,6 +240,13 @@ func main() {
 		die("device %s not in /admin/devices", boot.DeviceID)
 	}
 
+	// 6b. W2-3: dynamic baselining DoD — a synthetic metric with a known
+	// weekly pattern is flagged at the right time and quiet otherwise.
+	// Seed 44 days of hourly samples (dow offset + hour-of-day sine) plus
+	// a final-hour spike for a fresh device, run one deterministic pass
+	// over the real hypertable via the live API, and assert the anomaly.
+	baselineE2E(httpAddr, pgDSN)
+
 	// 6. W1-6: samples + device row are actually in TimescaleDB.
 	// (the agent's stream is already closed; metrics were flushed on write)
 	cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -327,11 +338,154 @@ func main() {
 					die("device with ip 10.0.0.99 not in search hits")
 				}
 			}
-			fmt.Println("PASS: W1-5+W1-6+W1-7+W2-2 e2e — enroll, stream, command dispatched to live stream, metrics in Timescale, device searchable in Meilisearch")
+			fmt.Println("PASS: W1-5+W1-6+W1-7+W2-2+W2-3 e2e — enroll, stream, command dispatched to live stream, metrics in Timescale, baseline anomaly flagged, device searchable in Meilisearch")
 			return
 		}
 		lastErr = fmt.Errorf("search for %q returned 0 hits yet", enrollHost)
 		time.Sleep(300 * time.Millisecond)
 	}
 	die("device %q not findable in Meilisearch after 8s: %v", enrollHost, lastErr)
+}
+
+// baselineE2E is the W2-3 definition-of-done check against the LIVE server:
+// a synthetic metric with a known weekly pattern (day-of-week offset +
+// hour-of-day sine) is seeded into Timescale for a fresh device, one
+// deterministic pass is forced through the real HTTP endpoint, and the
+// engine must flag exactly the final-hour spike — quiet on the pattern
+// itself. The clean (unspiked) series proves the "quiet otherwise" half.
+func baselineE2E(httpAddr, pgDSN string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pgConn, err := pgx.Connect(ctx, pgDSN)
+	if err != nil {
+		die("baseline e2e pg connect: %v", err)
+	}
+	defer pgConn.Close(ctx)
+
+	// Fresh, uniquely named device + metric series (no collision with
+	// real data, no carry-over between e2e runs).
+	devID := "e2e-baseline-" + time.Now().Format("20060102150405")
+	metric := "synth.weekly_pattern"
+
+	// now floored to the hour so the spike lands in its own bucket.
+	now := time.Now().UTC().Truncate(time.Hour)
+	weekly := func(at time.Time) float64 {
+		return 40 + float64(at.Weekday())*8 + 15*math.Sin(2*math.Pi*float64(at.Hour())/24)
+	}
+	seed := `INSERT INTO metrics (device_id, name, source, value, labels, timestamp_ms, ts)
+		VALUES ($1, $2, '', $3::double precision, '{}', $4::bigint, to_timestamp($4::bigint / 1000.0)) ON CONFLICT DO NOTHING`
+	// Two devices:
+	//   <devID>-spike: 44 days of pattern + final-hour spike (expect 1 anomaly)
+	//   <devID>-clean: 44 days of pattern, no spike       (expect 0 anomalies)
+	for _, suffix := range []string{"-spike", "-clean"} {
+		d := devID + suffix
+		if _, err := pgConn.Exec(ctx, `INSERT INTO devices (id, hostname, os, arch)
+			VALUES ($1, $2, 'linux', 'amd64') ON CONFLICT (id) DO NOTHING`, d, "e2e-baseline-host"); err != nil {
+			die("baseline seed device: %v", err)
+		}
+		for at := now.Add(-44 * 24 * time.Hour); !at.After(now); at = at.Add(time.Hour) {
+			v := weekly(at)
+			if suffix == "-spike" && at.Equal(now) {
+				v += 35 // final-hour spike: far outside this slot's MAD
+			}
+			if _, err := pgConn.Exec(ctx, seed, d, metric, v, at.UnixMilli()); err != nil {
+				die("baseline seed: %v", err)
+			}
+		}
+	}
+	fmt.Printf("baseline: seeded 2 x 44d synthetic weekly series for %s\n", devID)
+
+	// Force one deterministic pass through the live API.
+	runResp, err := http.Post(httpAddr+"/admin/baseline/run", "application/json", nil)
+	if err != nil {
+		die("baseline run: %v", err)
+	}
+	var runOut struct {
+		Anomalies []struct {
+			DeviceID string   `json:"device_id"`
+			Name     string   `json:"name"`
+			At       string   `json:"at"`
+			Value    float64  `json:"value"`
+			Score    float64  `json:"score"`
+			Seasonal *struct {
+				Z float64 `json:"z"`
+			} `json:"seasonal"`
+			Trend *struct {
+				Z float64 `json:"z"`
+			} `json:"trend"`
+		} `json:"anomalies"`
+		Series int `json:"series"`
+		Runs   int `json:"runs"`
+	}
+	_ = json.NewDecoder(runResp.Body).Decode(&runOut)
+	runResp.Body.Close()
+	if runResp.StatusCode != 200 {
+		die("baseline run: status %d: %v", runResp.StatusCode, runOut)
+	}
+
+	// Assert: exactly one anomaly, on the -spike series, with a large
+	// z-score from a real channel; the -clean series stays quiet.
+	var spiked []struct {
+		id    string
+		at    string
+		score float64
+	}
+	cleanAnoms := 0
+	for _, a := range runOut.Anomalies {
+		if a.Name != metric {
+			continue
+		}
+		if strings.HasPrefix(a.DeviceID, devID+"-spike") {
+			spiked = append(spiked, struct {
+				id    string
+				at    string
+				score float64
+			}{a.DeviceID, a.At, a.Score})
+			if (a.Seasonal == nil || a.Seasonal.Z < 4) && (a.Trend == nil || a.Trend.Z < 4) {
+				die("spike anomaly has no channel with z >= 4: %+v", a)
+			}
+		}
+		if strings.HasPrefix(a.DeviceID, devID+"-clean") {
+			cleanAnoms++
+		}
+	}
+	if len(spiked) != 1 {
+		die("expected exactly 1 anomaly on the spiked series, got %d: %+v (series=%d runs=%d)", len(spiked), spiked, runOut.Series, runOut.Runs)
+	}
+	if cleanAnoms != 0 {
+		die("clean series must be quiet, got %d anomalies", cleanAnoms)
+	}
+	// The anomaly time must be the final (current) hour — "right time".
+	at, perr := time.Parse(time.RFC3339, spiked[0].at)
+	if perr != nil || at.Truncate(time.Hour) != now {
+		die("anomaly at %s, want the final hour %s (parse err %v)", spiked[0].at, now, perr)
+	}
+	fmt.Printf("baseline: spike flagged at %s (z-score %.1f); clean series quiet (series scored: %d)\n",
+		at.Format("2006-01-02 15:04 UTC"), spiked[0].score, runOut.Series)
+
+	// And it is persisted + queryable through the anomaly feed.
+	feedResp, err := http.Get(httpAddr + "/admin/baseline/anomalies?limit=50")
+	if err != nil {
+		die("baseline feed: %v", err)
+	}
+	feedBody, _ := io.ReadAll(feedResp.Body)
+	feedResp.Body.Close()
+	if feedResp.StatusCode != 200 {
+		die("baseline feed: status %d: %s", feedResp.StatusCode, feedBody)
+	}
+	if !bytes.Contains(feedBody, []byte(devID+"-spike")) {
+		die("spike anomaly not in the /admin/baseline/anomalies feed: %s", feedBody)
+	}
+	fmt.Printf("baseline: anomaly persisted and served by /admin/baseline/anomalies\n")
+
+	// Tidy: drop the synthetic series (devices keep their e2e identity).
+	if _, err := pgConn.Exec(ctx, `DELETE FROM metrics WHERE device_id LIKE $1`, devID+"%"); err != nil {
+		die("baseline tidy metrics: %v", err)
+	}
+	if _, err := pgConn.Exec(ctx, `DELETE FROM baseline_anomalies WHERE device_id LIKE $1`, devID+"%"); err != nil {
+		die("baseline tidy anomalies: %v", err)
+	}
+	if _, err := pgConn.Exec(ctx, `DELETE FROM devices WHERE id LIKE $1`, devID+"%"); err != nil {
+		die("baseline tidy devices: %v", err)
+	}
 }

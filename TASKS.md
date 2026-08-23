@@ -55,10 +55,10 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 ### Progress at a glance
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
-- **W2 Monitoring+UX:** 2 / 5
+- **W2 Monitoring+UX:** 3 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 13 / 28
+- **Total:** 14 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -211,9 +211,9 @@ parallel. Within a track, respect `Depends on` ordering.
   known action is runnable from the palette.
 
 #### W2-3 — Dynamic baselining engine
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-22  ·  **Done:** —
+- **Started:** 2026-08-22  ·  **Done:** 2026-08-23 (live e2e: synthetic 44-day weekly-pattern series — spike flagged at the right hour with z=87.5, clean series quiet, anomaly persisted + served)
 - **Depends on:** W1-6
 - **Effort/Impact:** M / High
 - Per-metric rolling baseline by day-of-week/hour; MAD/robust z-score + EWMA

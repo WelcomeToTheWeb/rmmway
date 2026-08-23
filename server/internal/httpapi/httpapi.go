@@ -24,6 +24,7 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
+	"github.com/welcometotheweb/rmmway/server/internal/baseline"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
@@ -37,8 +38,9 @@ const (
 // Server owns the operator API state: credential material, the JWT secret,
 // and the data-layer handles it serves from.
 type Server struct {
-	devices store.DeviceStore
-	search  *store.Meili
+	devices  store.DeviceStore
+	search   *store.Meili
+	baseline *store.Baseline
 
 	jwtSecret     []byte
 	tokenLifetime time.Duration
@@ -67,6 +69,9 @@ type Config struct {
 	// Dispatch mints + pushes a command to a device's live stream (W2-2);
 	// nil disables /api/devices/{id}/commands.
 	Dispatch func(deviceID string, action any) (commandID string, err error)
+	// Baseline is the W2-3 dynamic baselining job; nil disables
+	// /api/baseline/* and /admin/baseline/*.
+	Baseline *store.Baseline
 }
 
 // New builds a Server. A nil Devices falls back to an in-memory store.
@@ -95,6 +100,7 @@ func New(cfg Config) *Server {
 	return &Server{
 		devices:       devices,
 		search:        cfg.Search,
+		baseline:      cfg.Baseline,
 		jwtSecret:     cfg.JWTSecret,
 		tokenLifetime: cfg.TokenLifetime,
 		adminUser:     cfg.AdminUser,
@@ -112,9 +118,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// W2-2: fuzzy device search (Cmd-K backing) + command dispatch, both auth-gated.
 	mux.HandleFunc("/api/search", s.requireOperator(s.handleSearch))
 	mux.HandleFunc("/api/devices/", s.requireOperator(s.dispatchCommand))
+	// W2-3: dynamic baselining — anomaly feed (auth-gated) + manual pass.
+	mux.HandleFunc("/api/baseline/anomalies", s.requireOperator(s.handleBaselineAnomalies))
+	mux.HandleFunc("/api/baseline/run", s.requireOperator(s.handleBaselineRun))
 	mux.HandleFunc("/admin/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("/admin/devices", s.deviceList) // open: installer / e2e / README
 	mux.HandleFunc("/admin/search", s.handleSearch)
+	mux.HandleFunc("/admin/baseline/anomalies", s.handleBaselineAnomalies) // open: e2e
+	mux.HandleFunc("/admin/baseline/run", s.handleBaselineRun)             // open: e2e
 }
 
 // ---- operator auth ----------------------------------------------------------
@@ -337,6 +348,71 @@ func buildCommandAction(in dispatchRequest) (any, error) {
 	default:
 		return nil, fmt.Errorf("unknown action %q (want run_script|reboot)", in.Action)
 	}
+}
+
+// ---- W2-3: dynamic baselining ----------------------------------------------
+
+// handleBaselineAnomalies serves the anomaly feed.
+//
+// GET /api/baseline/anomalies?limit=100
+//
+//	200 [{id, device_id, name, source, at, value, score, channel, ...}]
+//	503  baseline engine not wired
+func (s *Server) handleBaselineAnomalies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.baseline == nil {
+		http.Error(w, "baseline engine not configured", http.StatusServiceUnavailable)
+		return
+	}
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	rows, err := s.baseline.Recent(r.Context(), limit)
+	if err != nil {
+		http.Error(w, "baseline anomalies: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []store.StoredAnomaly{}
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+// handleBaselineRun forces one deterministic scoring pass (e2e / ops).
+//
+// POST /api/baseline/run
+//
+//	200 {anomalies: [...], series: N, runs: M}
+//	503  baseline engine not wired
+//	500  source error (e.g. DB down)
+func (s *Server) handleBaselineRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.baseline == nil {
+		http.Error(w, "baseline engine not configured", http.StatusServiceUnavailable)
+		return
+	}
+	anoms, err := s.baseline.RunNow(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if anoms == nil {
+		anoms = []baseline.Anomaly{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"anomalies": anoms,
+		"series":    len(s.baseline.Job.Series()),
+		"runs":      s.baseline.Job.RunCount(),
+	})
 }
 
 // handleBootstrap mints a one-time enroll code (W1-3 installer / e2e).
