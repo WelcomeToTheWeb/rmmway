@@ -55,10 +55,10 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 ### Progress at a glance
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
-- **W2 Monitoring+UX:** 4 / 5
+- **W2 Monitoring+UX:** 5 / 5
 - **W3/W4 Trust:**     0 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 15 / 28
+- **Total:** 16 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -235,16 +235,21 @@ parallel. Within a track, respect `Depends on` ordering.
   open-count badge, unit + live-Postgres + e2e proof.
 
 #### W2-5 — 🎯 MILESTONE: "monitored in 5 min" E2E demo
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-23  ·  **Done:** —
+- **Started:** 2026-08-23  ·  **Done:** 2026-08-23 (commit below; live e2e: real installer + systemd + real agent binary on a clean machine — bootstrap one-liner → device online in **1s**; test estate 12×5×45d with 25 injected faults → **precision 100%, recall 100% (0 FP / 0 FN)**; live fault on the real device's own series → 1 deduped alert, no storm, auto-resolve + manual ack/resolve)
 - **Depends on:** W1-1…W1-7, W2-1…W2-4
 - **Effort/Impact:** S / High
 - End-to-end: bootstrap agent → live metrics → baseline alerts → near-zero
   false positives. Time it.
 - **Definition of done:** on a clean machine, first monitored device in
-  **≤ 5 min**; alert precision documented on a test estate. **This gate
-  closes Block 1.**
+  **≤ 5 min**; alert precision documented on a test estate. ✅ `cmd/e2e/milestone`
+  (self-tearing-down, reproducible) — first monitored device in ~1s from the
+  bootstrap one-liner (gate ≤5m), alert precision on a 60-series/45-day estate
+  with exact ground truth: 100% precision, 100% recall, two engine paths
+  (in-process + live server pass) agreeing exactly; evidence + run notes in
+  [`MILESTONE-W2-5.md`](MILESTONE-W2-5.md). Also added `--grpc-addr` to the
+  installer (split-port HTTP/gRPC deployments). **Closes Block 1.**
 
 ---
 
