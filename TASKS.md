@@ -301,9 +301,9 @@ parallel. Within a track, respect `Depends on` ordering.
   place, same root, same server cert, uplink kept streaming.
 
 #### W3-3 — Per-action capability tokens
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-24  ·  **Done:** —
 - **Depends on:** W3-1
 - **Effort/Impact:** M / High
 - Time-boxed session/capability tokens; an agent can't act beyond its minted
