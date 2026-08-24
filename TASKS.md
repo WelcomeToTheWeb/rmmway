@@ -278,9 +278,9 @@ parallel. Within a track, respect `Depends on` ordering.
   agent leaf streamed live on :50052; random cert rejected).
 
 #### W3-2 — Short-lived cert rotation
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @eng2way
+- **Started:** 2026-08-24  ·  **Done:** —
 - **Depends on:** W3-1
 - **Effort/Impact:** M / High
 - Leaf certs ~1h, auto-rotate, no downtime.
