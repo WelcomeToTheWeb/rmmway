@@ -301,15 +301,25 @@ parallel. Within a track, respect `Depends on` ordering.
   place, same root, same server cert, uplink kept streaming.
 
 #### W3-3 — Per-action capability tokens
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-24  ·  **Done:** —
+- **Started:** 2026-08-24  ·  **Done:** 2026-08-24 ([a0831af](https://github.com/WelcomeToTheWeb/rmmway/commit/a0831af))
 - **Depends on:** W3-1
 - **Effort/Impact:** M / High
 - Time-boxed session/capability tokens; an agent can't act beyond its minted
   scope.
 - **Definition of done:** a command requiring a capability it lacks is refused
-  even with a valid mTLS channel.
+  even with a valid mTLS channel. ✅ in-process e2e (`server/cmd/e2e/caps`):
+  two devices on valid mTLS channels — misbound (cross-device), tokenless and
+  expired tokens all REFUSED without execution; in-scope command executes +
+  SUCCEEDED recorded; operator session without the capability gets 403. Real
+  systemd agent proves it live in the milestone e2e (step 4d: token verified
+  against the pinned org root, real script executed, marker on disk).
+  Tokens: ES256 JWT signed by the org root CA (no new key distribution),
+  bound to device + capability + command id, TTL `RMMWAY_CAP_TTL` (default
+  10m); agent verifies before acting, answers `CommandResult.REFUSED`
+  otherwise; unknown action → UNSUPPORTED; legacy plain channel stays
+  log-only.
 
 #### W3-4 — Sign all releases
 - **Status:** ⬜ pending
