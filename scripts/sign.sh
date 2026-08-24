@@ -51,7 +51,7 @@ echo "==> SHA256SUMS (root, covers all shipped artifacts)"
 {
   (cd agent/dist && sha256sum rmmway-agent-linux-amd64 rmmway-agent-linux-arm64 \
       rmmway-agent-darwin-amd64 rmmway-agent-darwin-arm64 \
-      rmmway-agent-windows-amd64.exe) | sed 's|^|agent/dist/|'
+      rmmway-agent-windows-amd64.exe) | awk '{print $1"  agent/dist/"$2}'
   sha256sum scripts/install.sh scripts/install.ps1
 } > SHA256SUMS
 cat SHA256SUMS

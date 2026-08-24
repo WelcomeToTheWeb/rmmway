@@ -41,21 +41,25 @@ jobs:
           chmod 600 keys/minisign.key
           scripts/sign.sh "${GITHUB_REF_NAME#v}"
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            agent/dist/rmmway-agent-*
-            agent/dist/*.minisig
-            scripts/install.sh
-            scripts/install.sh.minisig
-            scripts/install.ps1
-            scripts/install.ps1.minisig
-            SHA256SUMS
-            SHA256SUMS.minisig
+        # gh release (no softprops here: its post-upload asset-metadata PATCH
+        # is flaky — 404s that it treats as fatal). Idempotent: creating the
+        # release is skipped when it exists, and `upload` replaces assets by
+        # name, so re-cutting a tag is safe.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "RMMWay ${TAG}" \
+              --notes "Signed release (W3-4): agent binaries + installers + SHA256SUMS carry minisign signatures (minisign.pub ships alongside); the server image ghcr.io/welcometotheweb/rmmway:${TAG#v} is cosign/Sigstore-signed."
+          fi
+          gh release upload "$TAG" \
+            agent/dist/rmmway-agent-* \
+            agent/dist/*.minisig \
+            scripts/install.sh scripts/install.sh.minisig \
+            scripts/install.ps1 scripts/install.ps1.minisig \
+            SHA256SUMS SHA256SUMS.minisig \
             keys/minisign.pub
-          draft: false
-          prerelease: false
-          generate_release_notes: true
 
   server:
     name: Server image (cosign/Sigstore)
