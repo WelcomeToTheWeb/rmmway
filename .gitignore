@@ -22,3 +22,9 @@ frontend/.vite/
 # Build artifacts
 agent/bin/
 server/bin/
+SHA256SUMS
+SHA256SUMS.minisig
+*.minisig
+
+# W3-4 release signing — the secret key never goes in git; the public key does.
+keys/minisign.key

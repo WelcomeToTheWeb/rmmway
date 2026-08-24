@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.24.5"
+  GO_VERSION: "1.27"
 
 jobs:
   lint:
@@ -36,6 +36,12 @@ jobs:
         run: go vet -tags integration ./...
       - name: go vet (server)
         working-directory: server
+        run: go vet ./...
+      - name: gofmt (tools/signer)
+        working-directory: tools/signer
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet (tools/signer)
+        working-directory: tools/signer
         run: go vet ./...
       - name: buf lint
         uses: bufbuild/buf-setup-action@v1
@@ -75,6 +81,11 @@ jobs:
         run: go test -tags integration ./...
       - name: go test (server)
         working-directory: server
+        run: go test ./...
+      - name: go test (tools/signer)
+        # W3-4: keygen/sign/verify round-trip + interop with keys generated
+        # by the reference minisign(1) CLI.
+        working-directory: tools/signer
         run: go test ./...
 
   build:
@@ -153,6 +164,7 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
       - name: Build (and push on main)
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -162,3 +174,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # W3-4: sign every pushed server image with cosign/Sigstore (keyless,
+      # GitHub OIDC). Verify with: cosign verify ghcr.io/welcometotheweb/rmmway@<digest>
+      - name: Install cosign
+        if: github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@v3
+      - name: Sign image (keyless Sigstore)
+        if: github.ref == 'refs/heads/main'
+        run: cosign sign --yes "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"

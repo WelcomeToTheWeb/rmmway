@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# W3-4: sign all release artifacts with minisign.
+#
+# Signed artifacts (each gets a <file>.minisig next to it):
+#   - agent/dist/rmmway-agent-*        (the 5 static binaries)
+#   - scripts/install.sh, install.ps1  (the one-line installers)
+#   - SHA256SUMS                       (repo root; covers all of the above)
+#
+# Usage: scripts/sign.sh [version]
+#   version  release label embedded in each signature's comment
+#            (default: git describe)
+# Env:
+#   MINISIGN_KEY   secret key file (default keys/minisign.key)
+#   MINISIGN_PASS  key passphrase (or pass -pass to the signer directly)
+#
+# The signer itself is built from this repo (tools/signer), so CI has no
+# external minisign binary to download. Verification (anyone can do it):
+#   make verify-sigs
+# or directly:
+#   bin/rmmway-signer verify -p keys/minisign.pub <files...>
+# or with the reference minisign(1) CLI:
+#   minisign -Vm <file> -P <line 2 of keys/minisign.pub>
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)}"
+KEY="${MINISIGN_KEY:-keys/minisign.key}"
+
+[ -f "$KEY" ] || { echo "ERROR: no secret key at $KEY (set MINISIGN_KEY)" >&2; exit 1; }
+command -v go >/dev/null || { echo "ERROR: go not on PATH" >&2; exit 1; }
+KEY="$(cd "$(dirname "$KEY")" && pwd)/$(basename "$KEY")"
+
+# Build the signer once (bin/ is gitignored) and run it from the repo root,
+# so every path below is plain repo-relative.
+mkdir -p bin
+go -C tools/signer build -o "$PWD/bin/rmmway-signer" .
+SIGNER="$PWD/bin/rmmway-signer"
+
+AGENTS="agent/dist/rmmway-agent-linux-amd64
+agent/dist/rmmway-agent-linux-arm64
+agent/dist/rmmway-agent-darwin-amd64
+agent/dist/rmmway-agent-darwin-arm64
+agent/dist/rmmway-agent-windows-amd64.exe"
+
+# Every artifact must exist before we sign anything (fail fast, no partial state).
+for f in $AGENTS scripts/install.sh scripts/install.ps1; do
+  [ -f "$f" ] || { echo "ERROR: missing artifact $f (run: make agent)" >&2; exit 1; }
+done
+
+echo "==> SHA256SUMS (root, covers all shipped artifacts)"
+{
+  (cd agent/dist && sha256sum rmmway-agent-linux-amd64 rmmway-agent-linux-arm64 \
+      rmmway-agent-darwin-amd64 rmmway-agent-darwin-arm64 \
+      rmmway-agent-windows-amd64.exe) | sed 's|^|agent/dist/|'
+  sha256sum scripts/install.sh scripts/install.ps1
+} > SHA256SUMS
+cat SHA256SUMS
+
+echo "==> minisign: agent binaries"
+$SIGNER sign -k "$KEY" -c "rmmway release ${VERSION}" $AGENTS
+echo "==> minisign: installers + SHA256SUMS"
+$SIGNER sign -k "$KEY" -c "rmmway release ${VERSION}" \
+  scripts/install.sh scripts/install.ps1 SHA256SUMS
+
+echo "==> verify (public key, same pass a skeptic would take)"
+$SIGNER verify -p keys/minisign.pub \
+  $AGENTS scripts/install.sh scripts/install.ps1 SHA256SUMS
+
+echo "==> done: 8 artifacts signed + verified for ${VERSION}"

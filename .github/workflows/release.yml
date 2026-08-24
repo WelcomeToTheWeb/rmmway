@@ -1,5 +1,11 @@
-# W1-3: cut a GitHub release from a vX.Y.Z tag so the one-line installers
-# (scripts/install.sh / install.ps1) have a real artifact to fetch.
+# W1-3 + W3-4: cut a GitHub release from a vX.Y.Z tag so the one-line
+# installers (scripts/install.sh / install.ps1) have a real artifact to fetch.
+#
+# Every artifact is signed (W3-4):
+#   - agent binaries, installers and SHA256SUMS -> minisign (.minisig files
+#     alongside each release asset; verify with keys/minisign.pub, shipped
+#     in the release)
+#   - server Docker image -> cosign/Sigstore (keyless, GitHub OIDC) on GHCR
 name: Release
 
 on:
@@ -8,28 +14,72 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write # cosign keyless signing (Sigstore OIDC)
 
 jobs:
-  release:
-    name: Build + publish agent release
+  agent:
+    name: Agent binaries + installers (minisign)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24.5"
+          go-version: "1.27"
       - name: Cross-compile agent (static)
         run: make agent VERSION=${GITHUB_REF_NAME#v}
-      - name: Checksums
+      - name: Sign all artifacts (minisign)
+        env:
+          MINISIGN_PRIVKEY: ${{ secrets.MINISIGN_PRIVKEY }}
+          MINISIGN_PASS: ${{ secrets.MINISIGN_PASS }}
         run: |
-          cd agent/dist
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
+          # The secret key file lives in a repo secret; materialize it for
+          # the signer. sign.sh also builds SHA256SUMS and verifies every
+          # signature with the public key before we publish anything.
+          mkdir -p keys
+          printf '%s\n' "$MINISIGN_PRIVKEY" > keys/minisign.key
+          chmod 600 keys/minisign.key
+          scripts/sign.sh "${GITHUB_REF_NAME#v}"
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            agent/dist/*
+            agent/dist/rmmway-agent-*
+            agent/dist/*.minisig
+            scripts/install.sh
+            scripts/install.sh.minisig
+            scripts/install.ps1
+            scripts/install.ps1.minisig
+            SHA256SUMS
+            SHA256SUMS.minisig
+            keys/minisign.pub
           draft: false
           prerelease: false
           generate_release_notes: true
+
+  server:
+    name: Server image (cosign/Sigstore)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build + push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          push: true
+          tags: ghcr.io/welcometotheweb/rmmway:${GITHUB_REF_NAME#v}
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign image (keyless Sigstore)
+        # The signature is attached to the image digest in GHCR; anyone can
+        # verify with: cosign verify ghcr.io/welcometotheweb/rmmway:v<ver>
+        run: cosign sign --yes "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"

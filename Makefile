@@ -83,6 +83,18 @@ verify-agent: ## W1-1 DoD: confirm the built binaries are static (no shared libs
 	@echo "== version (runs on this host)"
 	@./agent/dist/rmmway-agent-linux-amd64 --version
 
+.PHONY: sign
+sign: ## W3-4: sign all release artifacts (minisign) + verify. Needs MINISIGN_PASS (or keys/minisign.key on disk)
+	@scripts/sign.sh $(VERSION)
+
+.PHONY: verify-sigs
+verify-sigs: ## W3-4: verify all signed artifacts against keys/minisign.pub
+	@scripts/verify-sigs.sh
+
+.PHONY: signer-test
+signer-test: ## Run the tools/signer unit tests (keygen/sign/verify + CLI-fixture interop)
+	go -C tools/signer test ./...
+
 ## ---- Protos ----------------------------------------------------------------
 
 .PHONY: proto

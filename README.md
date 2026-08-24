@@ -228,6 +228,49 @@ hour → it auto-resolves; spike again → a fresh alert; then ack/resolve via
 the auth-gated API (and assert `/api/alerts` is 401 without a token, 200
 with one).
 
+## Release signing (W3-4)
+
+Every release artifact is signed before it ships:
+
+| Artifact | Scheme | Where the signature lives |
+|---|---|---|
+| Agent binaries (5 static) | minisign (Ed25519, prehashed) | `<artifact>.minisig` next to each release asset |
+| Installers (`install.sh`, `install.ps1`) | minisign | `<installer>.minisig` release asset |
+| `SHA256SUMS` | minisign | `SHA256SUMS.minisig` release asset |
+| Server Docker image (GHCR) | cosign / Sigstore (keyless, GitHub OIDC) | attached to the image digest in GHCR |
+
+**Verify an agent release asset** (anyone, no trust in us required):
+
+```sh
+# download rmmway-agent-linux-amd64 + rmmway-agent-linux-amd64.minisig + minisign.pub
+# from a GitHub release, then:
+go -C tools/signer run . verify -p minisign.pub rmmway-agent-linux-amd64
+# — or with the reference minisign(1) CLI:
+minisign -Vm rmmway-agent-linux-amd64 -P <line 2 of minisign.pub>
+```
+
+**Verify the server image:**
+
+```sh
+cosign verify ghcr.io/welcometotheweb/rmmway:v0.4.0   # keyless (Sigstore TUF)
+```
+
+Key management:
+
+- `keys/minisign.pub` is committed and ships in every release. The secret
+  key never lives in git — in CI it's the `MINISIGN_PRIVKEY` repo secret
+  (passphrase in `MINISIGN_PASS`).
+- Local signing: `MINISIGN_PASS=<pwd> make sign` (signs + verifies
+  `agent/dist/*`, both installers, and `SHA256SUMS`). `make verify-sigs`
+  re-checks everything with the public key.
+- Rotating the minisign key: `go -C tools/signer run . keygen -dir keys
+  -pass <new-pwd> -force`, commit `keys/minisign.pub`, update the
+  `MINISIGN_PRIVKEY`/`MINISIGN_PASS` secrets, re-cut the release.
+- The signer is `tools/signer` — a thin CLI over
+  [go-minisign](https://github.com/jedisct1/go-minisign), so keys/signatures
+  interop with the reference `minisign(1)` CLI. W4-2 reuses the same
+  library in the agent itself (release self-verification before update).
+
 ## Conventions
 
 - Claims: `TASKS.md` is the coordination of record — claim before coding.
