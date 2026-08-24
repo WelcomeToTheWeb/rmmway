@@ -53,18 +53,34 @@ jobs:
             gh release create "$TAG" --title "RMMWay ${TAG}" \
               --notes "Signed release (W3-4): agent binaries + installers + SHA256SUMS carry minisign signatures (minisign.pub ships alongside); the server image ghcr.io/welcometotheweb/rmmway:${TAG#v} is cosign/Sigstore-signed."
           fi
-          gh release upload "$TAG" \
+          gh release upload "$TAG" --clobber \
             agent/dist/rmmway-agent-* \
             agent/dist/*.minisig \
             scripts/install.sh scripts/install.sh.minisig \
             scripts/install.ps1 scripts/install.ps1.minisig \
             SHA256SUMS SHA256SUMS.minisig \
             keys/minisign.pub
+          # Invariant: every shipped artifact has its signature present too.
+          EXPECTED='rmmway-agent-linux-amd64 rmmway-agent-linux-arm64 rmmway-agent-darwin-amd64 rmmway-agent-darwin-arm64 rmmway-agent-windows-amd64.exe install.sh install.ps1 SHA256SUMS'
+          ACTUAL="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          for a in $EXPECTED; do
+            for f in "$a" "$a.minisig"; do
+              echo "$ACTUAL" | grep -qx "$f" || { echo "missing release asset: $f"; exit 1; }
+            done
+          done
+          echo "$ACTUAL" | grep -qx "minisign.pub" || { echo "missing release asset: minisign.pub"; exit 1; }
+          echo "release asset inventory OK ($(echo "$ACTUAL" | wc -l) assets)"
 
   server:
     name: Server image (cosign/Sigstore)
     runs-on: ubuntu-latest
+    env:
+      # ${GITHUB_REF_NAME#v} only expands in shell steps; compute it once so
+      # it can also be used in action `with:` inputs (expressions only).
+      TAG: ${{ github.ref_name }}
     steps:
+      - name: Strip v-prefix from tag
+        run: echo "TAG=${TAG#v}" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
@@ -80,10 +96,18 @@ jobs:
           context: .
           file: server/Dockerfile
           push: true
-          tags: ghcr.io/welcometotheweb/rmmway:${GITHUB_REF_NAME#v}
+          tags: "ghcr.io/welcometotheweb/rmmway:${{ env.TAG }}"
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign image (keyless Sigstore)
         # The signature is attached to the image digest in GHCR; anyone can
-        # verify with: cosign verify ghcr.io/welcometotheweb/rmmway:v<ver>
+        # verify with: cosign verify --certificate-identity ... <image>
         run: cosign sign --yes "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"
+      - name: Verify signature (self-check)
+        # A skeptic's round-trip inside CI: the freshly signed image must
+        # verify against the Sigstore identity of THIS repository's Actions.
+        run: |
+          cosign verify \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"

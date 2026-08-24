@@ -1,0 +1,10 @@
+{
+  "notes": [
+    {
+      "key": "task:w3-4",
+      "content": "W3-4 (sign all releases) in progress at /root/projects/rmmway. Design: minisign (via new tools/signer Go module over github.com/jedisct1/go-minisign) for agent binaries + install.sh/ps1 + SHA256SUMS; cosign keyless (Sigstore OIDC) for GHCR server image. Keys: keys/minisign.pub committed (key id 019BF5A0CA5040DD), secret in GH secrets MINISIGN_PRIVKEY + MINISIGN_PASS; local passphrase at /tmp/rmmway-minisign-pass. Scripts: scripts/sign.sh, scripts/verify-sigs.sh; Makefile: sign, verify-sigs, signer-test. Commit 1: 6ca926f (main impl), commit 2: release-publisher fix (gh release instead of softprops — softprops asset-metadata PATCH 404s in this env and dropped an asset) + SHA256SUMS prefix fix. v0.4.0 tag deleted+re-pushed at 23:40 (runs 32790372669 release, 32790368641 CI). CI gofmt note: go1.24.5 runner gofmt flagged server/cmd/e2e/caps/main.go (pre-existing) but go1.27 doesn't — CI now uses GO_VERSION 1.27 and is green. Next: watch release run, download ALL assets + verify each signature & sha256sum -c, cosign verify ghcr image :0.4.0, then TASKS.md done note + final commit. Env quirks: raw github.com release asset download URLs 404 but `gh release download` works; go-minisign release assets unavailable (built from source instead); no docker locally (cosign verify works directly against registry).",
+      "createdAt": 1787614860367,
+      "updatedAt": 1787614860367
+    }
+  ]
+}

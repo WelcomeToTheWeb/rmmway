@@ -182,3 +182,10 @@ jobs:
       - name: Sign image (keyless Sigstore)
         if: github.ref == 'refs/heads/main'
         run: cosign sign --yes "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"
+      - name: Verify signature (self-check)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cosign verify \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"
