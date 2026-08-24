@@ -56,7 +56,7 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
-- **W3/W4 Trust:**     1 / 8
+- **W3/W4 Trust:**     2 / 8
 - **W5/W6 Automation:** 0 / 5
 - **Total:** 17 / 28
 
@@ -322,9 +322,9 @@ parallel. Within a track, respect `Depends on` ordering.
   log-only.
 
 #### W3-4 — Sign all releases
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi (re-claim; board showed pending)
+- **Started:** 2026-08-24  ·  **Done:** —
 - **Depends on:** W0-3
 - **Effort/Impact:** M / High
 - cosign/Sigstore for server; minisign for agent binaries + installers.
