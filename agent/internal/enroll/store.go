@@ -1,6 +1,8 @@
 package enroll
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +16,41 @@ type Identity struct {
 	JWT        string `json:"jwt"`
 	Hostname   string `json:"hostname"`
 	EnrolledAt int64  `json:"enrolled_at_unix_ms"`
+
+	// W3-1: the device's mTLS identity, minted by the server's org root at
+	// enroll and persisted here. From the first enroll onward the agent
+	// speaks to the server's mTLS gRPC port using these.
+	TLS *TLSIdentity `json:"tls,omitempty"`
+}
+
+// TLSIdentity is the PEM material the agent uses for the mTLS channel: its
+// leaf cert + key (presented to the server) and the org root CA (pinned, so
+// the agent verifies the server's own certificate too — genuinely mutual).
+type TLSIdentity struct {
+	LeafCertPEM string `json:"leaf_cert_pem"`
+	LeafKeyPEM  string `json:"leaf_key_pem"`
+	OrgRootPEM  string `json:"org_root_ca_pem"`
+}
+
+// Valid reports whether all three PEM fields are present.
+func (t *TLSIdentity) Valid() bool {
+	return t != nil && t.LeafCertPEM != "" && t.LeafKeyPEM != "" && t.OrgRootPEM != ""
+}
+
+// KeyPair loads the agent's leaf cert + key as a tls.Certificate (the client
+// identity presented on the mTLS handshake).
+func (t *TLSIdentity) KeyPair() (tls.Certificate, error) {
+	return tls.X509KeyPair([]byte(t.LeafCertPEM), []byte(t.LeafKeyPEM))
+}
+
+// RootCAs returns an x509 pool containing only the org root — the trust
+// anchor the agent uses to verify the server on the mTLS channel.
+func (t *TLSIdentity) RootCAs() (*x509.CertPool, error) {
+	p := x509.NewCertPool()
+	if !p.AppendCertsFromPEM([]byte(t.OrgRootPEM)) {
+		return nil, fmt.Errorf("agent: no cert in the org root PEM")
+	}
+	return p, nil
 }
 
 // Store persists the Identity to a single root-only file.

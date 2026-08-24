@@ -38,10 +38,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/welcometotheweb/rmmway/agent/internal/collectors"
 	"github.com/welcometotheweb/rmmway/agent/internal/enroll"
+	"github.com/welcometotheweb/rmmway/agent/internal/secure"
 	"github.com/welcometotheweb/rmmway/agent/internal/uplink"
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 )
@@ -54,6 +54,7 @@ var (
 )
 
 const defaultGRPCPort = "50051"
+const defaultGRPCMTLSPort = "50052" // W3-1: the mTLS agent channel
 
 func main() {
 	args := os.Args[1:]
@@ -117,7 +118,8 @@ func main() {
 type agentConfig struct {
 	Server         string
 	BootstrapToken string
-	GRPCAddr       string
+	GRPCAddr       string // plain (bootstrap) channel
+	GRPCMTLSAddr   string // W3-1: the mTLS channel (post-enroll)
 	IdentityPath   string
 }
 
@@ -129,6 +131,7 @@ func loadConfig(cfgPath string) agentConfig {
 		Server:         os.Getenv("RMMWAY_SERVER"),
 		BootstrapToken: os.Getenv("RMMWAY_BOOTSTRAP_TOKEN"),
 		GRPCAddr:       os.Getenv("RMMWAY_GRPC_ADDR"),
+		GRPCMTLSAddr:   os.Getenv("RMMWAY_GRPC_MTLS_ADDR"),
 		IdentityPath:   os.Getenv("RMMWAY_IDENTITY"),
 	}
 	if cfgPath != "" {
@@ -160,6 +163,10 @@ func loadConfig(cfgPath string) agentConfig {
 				if cfg.GRPCAddr == "" {
 					cfg.GRPCAddr = v
 				}
+			case "RMMWAY_GRPC_MTLS_ADDR":
+				if cfg.GRPCMTLSAddr == "" {
+					cfg.GRPCMTLSAddr = v
+				}
 			}
 		}
 	}
@@ -183,9 +190,9 @@ func configPath(args []string) string {
 	return ""
 }
 
-// grpcTarget resolves the gRPC endpoint: an explicit RMMWAY_GRPC_ADDR (host:port)
-// wins; otherwise derive the host from the server URL and default to port 50051.
-func grpcTarget(server, explicit string) string {
+// grpcTarget resolves a channel's gRPC endpoint: an explicit override wins;
+// otherwise derive the host from the server URL and use defaultPort.
+func grpcTarget(server, explicit, defaultPort string) string {
 	if explicit != "" {
 		return explicit
 	}
@@ -195,14 +202,25 @@ func grpcTarget(server, explicit string) string {
 	}
 	port := u.Port()
 	if port == "" {
-		port = defaultGRPCPort
+		port = defaultPort
 	}
 	return net.JoinHostPort(u.Hostname(), port)
 }
 
-// runCommand is the W1-3/W1-4 service entrypoint: connect, enroll on first
-// boot (reusing the persisted identity thereafter), then run the
-// authenticated heartbeat/metric uplink until signalled.
+// mtlsHost strips host:port down to the host (for the cert's ServerName).
+func mtlsHost(target string) string {
+	h, _, err := net.SplitHostPort(target)
+	if err != nil || h == "" {
+		return target
+	}
+	return h
+}
+
+// runCommand is the W1-3/W1-4/W3-1 service entrypoint: connect (plain, for
+// the bootstrap Enroll), enroll on first boot (reusing the persisted
+// identity thereafter), then — once the identity carries mTLS material —
+// switch to the mTLS channel and run the authenticated heartbeat/metric
+// uplink over it until signalled.
 func runCommand(args []string) {
 	cfg := loadConfig(configPath(args))
 	if cfg.Server == "" {
@@ -212,17 +230,18 @@ func runCommand(args []string) {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	target := grpcTarget(cfg.Server, cfg.GRPCAddr)
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 1. Bootstrap channel: plain transport (the agent has no mTLS material
+	// yet). Used for the one-time Enroll on first boot.
+	plainTarget := grpcTarget(cfg.Server, cfg.GRPCAddr, defaultGRPCPort)
+	plainConn, err := grpc.NewClient(plainTarget, grpc.WithTransportCredentials(secure.Insecure()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "run: dial %s: %v\n", target, err)
+		fmt.Fprintf(os.Stderr, "run: dial %s: %v\n", plainTarget, err)
 		os.Exit(1)
 	}
-	defer conn.Close()
-	client := agentv1.NewAgentServiceClient(conn)
+	plainClient := agentv1.NewAgentServiceClient(plainConn)
 
 	store := enroll.NewStore(cfg.IdentityPath)
-	agent := enroll.New(client, store, enroll.Gather(version), cfg.BootstrapToken,
+	agent := enroll.New(plainClient, store, enroll.Gather(version), cfg.BootstrapToken,
 		enroll.WithLogf(func(format string, a ...any) {
 			log.Info(fmt.Sprintf(format, a...))
 		}))
@@ -232,11 +251,44 @@ func runCommand(args []string) {
 
 	res, err := agent.EnsureEnrolled(ctx)
 	if err != nil {
+		plainConn.Close()
 		fmt.Fprintf(os.Stderr, "run: enroll: %v\n", err)
 		os.Exit(1)
 	}
 	devID, jwt := res.BearerMetadata()
 	log.Info("agent ready", "device", devID, "reused_persisted", !res.Enrolled)
+
+	// 2. Channel selection. With a persisted mTLS identity, the long-lived
+	// uplink runs on the mTLS channel (leaf presented, org root pinned);
+	// otherwise (server predates W3-1 / in-memory mode) it stays plain.
+	var client agentv1.AgentServiceClient
+	target := plainTarget
+	channel := "plain"
+	if res.Identity.TLS != nil && res.Identity.TLS.Valid() {
+		mtlsTarget := grpcTarget(cfg.Server, cfg.GRPCMTLSAddr, defaultGRPCMTLSPort)
+		creds, err := secure.New(res.Identity.TLS).TransportCredentials(mtlsHost(mtlsTarget))
+		if err != nil {
+			plainConn.Close()
+			fmt.Fprintf(os.Stderr, "run: mTLS credentials: %v\n", err)
+			os.Exit(1)
+		}
+		mtlsConn, err := grpc.NewClient(mtlsTarget, grpc.WithTransportCredentials(creds))
+		if err != nil {
+			plainConn.Close()
+			fmt.Fprintf(os.Stderr, "run: dial mTLS %s: %v\n", mtlsTarget, err)
+			os.Exit(1)
+		}
+		client = agentv1.NewAgentServiceClient(mtlsConn)
+		target, channel = mtlsTarget, "mTLS"
+	} else {
+		client = plainClient
+	}
+	// The bootstrap channel is only needed for Enroll; close it once the
+	// uplink is on its own channel (on the plain channel it IS the uplink
+	// connection, so keep it alive).
+	if channel != "plain" {
+		plainConn.Close()
+	}
 
 	coll := collectors.NewCollector()
 	u := uplink.New(client, devID, jwt, uplink.Config{
@@ -244,7 +296,7 @@ func runCommand(args []string) {
 		Logger:            log,
 	}, uplink.WithCollector(coll.Collect))
 
-	fmt.Printf("rmmway-agent %s: connected to %s as device %s; uplink running\n", version, target, devID)
+	fmt.Printf("rmmway-agent %s: connected to %s (%s) as device %s; uplink running\n", version, target, channel, devID)
 	if err := u.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "run: uplink exited: %v\n", err)
 		os.Exit(1)
@@ -270,6 +322,11 @@ func statusCommand(args []string) {
 	fmt.Printf("hostname: %s\n", id.Hostname)
 	fmt.Printf("enrolled: %s\n", time.UnixMilli(id.EnrolledAt).UTC().Format(time.RFC3339))
 	fmt.Printf("identity: %s\n", store.Path())
+	if id.TLS != nil && id.TLS.Valid() {
+		fmt.Printf("channel:  mTLS (leaf cert + org root persisted)\n")
+	} else {
+		fmt.Printf("channel:  plain gRPC (no mTLS identity yet)\n")
+	}
 	if cfg.Server != "" {
 		fmt.Printf("server:   %s\n", cfg.Server)
 	}

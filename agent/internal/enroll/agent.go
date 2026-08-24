@@ -97,6 +97,17 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*Result, error) {
 		Hostname:   a.facts.Hostname,
 		EnrolledAt: time.Now().UnixMilli(),
 	}
+	// W3-1: the server minted this device's mTLS identity (leaf cert + key,
+	// signed by the org root) in the same enroll response. Persist it so the
+	// agent switches to the mTLS channel from the next connection onward.
+	if resp.GetLeafCertPem() != "" && resp.GetLeafKeyPem() != "" && resp.GetOrgRootCaPem() != "" {
+		id.TLS = &TLSIdentity{
+			LeafCertPEM: resp.GetLeafCertPem(),
+			LeafKeyPEM:  resp.GetLeafKeyPem(),
+			OrgRootPEM:  resp.GetOrgRootCaPem(),
+		}
+		a.logf("mTLS identity issued by the org root (cert + key + root CA)")
+	}
 	if err := a.store.Save(id); err != nil {
 		// We got an identity but couldn't persist it. Return it so the agent
 		// can still run this session, but make the failure loud — the next

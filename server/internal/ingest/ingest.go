@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
+	"github.com/welcometotheweb/rmmway/server/internal/ca"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -33,6 +34,10 @@ type Config struct {
 	// Indexer (W1-7) fires a debounced Meilisearch re-index of a device
 	// on enroll and on stream open. Nil = indexing disabled (tests).
 	Indexer *store.IndexerHook
+	// OrgCA (W3-1) issues each device's mTLS leaf at enroll. Nil = the
+	// mTLS identity fields in EnrollResponse stay empty (pre-W3-1
+	// deployments / unit tests keep working on the plain listener).
+	OrgCA *ca.Manager
 }
 
 func (c *Config) withDefaults() {
@@ -308,12 +313,26 @@ func (s *Service) Enroll(ctx context.Context, req *agentv1.EnrollRequest) (*agen
 	}
 	// W1-7: the new device must be searchable right away.
 	s.cfg.Indexer.Touch(devID)
-	return &agentv1.EnrollResponse{
+	resp := &agentv1.EnrollResponse{
 		DeviceId:           devID,
 		Jwt:                tok,
 		HeartbeatIntervalS: s.cfg.DefaultHeartbeatIntS,
 		MetricIntervalS:    s.cfg.DefaultMetricIntS,
-	}, nil
+	}
+	// W3-1: mint the device's mTLS identity in the same round-trip — a leaf
+	// cert + key signed by the org root, plus the root itself so the agent
+	// pins it and verifies the server on the mTLS channel too. The agent
+	// persists all three and switches to the mTLS gRPC port from then on.
+	if s.cfg.OrgCA != nil {
+		leafCert, leafKey, rootCA, err := s.cfg.OrgCA.IssueDevice(ctx, devID, req.GetHostname())
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "issue mTLS leaf: %v", err)
+		}
+		resp.LeafCertPem = string(leafCert)
+		resp.LeafKeyPem = string(leafKey)
+		resp.OrgRootCaPem = string(rootCA)
+	}
+	return resp, nil
 }
 
 // Stream is the agent's long-lived uplink/downlink.

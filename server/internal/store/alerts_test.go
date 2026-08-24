@@ -168,8 +168,8 @@ func TestAlertsStoreLive(t *testing.T) {
 	t.Chdir("../../..")
 	if n, err := Migrate(ctx, db, "server/migrations"); err != nil {
 		t.Fatalf("migrate: %v", err)
-	} else if n != 3 {
-		t.Fatalf("expected 3 migrations applied, got %d", n)
+	} else if n != 4 {
+		t.Fatalf("expected 4 migrations applied, got %d", n)
 	}
 
 	var count int

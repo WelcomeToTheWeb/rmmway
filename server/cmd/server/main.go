@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,10 +17,12 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,11 +30,54 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
+	"github.com/welcometotheweb/rmmway/server/internal/ca"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
+// mtlsSANs derives the SAN names for the mTLS server cert from the listen
+// addresses: whatever hosts the server is reachable on. Agents typically
+// dial by the RMMWAY_SERVER hostname or by loopback, so we cover both the
+// host of each configured listener and the common local names.
+func mtlsSANs(listenAddrs ...string) []string {
+	seen := map[string]bool{}
+	sans := []string{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		sans = append(sans, s)
+	}
+	// Common local dial names, always.
+	add("localhost")
+	add("127.0.0.1")
+	for _, l := range listenAddrs {
+		// Strip a leading scheme if an http(s) URL was passed.
+		if i := strings.Index(l, "://"); i >= 0 {
+			l = l[i+3:]
+		}
+		// host:port -> host (a bare port / ":50051" means all interfaces).
+		host := l
+		if i := strings.LastIndex(l, ":"); i >= 0 {
+			if net.ParseIP(l[i+1:]) != nil {
+				host = l[:i]
+			}
+		}
+		if host == "" {
+			continue
+		}
+		add(host)
+		// ":50051" (all interfaces) is also dialable by the machine's own
+		// hostname — the caller's env is unknown here, so the "localhost"
+		// defaults above are the reliable fallback.
+	}
+	return sans
+}
+
+// env returns the first non-empty of the env var / default.
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -49,6 +96,13 @@ func baselineInterval() time.Duration {
 		log.Printf("WARN: bad RMMWAY_BASELINE_INTERVAL %q — using 5m", v)
 	}
 	return 5 * time.Minute
+}
+
+// sha256Short is a 12-hex-char fingerprint of a PEM blob (log-only: which
+// org root is active without dumping the certificate).
+func sha256Short(pemBytes []byte) string {
+	sum := sha256.Sum256(pemBytes)
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // alertAutoResolve is the number of consecutive clean passes before an
@@ -192,6 +246,10 @@ func main() {
 	version := env("RMMWAY_VERSION", "0.1.0")
 	httpAddr := env("RMMWAY_ADDR", ":8080")
 	grpcAddr := env("RMMWAY_GRPC_ADDR", ":50051")
+	// W3-1: the mTLS agent channel. A second gRPC listener that REQUIRES a
+	// client leaf cert issued by the org root. "off" disables it (dev / the
+	// pre-W3-1 bootstrap path keeps working on the plain listener).
+	grpcMTLSAddr := env("RMMWAY_GRPC_MTLS_ADDR", ":50052")
 	jwtSecret := []byte(env("RMMWAY_JWT_SECRET", "rmmway-dev-secret-change-me"))
 	// Operator (human/UI) credentials for the frontend login (W2-1).
 	// Single admin account; override both in prod.
@@ -227,6 +285,24 @@ func main() {
 		log.Println("migrate-only: done")
 		return
 	}
+
+	// ---- org PKI (W3-1 mTLS agent channel) ---------------------------
+	// One org root CA for the whole estate: generated + persisted at first
+	// boot, reused across restarts so enrolled devices' leaf certs stay
+	// valid. Enroll hands each device its leaf (signed by the root); the
+	// mTLS gRPC listener serves a root-signed server cert and requires the
+	// leaf. With Postgres the root lives in org_ca; in-memory mode keeps
+	// the whole flow self-contained (root lives for the process lifetime).
+	var caMgr *ca.Manager
+	if hasPG {
+		caMgr, err = ca.NewManager(ca.NewPostgresOrgStore(pgPool), 0)
+	} else {
+		caMgr, err = ca.NewManager(ca.NewMemoryOrgStore(), 0)
+	}
+	if err != nil {
+		log.Fatalf("org CA: %v", err)
+	}
+	log.Printf("org CA ready (cert sha256:%s)", sha256Short(caMgr.RootCertPEM()))
 
 	// ---- dynamic baselining (W2-3) + alerts (W2-4) -------------------
 	// Deterministic background job: scores every series' latest hourly
@@ -280,8 +356,8 @@ func main() {
 		log.Println("meilisearch: disabled (RMMWAY_MEILI_ENDPOINT empty/off)")
 	}
 
-	// ---- gRPC ingest (W1-5) -------------------------------------------
-	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer}, metricsSink, devicesStore)
+	// ---- gRPC ingest (W1-5) + mTLS agent channel (W3-1) ---------------
+	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr}, metricsSink, devicesStore)
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(svc.JWTInterceptor),
 	)
@@ -297,6 +373,34 @@ func main() {
 			log.Printf("grpc server: %v", err)
 		}
 	}()
+
+	// W3-1: second gRPC listener, mTLS. Same AgentService, but the TLS
+	// layer requires a client leaf signed by the org root before any RPC
+	// is processed (a random cert is rejected at the handshake), and the
+	// server presents a root-signed cert so the agent verifies us too.
+	// RMMWAY_GRPC_MTLS_ADDR=off disables it (plain-listener deployments).
+	var mtlsServer *grpc.Server
+	if grpcMTLSAddr != "off" && grpcMTLSAddr != "" {
+		mtlsCfg, err := caMgr.TLSConfig(mtlsSANs(grpcMTLSAddr, grpcAddr, httpAddr))
+		if err != nil {
+			log.Fatalf("grpc mTLS: %v", err)
+		}
+		mtlsServer = grpc.NewServer(
+			grpc.Creds(credentials.NewTLS(mtlsCfg)),
+			grpc.UnaryInterceptor(svc.JWTInterceptor),
+		)
+		agentv1.RegisterAgentServiceServer(mtlsServer, svc)
+		mtlsLis, err := net.Listen("tcp", grpcMTLSAddr)
+		if err != nil {
+			log.Fatalf("grpc mTLS listen %s: %v", grpcMTLSAddr, err)
+		}
+		go func() {
+			log.Printf("rmmway-server %s: gRPC mTLS agent channel on %s (client cert required)", version, grpcMTLSAddr)
+			if err := mtlsServer.Serve(mtlsLis); err != nil {
+				log.Printf("grpc mTLS server: %v", err)
+			}
+		}()
+	}
 
 	// ---- HTTP (health + operator API + admin JSON) ---------------------
 	mux := http.NewServeMux()
@@ -361,6 +465,9 @@ func main() {
 	log.Println("shutting down")
 	indexer.Stop()
 	grpcServer.GracefulStop()
+	if mtlsServer != nil {
+		mtlsServer.GracefulStop()
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(shutdownCtx)

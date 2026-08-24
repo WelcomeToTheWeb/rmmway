@@ -244,7 +244,7 @@ func main() {
 
 	// 6b. W2-3: dynamic baselining DoD — a synthetic metric with a known
 	// weekly pattern is flagged at the right time and quiet otherwise.
-	// Seed 44 days of hourly samples (dow offset + hour-of-day sine) plus
+	// Seed 44 days of hourly samples (dow offset + hour-of-day triangle) plus
 	// a final-hour spike for a fresh device, run one deterministic pass
 	// over the real hypertable via the live API, and assert the anomaly.
 	baselineE2E(httpAddr, pgDSN)
@@ -376,8 +376,18 @@ func baselineE2E(httpAddr, pgDSN string) {
 
 	// now floored to the hour so the spike lands in its own bucket.
 	now := time.Now().UTC().Truncate(time.Hour)
+	// Within-day shape: constant-slope triangle (peak 06:00, trough 18:00),
+	// not a sine — a sine's flat bottom at 18:00 makes the recovery ramp at
+	// 21–22 UTC cross the trend channel's z>=4 band (hour-of-day flake).
+	tri := func(hour float64) float64 {
+		s := math.Abs(hour - 6)
+		if 24-s < s {
+			s = 24 - s
+		}
+		return 15 * (1 - s/6)
+	}
 	weekly := func(at time.Time) float64 {
-		return 40 + float64(at.Weekday())*8 + 15*math.Sin(2*math.Pi*float64(at.Hour())/24)
+		return 40 + float64(at.Weekday())*8 + tri(float64(at.Hour()))
 	}
 	seed := `INSERT INTO metrics (device_id, name, source, value, labels, timestamp_ms, ts)
 		VALUES ($1, $2, '', $3::double precision, '{}', $4::bigint, to_timestamp($4::bigint / 1000.0)) ON CONFLICT DO NOTHING`
@@ -530,8 +540,18 @@ func alertE2E(httpAddr, pgDSN string) {
 	devID := "e2e-alert-" + time.Now().Format("20060102150405")
 	metric := "synth.alert_pattern"
 	now := time.Now().UTC().Truncate(time.Hour)
+	// Within-day shape: constant-slope triangle (peak 06:00, trough 18:00),
+	// not a sine — a sine's flat bottom at 18:00 makes the recovery ramp at
+	// 21–22 UTC cross the trend channel's z>=4 band (hour-of-day flake).
+	tri := func(hour float64) float64 {
+		s := math.Abs(hour - 6)
+		if 24-s < s {
+			s = 24 - s
+		}
+		return 15 * (1 - s/6)
+	}
 	weekly := func(at time.Time) float64 {
-		return 40 + float64(at.Weekday())*8 + 15*math.Sin(2*math.Pi*float64(at.Hour())/24)
+		return 40 + float64(at.Weekday())*8 + tri(float64(at.Hour()))
 	}
 
 	// Seed 44 days of pattern ending at the current hour (the spike is

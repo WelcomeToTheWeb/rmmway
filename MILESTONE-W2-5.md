@@ -24,6 +24,12 @@ agent's live collectors — not a simulated agent.
 4. **Live metrics (W1-2).** The agent streams its five real collector
    families; the device goes `online` in `/admin/devices`, lands in
    TimescaleDB, and is findable in Meilisearch by hostname.
+4b. **mTLS agent channel (W3-1, DoD on the wire).** The milestone dials the
+   mTLS gRPC port (`:50052`) directly: it streams with the **agent's own
+   persisted leaf** (read from `/etc/rmmway/agent-identity.json`) and
+   verifies a **random self-signed cert is rejected at the TLS handshake** —
+   before any RPC is processed. The agent itself (steps 3–4) is already on
+   that channel; its journal shows `connected to 127.0.0.1:50052 (mTLS)`.
 5. **Alert precision on a test estate.** A synthetic estate is seeded with
    **exact ground truth** and scored by the real engine (see below).
 6. **A live fault on the real device.** One of the agent's own series is
@@ -40,6 +46,7 @@ agent's live collectors — not a simulated agent.
   alert precision (test estate)       : 100.0%  (TP=25 FP=0 FN=0)
   alert recall (injected faults)      : 100.0%
   dedup: 1 open alert per faulted series; auto-resolve + manual ack/resolve OK
+  mTLS (W3-1): agent's own leaf streamed live on :50052; non-org leaf rejected at handshake
   real artifacts: installer + systemd service + agent binary + live collectors
 =======================================================
 ```
@@ -111,6 +118,15 @@ window, then:
 - **Clock.** The precision/live-fault windows are pinned to the current UTC
   hour; the harness waits if it would start within ~3 min of an hour boundary
   so the scored window is unambiguous.
+- **Seed shape (fixed 2026-08-23, W3-1).** The clean series' within-day
+  shape was originally a sine (`15·sin(2π·hour/24)`). Its flat bottom at
+  18:00 makes the 21–22 UTC recovery ramp cross the trend channel's `z >= 4`
+  band (measured 35 false positives at exactly z=4.19, every estate level),
+  so the precision DoD failed at 41.7% when the wall clock was at 21–22 UTC.
+  The seed now uses a **constant-slope triangle** (peak 06:00, trough 18:00,
+  15/6 per hour); the worst-case positive trend z at every hour, level, and
+  day-of-week is 2.70, comfortably under the z=4 flag, while a +35 spike
+  still scores z≈50–140. The same fix was applied to `cmd/e2e`.
 - **Repro.** The estate uses a fixed RNG seed, so the 25 faulted series and
   the 64,800-sample pattern are identical every run; only the "current hour"
   anchor moves with the wall clock.

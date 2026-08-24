@@ -56,9 +56,9 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
-- **W3/W4 Trust:**     0 / 8
+- **W3/W4 Trust:**     1 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 16 / 28
+- **Total:** 17 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -256,14 +256,26 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W3/W4 — Trust & Supply Chain
 
 #### W3-1 — mTLS agent channel
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-23  ·  **Done:** —
+- **Started:** 2026-08-23  ·  **Done:** 2026-08-23
 - **Depends on:** W0-2, W1-1
 - **Effort/Impact:** M / High
 - Org root CA + per-device leaf certs; agent↔server over mTLS.
 - **Definition of done:** agent connects only with a valid leaf cert from the
   org root; a random cert is rejected.
+- **Notes:** Org root CA (ECDSA P-256) in `server/internal/ca`, persisted via
+  migration `0004_org_ca.sql` (idempotent bootstrap-or-load). Enroll issues a
+  1y device leaf (SANs: device_id + hostname + agent IP) and returns
+  leaf+key+root in the response. Server runs a **second gRPC listener**
+  (`RMMWAY_GRPC_MTLS_ADDR`, default `:50052`) with
+  `RequireAndVerifyClientCert` against the org root — a non-org leaf is
+  rejected at the TLS handshake, before any RPC. Agent persists the issued
+  identity and switches its uplink 50051→50052 (plain channel stays
+  bootstrap-only); `RMMWAY_GRPC_MTLS_ADDR` override, installer
+  `--grpc-mtls-addr`. Proof: `agent/internal/secure` unit test (handshake
+  accept/reject), `cmd/mtlscheck` smoke, and milestone step 4b (real systemd
+  agent leaf streamed live on :50052; random cert rejected).
 
 #### W3-2 — Short-lived cert rotation
 - **Status:** ⬜ pending

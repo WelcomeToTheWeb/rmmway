@@ -38,6 +38,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,8 +58,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
+	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/baseline"
+	"github.com/welcometotheweb/rmmway/server/internal/ca"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -267,8 +275,12 @@ func main() {
 	// The dev server splits HTTP (:8080) and gRPC (:50051); the agent can't
 	// know the gRPC port from the --server URL, so hand it explicitly (the
 	// installer's --grpc-addr writes RMMWAY_GRPC_ADDR into the agent config).
+	// The W3-1 mTLS channel (:50052) is passed the same way.
 	if u, uerr := url.Parse(httpAddr); uerr == nil && u.Hostname() != "" {
-		installCmd.Args = append(installCmd.Args, "--grpc-addr", net.JoinHostPort(u.Hostname(), "50051"))
+		installCmd.Args = append(installCmd.Args,
+			"--grpc-addr", net.JoinHostPort(u.Hostname(), "50051"),
+			"--grpc-mtls-addr", net.JoinHostPort(u.Hostname(), "50052"),
+		)
 	}
 	installCmd.Env = env
 	// The "monitored in 5 min" clock starts here: at the moment the operator
@@ -374,6 +386,17 @@ func main() {
 	}
 	info("findable in Meilisearch by hostname %q", host)
 
+	// ---------------------------------------------------------------- 4b.
+	// W3-1 DoD, proven on the wire: the agent's own leaf (read back from the
+	// identity file the REAL installer/agent wrote) gets a live stream on the
+	// mTLS port; a cert NOT issued by the org root is rejected at the
+	// handshake, before any RPC is processed.
+	step("4b. mTLS channel DoD (real agent leaf accepted, random cert rejected)")
+	if err := verifyMTLS(httpAddr, pgConn); err != nil {
+		die("mTLS DoD: %v", err)
+	}
+	info("mTLS DoD: agent leaf verified on :50052; random (non-org) cert rejected at the handshake")
+
 	// ---------------------------------------------------------------- 5.
 	// The precision + live-fault windows are pinned to the current UTC hour;
 	// don't let the run straddle an hour boundary mid-measurement.
@@ -425,6 +448,7 @@ func main() {
 	fmt.Printf("  alert precision (test estate)       : %.1f%%  (TP=%d FP=%d FN=%d)\n", 100*est.Precision, est.TP, est.FP, est.FN)
 	fmt.Printf("  alert recall (injected faults)      : %.1f%%\n", 100*est.Recall)
 	fmt.Printf("  dedup: 1 open alert per faulted series; auto-resolve + manual ack/resolve OK\n")
+	fmt.Printf("  mTLS (W3-1): agent's own leaf streamed live on :50052; non-org leaf rejected at handshake\n")
 	fmt.Printf("  real artifacts: installer + systemd service + agent binary + live collectors\n")
 	fmt.Println("=======================================================")
 }
@@ -446,16 +470,15 @@ const estatePrefix = "estate-"
 // then compare the flagged set against ground truth.
 //
 // Ground truth is exact by construction. Every clean series follows a weekly
-// pattern (per-series level + day-of-week offset + hour-of-day sine) for 45
-// days, so each (dow, hour) slot is a tight (6-observation) cluster. A clean
-// current-hour sample sits at its slot's own level: seasonal robust z ~ 0
-// and the within-day drift is a few points against the MAD-scaled band
-// (max trend z observed on this shape is ~2, well under the z>=4 flag). The
-// weekly dow step cannot false-fire either: the trend channel is same-day
-// scoped in the engine, and the seasonal channel sees the dow step as the
-// normal pattern. A faulted series carries a +35 spike in the CURRENT hour
-// (the hour the engine scores) — far outside any slot's band (z is O(50),
-// matching W2-3's measured z~87 on the same shape).
+// pattern (per-series level + day-of-week offset + a constant-slope
+// within-day triangle) for 45 days, so each (dow, hour) slot is a tight
+// (6-observation) cluster. A clean current-hour sample sits at its slot's own
+// level: seasonal robust z = 0, and the triangle's constant slope keeps the
+// within-day trend z under 2.7 at every hour (the engine's z>=4 flag is never
+// crossed — a sine instead peaked at z≈10.2 at 21:00 UTC), so the estate is
+// hour-of-day-independent. A faulted series carries a +35 spike in the
+// CURRENT hour (the hour the engine scores) — far outside any slot's band
+// (z is O(50–140), matching W2-3's measured z~87 on the same shape).
 func estatePrecision(httpAddr, pgDSN string, pg *pgx.Conn) estateStats {
 	rng := rand.New(rand.NewSource(20260823)) // fixed seed: reproducible estate
 	const (
@@ -468,10 +491,43 @@ func estatePrecision(httpAddr, pgDSN string, pg *pgx.Conn) estateStats {
 	metricNames := []string{"synth.est_cpu", "synth.est_mem", "synth.est_disk", "synth.est_net", "synth.est_io"}
 
 	now := time.Now().UTC().Truncate(time.Hour)
+	// Within-day shape: a TRIANGLE (peak 06:00, trough 18:00, constant
+	// slope 15/6 per hour) — deliberately NOT a sine. The sine's flat
+	// bottom around 18:00 makes a small-MAD 4h window at 21–22 UTC, where
+	// the recovery ramp crosses the trend channel's z>=4 band (measured
+	// z≈4.19 on 2026-08-23 22:00 UTC — every clean series flagged). The
+	// constant-slope triangle keeps the worst trend z at 2.70 at EVERY
+	// hour, every level (30–70) and every dow offset, so the estate is
+	// hour-of-day-independent: the milestone passes regardless of when it
+	// runs. Seasonal behaviour is unchanged (tight 6-obs per-slot
+	// clusters; clean z=0, +35 spike z O(50–140)).
+	tri := func(hour float64) float64 {
+		s := math.Abs(hour - 6)
+		if 24-s < s {
+			s = 24 - s
+		}
+		return 15 * (1 - s/6)
+	}
 	weekly := func(seed, dow, hour float64) float64 {
-		return seed + dow*8 + 15*math.Sin(2*math.Pi*hour/24)
+		return seed + dow*8 + tri(hour)
 	}
 	ctx := context.Background()
+
+	// Idempotent re-seed: a prior run that failed before purgeEstate leaves
+	// estate rows behind, and the seed below is a plain INSERT — leftover
+	// rows would double the history and break the trend baseline (uniform
+	// false positives). Wipe the estate's data first so every run scores a
+	// clean 45-day window.
+	for _, q := range []string{
+		`DELETE FROM alerts WHERE device_id LIKE $1`,
+		`DELETE FROM baseline_anomalies WHERE device_id LIKE $1`,
+		`DELETE FROM metrics WHERE device_id LIKE $1`,
+		`DELETE FROM devices WHERE id LIKE $1`,
+	} {
+		if _, err := pg.Exec(ctx, q, estatePrefix+"%"); err != nil {
+			die("estate pre-seed purge: %v", err)
+		}
+	}
 
 	type series struct {
 		devID, metric string
@@ -850,6 +906,145 @@ type liveStats struct {
 	AutoResolved   bool
 }
 
+// ---- 4b. W3-1 mTLS DoD on the wire --------------------------------------------
+
+// identityFile is the persisted identity the real agent wrote (same path the
+// installer's config + agent default resolve to).
+const identityFile = "/etc/rmmway/agent-identity.json"
+
+type agentIdentity struct {
+	DeviceID string `json:"device_id"`
+	JWT      string `json:"jwt"`
+	TLS      *struct {
+		LeafCertPEM string `json:"leaf_cert_pem"`
+		LeafKeyPEM  string `json:"leaf_key_pem"`
+		OrgRootPEM  string `json:"org_root_ca_pem"`
+	} `json:"tls"`
+}
+
+// verifyMTLS proves the W3-1 DoD against the LIVE mTLS gRPC port:
+//
+//  1. read the demo agent's real persisted identity (leaf + key + org root)
+//     from /etc/rmmway/agent-identity.json — the file the installer/agent
+//     wrote during step 3/4, not something this harness minted;
+//  2. open a Stream over TLS presenting that leaf, trusting ONLY the org
+//     root (so the server's cert is verified too) — a valid leaf must get
+//     a live stream with the demo JWT;
+//  3. open a second connection presenting a leaf from a DIFFERENT CA (a
+//     "random" cert) — the handshake must fail before any RPC runs.
+func verifyMTLS(httpAddr string, pg *pgx.Conn) error {
+	u, err := url.Parse(httpAddr)
+	if err != nil {
+		return err
+	}
+	host := u.Hostname()
+	mtlsAddr := net.JoinHostPort(host, "50052")
+
+	// 1. the agent's own persisted mTLS material.
+	b, err := os.ReadFile(identityFile)
+	if err != nil {
+		return fmt.Errorf("read agent identity %s: %w", identityFile, err)
+	}
+	var id agentIdentity
+	if err := json.Unmarshal(b, &id); err != nil {
+		return fmt.Errorf("parse identity: %w", err)
+	}
+	if id.TLS == nil || id.TLS.LeafCertPEM == "" || id.TLS.LeafKeyPEM == "" || id.TLS.OrgRootPEM == "" {
+		return fmt.Errorf("identity has no mTLS material (leaf/key/root) — server predates W3-1?")
+	}
+	leafKP, err := tls.X509KeyPair([]byte(id.TLS.LeafCertPEM), []byte(id.TLS.LeafKeyPEM))
+	if err != nil {
+		return fmt.Errorf("agent leaf keypair: %w", err)
+	}
+	rootPool := x509.NewCertPool()
+	if !rootPool.AppendCertsFromPEM([]byte(id.TLS.OrgRootPEM)) {
+		return fmt.Errorf("no cert in the persisted org root PEM")
+	}
+	// Cross-check against the DB: the recorded leaf in device_certs must be
+	// the same one the agent is using (enroll issued it, not the harness).
+	var dbLeaf []byte
+	if err := pg.QueryRow(context.Background(),
+		`SELECT leaf_cert_pem FROM device_certs WHERE device_id=$1`, id.DeviceID).Scan(&dbLeaf); err != nil {
+		return fmt.Errorf("device_certs has no leaf for %s: %w", id.DeviceID, err)
+	}
+	if !bytes.Equal(dbLeaf, []byte(id.TLS.LeafCertPEM)) {
+		return fmt.Errorf("agent's leaf != the leaf the server recorded for it (enroll/identity mismatch)")
+	}
+
+	// 2. valid leaf -> live stream on the mTLS port (server cert verified
+	// against the pinned org root; client leaf presented).
+	creds := credentials.NewTLS(&tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{leafKP},
+		RootCAs:      rootPool,
+		ServerName:   host,
+	})
+	conn, err := grpc.NewClient(mtlsAddr, grpc.WithTransportCredentials(creds))
+	if err != nil {
+		return fmt.Errorf("dial mTLS %s: %w", mtlsAddr, err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	md := metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+id.JWT))
+	stream, err := agentv1.NewAgentServiceClient(conn).Stream(md)
+	if err != nil {
+		return fmt.Errorf("stream with the agent's real leaf: %w", err)
+	}
+	now := time.Now().UnixMilli()
+	if err := stream.Send(&agentv1.StreamRequest{
+		Payload: &agentv1.StreamRequest_Heartbeat{Heartbeat: &agentv1.Heartbeat{
+			TimestampMs: now, CpuPercent: 1.0, MemoryPercent: 1.0,
+		}},
+	}); err != nil {
+		return fmt.Errorf("heartbeat over mTLS: %w", err)
+	}
+	ack, err := stream.Recv()
+	if err != nil {
+		return fmt.Errorf("ack over mTLS: %w", err)
+	}
+	if ack.GetHeartbeatAck() == nil {
+		return fmt.Errorf("expected a heartbeat ack over mTLS, got %T", ack.GetPayload())
+	}
+	info("agent's persisted leaf (device %s) streamed a live heartbeat+ack over %s", id.DeviceID, mtlsAddr)
+
+	// 3. a cert from a DIFFERENT org root -> rejected at the TLS handshake.
+	rogue, err := ca.GenerateRoot()
+	if err != nil {
+		return fmt.Errorf("rogue root: %w", err)
+	}
+	rogueLeafCert, rogueLeafKey, err := rogue.IssueLeaf("dev-rogue", "rogue-host", time.Hour)
+	if err != nil {
+		return fmt.Errorf("rogue leaf: %w", err)
+	}
+	rogueKP, err := tls.X509KeyPair(rogueLeafCert, rogueLeafKey)
+	if err != nil {
+		return fmt.Errorf("rogue keypair: %w", err)
+	}
+	rogueConn, err := grpc.NewClient(mtlsAddr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{rogueKP},
+		RootCAs:      rootPool, // still trust OUR root for the server side
+		ServerName:   host,
+	})))
+	if err != nil {
+		return fmt.Errorf("dial rogue mTLS: %w", err)
+	}
+	defer rogueConn.Close()
+	rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer rcancel()
+	rmd := metadata.NewOutgoingContext(rctx, metadata.Pairs("authorization", "Bearer "+id.JWT))
+	if _, err := agentv1.NewAgentServiceClient(rogueConn).Stream(rmd); err == nil {
+		return fmt.Errorf("a NON-org-issued leaf was ACCEPTED on the mTLS port (the random-cert-rejected DoD failed)")
+	}
+	if st, ok := status.FromError(err); ok {
+		info("random cert rejected as expected (grpc %s: %s)", st.Code(), st.Message()[:min(len(st.Message()), 80)])
+	} else {
+		info("random cert rejected as expected (%v)", err)
+	}
+	return nil
+}
+
 // ---- 7. teardown --------------------------------------------------------------
 
 func teardown(ctx context.Context, pg *pgx.Conn, demoDevID string) {
@@ -865,6 +1060,7 @@ func teardown(ctx context.Context, pg *pgx.Conn, demoDevID string) {
 		`DELETE FROM alerts WHERE device_id=$1`,
 		`DELETE FROM baseline_anomalies WHERE device_id=$1`,
 		`DELETE FROM metrics WHERE device_id=$1`,
+		`DELETE FROM device_certs WHERE device_id=$1`,
 		`DELETE FROM devices WHERE id=$1`,
 	} {
 		if _, err := pg.Exec(ctx, q, demoDevID); err != nil {

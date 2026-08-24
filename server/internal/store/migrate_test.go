@@ -69,8 +69,8 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if n != 3 {
-		t.Fatalf("expected 3 migrations applied, got %d", n)
+	if n != 4 {
+		t.Fatalf("expected 4 migrations applied, got %d", n)
 	}
 
 	mustScan := func(query string, dst ...any) {
@@ -83,6 +83,12 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	mustScan(`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('devices','metrics')`, &count)
 	if count != 2 {
 		t.Fatalf("expected devices+metrics tables, got %d", count)
+	}
+	// W3-1: the org PKI tables (org_ca single-row root + per-device leaf
+	// record) must be created by 0004_org_ca.sql.
+	mustScan(`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('org_ca','device_certs')`, &count)
+	if count != 2 {
+		t.Fatalf("expected org_ca+device_certs tables, got %d", count)
 	}
 	mustScan(`SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_name='metrics'`, &count)
 	if count != 1 {
