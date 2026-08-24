@@ -37,6 +37,15 @@ service AgentService {
   // connection drops, the agent reconnects with exponential backoff and
   // replays spooled metrics (server-side dedup by (device_id, metric, ts)).
   rpc Stream(stream StreamRequest) returns (stream StreamResponse);
+
+  // RefreshLeaf (W3-2) re-issues the calling device's mTLS leaf while the
+  // OLD leaf is still valid: the agent calls it over the mTLS channel it
+  // already holds (presenting the current leaf + its agent JWT), the server
+  // signs a fresh short-lived leaf (RMMWAY_LEAF_TTL, default ~1h) and the
+  // agent swaps it in without dropping the uplink. This is what keeps leaf
+  // lifetimes short without a gap: rotation always happens well inside the
+  // previous cert's validity window.
+  rpc RefreshLeaf(RefreshLeafRequest) returns (RefreshLeafResponse);
 }
 
 // EnrollRequest proves a fresh agent's right to join the estate.
@@ -71,6 +80,31 @@ message EnrollResponse {
   string leaf_cert_pem = 5;    // the device's leaf cert, signed by the org root
   string leaf_key_pem = 6;     // the device's private key (PEM, never leaves the agent)
   string org_root_ca_pem = 7;  // the org root CA, pinned client-side
+}
+
+// RefreshLeafRequest (W3-2) asks the server to re-issue this device's leaf.
+// It is called from the mTLS channel the agent ALREADY holds (presenting the
+// current leaf + its agent JWT in metadata), so the old cert must still be
+// valid when it is sent — the rotation window is chosen well inside the
+// cert's validity. The request body carries only what the server needs to
+// re-issue with the same identity.
+message RefreshLeafRequest {
+  // The device's hostname (SAN for the new leaf, matching what enroll sent).
+  string hostname = 1;
+  // The not-after of the leaf the agent is CURRENTLY presenting (Unix ms).
+  // Lets the server prove the request came with an unexpired identity and
+  // lets the response report the rotation delta for logging/telemetry.
+  int64 current_leaf_expires_ms = 2;
+}
+
+// RefreshLeafResponse carries the fresh leaf; the org root is unchanged (the
+// agent already pins it from enroll).
+message RefreshLeafResponse {
+  string leaf_cert_pem = 1;  // the new leaf, signed by the same org root
+  string leaf_key_pem = 2;   // the new private key (PEM, never leaves the agent)
+  // The new leaf's not-after (Unix ms) — the agent's next rotation deadline
+  // is derived from this, not from its own clock.
+  int64 expires_ms = 3;
 }
 
 // StreamRequest is one uplink frame on Stream.

@@ -32,9 +32,11 @@ const (
 	orgCN = "RMMWay Org Root CA"
 	// rootTTL is how long a generated org root is valid (10y).
 	rootTTL = 10 * 365 * 24 * time.Hour
-	// leafTTL is the default lifetime of a device leaf (W3-2 rotates these;
-	// a generous default here keeps the W3-1 channel stable).
-	leafTTL = 24 * time.Hour
+	// leafTTL is the default lifetime of a device leaf. W3-2 makes leaves
+	// short-lived (~1h) and rotates them automatically (RefreshLeaf) well
+	// inside the window, so the default is the ~1h the task calls for.
+	// Overridable at boot via RMMWAY_LEAF_TTL (tests / long dev sessions).
+	leafTTL = 1 * time.Hour
 )
 
 // Root is the org root CA: a self-signed CA cert + the private key that signs

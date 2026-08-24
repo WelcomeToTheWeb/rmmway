@@ -227,6 +227,132 @@ func (x *EnrollResponse) GetOrgRootCaPem() string {
 	return ""
 }
 
+// RefreshLeafRequest (W3-2) asks the server to re-issue this device's leaf.
+// It is called from the mTLS channel the agent ALREADY holds (presenting the
+// current leaf + its agent JWT in metadata), so the old cert must still be
+// valid when it is sent — the rotation window is chosen well inside the
+// cert's validity. The request body carries only what the server needs to
+// re-issue with the same identity.
+type RefreshLeafRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The device's hostname (SAN for the new leaf, matching what enroll sent).
+	Hostname string `protobuf:"bytes,1,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	// The not-after of the leaf the agent is CURRENTLY presenting (Unix ms).
+	// Lets the server prove the request came with an unexpired identity and
+	// lets the response report the rotation delta for logging/telemetry.
+	CurrentLeafExpiresMs int64 `protobuf:"varint,2,opt,name=current_leaf_expires_ms,json=currentLeafExpiresMs,proto3" json:"current_leaf_expires_ms,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *RefreshLeafRequest) Reset() {
+	*x = RefreshLeafRequest{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RefreshLeafRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RefreshLeafRequest) ProtoMessage() {}
+
+func (x *RefreshLeafRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RefreshLeafRequest.ProtoReflect.Descriptor instead.
+func (*RefreshLeafRequest) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RefreshLeafRequest) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+func (x *RefreshLeafRequest) GetCurrentLeafExpiresMs() int64 {
+	if x != nil {
+		return x.CurrentLeafExpiresMs
+	}
+	return 0
+}
+
+// RefreshLeafResponse carries the fresh leaf; the org root is unchanged (the
+// agent already pins it from enroll).
+type RefreshLeafResponse struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	LeafCertPem string                 `protobuf:"bytes,1,opt,name=leaf_cert_pem,json=leafCertPem,proto3" json:"leaf_cert_pem,omitempty"` // the new leaf, signed by the same org root
+	LeafKeyPem  string                 `protobuf:"bytes,2,opt,name=leaf_key_pem,json=leafKeyPem,proto3" json:"leaf_key_pem,omitempty"`    // the new private key (PEM, never leaves the agent)
+	// The new leaf's not-after (Unix ms) — the agent's next rotation deadline
+	// is derived from this, not from its own clock.
+	ExpiresMs     int64 `protobuf:"varint,3,opt,name=expires_ms,json=expiresMs,proto3" json:"expires_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RefreshLeafResponse) Reset() {
+	*x = RefreshLeafResponse{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RefreshLeafResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RefreshLeafResponse) ProtoMessage() {}
+
+func (x *RefreshLeafResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RefreshLeafResponse.ProtoReflect.Descriptor instead.
+func (*RefreshLeafResponse) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RefreshLeafResponse) GetLeafCertPem() string {
+	if x != nil {
+		return x.LeafCertPem
+	}
+	return ""
+}
+
+func (x *RefreshLeafResponse) GetLeafKeyPem() string {
+	if x != nil {
+		return x.LeafKeyPem
+	}
+	return ""
+}
+
+func (x *RefreshLeafResponse) GetExpiresMs() int64 {
+	if x != nil {
+		return x.ExpiresMs
+	}
+	return 0
+}
+
 // StreamRequest is one uplink frame on Stream.
 type StreamRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -241,7 +367,7 @@ type StreamRequest struct {
 
 func (x *StreamRequest) Reset() {
 	*x = StreamRequest{}
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[2]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -253,7 +379,7 @@ func (x *StreamRequest) String() string {
 func (*StreamRequest) ProtoMessage() {}
 
 func (x *StreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[2]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -266,7 +392,7 @@ func (x *StreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamRequest.ProtoReflect.Descriptor instead.
 func (*StreamRequest) Descriptor() ([]byte, []int) {
-	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{2}
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *StreamRequest) GetPayload() isStreamRequest_Payload {
@@ -324,7 +450,7 @@ type StreamResponse struct {
 
 func (x *StreamResponse) Reset() {
 	*x = StreamResponse{}
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[3]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -336,7 +462,7 @@ func (x *StreamResponse) String() string {
 func (*StreamResponse) ProtoMessage() {}
 
 func (x *StreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[3]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -349,7 +475,7 @@ func (x *StreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamResponse.ProtoReflect.Descriptor instead.
 func (*StreamResponse) Descriptor() ([]byte, []int) {
-	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{3}
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *StreamResponse) GetPayload() isStreamResponse_Payload {
@@ -410,7 +536,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[4]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -422,7 +548,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[4]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -435,7 +561,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{4}
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Heartbeat) GetTimestampMs() int64 {
@@ -485,7 +611,7 @@ type HeartbeatAck struct {
 
 func (x *HeartbeatAck) Reset() {
 	*x = HeartbeatAck{}
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[5]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -497,7 +623,7 @@ func (x *HeartbeatAck) String() string {
 func (*HeartbeatAck) ProtoMessage() {}
 
 func (x *HeartbeatAck) ProtoReflect() protoreflect.Message {
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[5]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -510,7 +636,7 @@ func (x *HeartbeatAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatAck.ProtoReflect.Descriptor instead.
 func (*HeartbeatAck) Descriptor() ([]byte, []int) {
-	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{5}
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *HeartbeatAck) GetServerTimeMs() int64 {
@@ -556,7 +682,16 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\rleaf_cert_pem\x18\x05 \x01(\tR\vleafCertPem\x12 \n" +
 	"\fleaf_key_pem\x18\x06 \x01(\tR\n" +
 	"leafKeyPem\x12%\n" +
-	"\x0forg_root_ca_pem\x18\a \x01(\tR\forgRootCaPem\"\x90\x01\n" +
+	"\x0forg_root_ca_pem\x18\a \x01(\tR\forgRootCaPem\"g\n" +
+	"\x12RefreshLeafRequest\x12\x1a\n" +
+	"\bhostname\x18\x01 \x01(\tR\bhostname\x125\n" +
+	"\x17current_leaf_expires_ms\x18\x02 \x01(\x03R\x14currentLeafExpiresMs\"z\n" +
+	"\x13RefreshLeafResponse\x12\"\n" +
+	"\rleaf_cert_pem\x18\x01 \x01(\tR\vleafCertPem\x12 \n" +
+	"\fleaf_key_pem\x18\x02 \x01(\tR\n" +
+	"leafKeyPem\x12\x1d\n" +
+	"\n" +
+	"expires_ms\x18\x03 \x01(\x03R\texpiresMs\"\x90\x01\n" +
 	"\rStreamRequest\x12:\n" +
 	"\theartbeat\x18\x01 \x01(\v2\x1a.rmmway.agent.v1.HeartbeatH\x00R\theartbeat\x128\n" +
 	"\ametrics\x18\x02 \x01(\v2\x1c.rmmway.agent.v1.MetricBatchH\x00R\ametricsB\t\n" +
@@ -575,10 +710,11 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\fHeartbeatAck\x12$\n" +
 	"\x0eserver_time_ms\x18\x01 \x01(\x03R\fserverTimeMs\x120\n" +
 	"\x14heartbeat_interval_s\x18\x02 \x01(\x05R\x12heartbeatIntervalS\x12*\n" +
-	"\x11metric_interval_s\x18\x03 \x01(\x05R\x0fmetricIntervalS2\xa8\x01\n" +
+	"\x11metric_interval_s\x18\x03 \x01(\x05R\x0fmetricIntervalS2\x82\x02\n" +
 	"\fAgentService\x12I\n" +
 	"\x06Enroll\x12\x1e.rmmway.agent.v1.EnrollRequest\x1a\x1f.rmmway.agent.v1.EnrollResponse\x12M\n" +
-	"\x06Stream\x12\x1e.rmmway.agent.v1.StreamRequest\x1a\x1f.rmmway.agent.v1.StreamResponse(\x010\x01B=Z;github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1b\x06proto3"
+	"\x06Stream\x12\x1e.rmmway.agent.v1.StreamRequest\x1a\x1f.rmmway.agent.v1.StreamResponse(\x010\x01\x12X\n" +
+	"\vRefreshLeaf\x12#.rmmway.agent.v1.RefreshLeafRequest\x1a$.rmmway.agent.v1.RefreshLeafResponseB=Z;github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1b\x06proto3"
 
 var (
 	file_rmmway_agent_v1_agent_proto_rawDescOnce sync.Once
@@ -592,29 +728,33 @@ func file_rmmway_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_rmmway_agent_v1_agent_proto_rawDescData
 }
 
-var file_rmmway_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_rmmway_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_rmmway_agent_v1_agent_proto_goTypes = []any{
-	(*EnrollRequest)(nil),  // 0: rmmway.agent.v1.EnrollRequest
-	(*EnrollResponse)(nil), // 1: rmmway.agent.v1.EnrollResponse
-	(*StreamRequest)(nil),  // 2: rmmway.agent.v1.StreamRequest
-	(*StreamResponse)(nil), // 3: rmmway.agent.v1.StreamResponse
-	(*Heartbeat)(nil),      // 4: rmmway.agent.v1.Heartbeat
-	(*HeartbeatAck)(nil),   // 5: rmmway.agent.v1.HeartbeatAck
-	(*MetricBatch)(nil),    // 6: rmmway.agent.v1.MetricBatch
-	(*Command)(nil),        // 7: rmmway.agent.v1.Command
+	(*EnrollRequest)(nil),       // 0: rmmway.agent.v1.EnrollRequest
+	(*EnrollResponse)(nil),      // 1: rmmway.agent.v1.EnrollResponse
+	(*RefreshLeafRequest)(nil),  // 2: rmmway.agent.v1.RefreshLeafRequest
+	(*RefreshLeafResponse)(nil), // 3: rmmway.agent.v1.RefreshLeafResponse
+	(*StreamRequest)(nil),       // 4: rmmway.agent.v1.StreamRequest
+	(*StreamResponse)(nil),      // 5: rmmway.agent.v1.StreamResponse
+	(*Heartbeat)(nil),           // 6: rmmway.agent.v1.Heartbeat
+	(*HeartbeatAck)(nil),        // 7: rmmway.agent.v1.HeartbeatAck
+	(*MetricBatch)(nil),         // 8: rmmway.agent.v1.MetricBatch
+	(*Command)(nil),             // 9: rmmway.agent.v1.Command
 }
 var file_rmmway_agent_v1_agent_proto_depIdxs = []int32{
-	4, // 0: rmmway.agent.v1.StreamRequest.heartbeat:type_name -> rmmway.agent.v1.Heartbeat
-	6, // 1: rmmway.agent.v1.StreamRequest.metrics:type_name -> rmmway.agent.v1.MetricBatch
-	5, // 2: rmmway.agent.v1.StreamResponse.heartbeat_ack:type_name -> rmmway.agent.v1.HeartbeatAck
-	7, // 3: rmmway.agent.v1.StreamResponse.command:type_name -> rmmway.agent.v1.Command
-	6, // 4: rmmway.agent.v1.Heartbeat.metrics:type_name -> rmmway.agent.v1.MetricBatch
+	6, // 0: rmmway.agent.v1.StreamRequest.heartbeat:type_name -> rmmway.agent.v1.Heartbeat
+	8, // 1: rmmway.agent.v1.StreamRequest.metrics:type_name -> rmmway.agent.v1.MetricBatch
+	7, // 2: rmmway.agent.v1.StreamResponse.heartbeat_ack:type_name -> rmmway.agent.v1.HeartbeatAck
+	9, // 3: rmmway.agent.v1.StreamResponse.command:type_name -> rmmway.agent.v1.Command
+	8, // 4: rmmway.agent.v1.Heartbeat.metrics:type_name -> rmmway.agent.v1.MetricBatch
 	0, // 5: rmmway.agent.v1.AgentService.Enroll:input_type -> rmmway.agent.v1.EnrollRequest
-	2, // 6: rmmway.agent.v1.AgentService.Stream:input_type -> rmmway.agent.v1.StreamRequest
-	1, // 7: rmmway.agent.v1.AgentService.Enroll:output_type -> rmmway.agent.v1.EnrollResponse
-	3, // 8: rmmway.agent.v1.AgentService.Stream:output_type -> rmmway.agent.v1.StreamResponse
-	7, // [7:9] is the sub-list for method output_type
-	5, // [5:7] is the sub-list for method input_type
+	4, // 6: rmmway.agent.v1.AgentService.Stream:input_type -> rmmway.agent.v1.StreamRequest
+	2, // 7: rmmway.agent.v1.AgentService.RefreshLeaf:input_type -> rmmway.agent.v1.RefreshLeafRequest
+	1, // 8: rmmway.agent.v1.AgentService.Enroll:output_type -> rmmway.agent.v1.EnrollResponse
+	5, // 9: rmmway.agent.v1.AgentService.Stream:output_type -> rmmway.agent.v1.StreamResponse
+	3, // 10: rmmway.agent.v1.AgentService.RefreshLeaf:output_type -> rmmway.agent.v1.RefreshLeafResponse
+	8, // [8:11] is the sub-list for method output_type
+	5, // [5:8] is the sub-list for method input_type
 	5, // [5:5] is the sub-list for extension type_name
 	5, // [5:5] is the sub-list for extension extendee
 	0, // [0:5] is the sub-list for field type_name
@@ -627,11 +767,11 @@ func file_rmmway_agent_v1_agent_proto_init() {
 	}
 	file_rmmway_agent_v1_metrics_proto_init()
 	file_rmmway_agent_v1_commands_proto_init()
-	file_rmmway_agent_v1_agent_proto_msgTypes[2].OneofWrappers = []any{
+	file_rmmway_agent_v1_agent_proto_msgTypes[4].OneofWrappers = []any{
 		(*StreamRequest_Heartbeat)(nil),
 		(*StreamRequest_Metrics)(nil),
 	}
-	file_rmmway_agent_v1_agent_proto_msgTypes[3].OneofWrappers = []any{
+	file_rmmway_agent_v1_agent_proto_msgTypes[5].OneofWrappers = []any{
 		(*StreamResponse_HeartbeatAck)(nil),
 		(*StreamResponse_Command)(nil),
 	}
@@ -641,7 +781,7 @@ func file_rmmway_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rmmway_agent_v1_agent_proto_rawDesc), len(file_rmmway_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

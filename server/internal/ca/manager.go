@@ -3,8 +3,11 @@ package ca
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,6 +22,12 @@ type Manager struct {
 	mu     sync.Mutex
 	root   *Root
 	server *tls.Certificate // lazily built from a server cert issued by the root
+
+	// W3-2: the server cert is served through a GetCertificate hook that
+	// reads this atomic pointer, so it can be ROTATED in place (the listener
+	// is never restarted, no handshake in flight is disturbed).
+	currentServer atomic.Pointer[tls.Certificate]
+	sans          []string
 }
 
 // NewManager loads the persisted org root from store, generating + persisting
@@ -66,6 +75,15 @@ func (m *Manager) RootCertPEM() []byte {
 	return m.root.CertPEM()
 }
 
+// LeafTTL is the lifetime this manager issues leaves (and its own server
+// cert) for. W3-2 makes this the ~1h short-lived window by default
+// (overridable via RMMWAY_LEAF_TTL).
+func (m *Manager) LeafTTL() time.Duration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ttl
+}
+
 // IssueDevice signs a leaf for deviceID (hostname as a SAN) and records it.
 // It returns the leaf cert + key (PEM) plus the org root (PEM) so the enroll
 // response can hand the agent its full mTLS identity in one round-trip.
@@ -82,18 +100,70 @@ func (m *Manager) IssueDevice(ctx context.Context, deviceID, hostname string) (l
 	return leafCert, leafKey, m.RootCertPEM(), nil
 }
 
-// ServerCert returns a *tls.Certificate for the mTLS listener, signed by the
-// org root and carrying the given SAN names (hostnames / IPs). It is cached:
-// the same server cert is served for the process's lifetime (a restart mints
-// a fresh one — acceptable for W3-1; rotation is W3-2).
-func (m *Manager) ServerCert(names []string) (*tls.Certificate, error) {
+// RefreshLeaf (W3-2) re-issues deviceID's leaf — a fresh short-lived cert
+// signed by the same org root — and records it in the store. It returns the
+// new leaf cert + key (PEM) and the new cert's not-after, so the caller (the
+// RefreshLeaf RPC handler) can hand the agent its next rotation deadline.
+// The org root is NOT returned (the agent already pins it from enroll).
+func (m *Manager) RefreshLeaf(ctx context.Context, deviceID, hostname string) (leafCert, leafKey []byte, expiresAt time.Time, err error) {
 	m.mu.Lock()
-	if m.server != nil {
-		defer m.mu.Unlock()
-		return m.server, nil
+	ttl := m.ttl
+	m.mu.Unlock()
+	leafCert, leafKey, err = m.root.IssueLeaf(deviceID, hostname, ttl)
+	if err != nil {
+		return nil, nil, time.Time{}, err
 	}
+	if err := m.store.SaveLeaf(ctx, deviceID, leafCert, leafKey); err != nil {
+		return nil, nil, time.Time{}, fmt.Errorf("ca: record refreshed leaf: %w", err)
+	}
+	cert, err := ParseLeafPEM(leafCert)
+	if err != nil {
+		return nil, nil, time.Time{}, fmt.Errorf("ca: parse refreshed leaf: %w", err)
+	}
+	return leafCert, leafKey, cert.NotAfter, nil
+}
+
+// LeafNotAfter parses a leaf cert PEM (as issued by this org root) and
+// returns its not-after. Agents use this to seed their first rotation
+// deadline from a persisted cert (a cert minted before W3-2, e.g. a 24h W3-1
+// leaf, still rotates on its own schedule).
+func LeafNotAfter(leafCertPEM []byte) (time.Time, error) {
+	c, err := ParseLeafPEM(leafCertPEM)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return c.NotAfter, nil
+}
+
+// ParseLeafPEM decodes + parses a single PEM-encoded certificate.
+func ParseLeafPEM(leafCertPEM []byte) (*x509.Certificate, error) {
+	cb, _ := pem.Decode(leafCertPEM)
+	if cb == nil {
+		return nil, fmt.Errorf("ca: no PEM block in leaf cert")
+	}
+	return x509.ParseCertificate(cb.Bytes)
+}
+
+// ServerCertNow returns the server cert to serve RIGHT NOW, re-issuing it
+// when it is (a) not yet minted, or (b) within the last ~20% of its
+// validity window (W3-2 rotation: the fresh cert is published atomically to
+// the GetCertificate hook, so the mTLS listener keeps serving without a
+// restart and in-flight handshakes are undisturbed).
+func (m *Manager) ServerCertNow(names []string) (*tls.Certificate, error) {
+	m.mu.Lock()
 	defer m.mu.Unlock()
-	certPEM, keyPEM, err := m.root.IssueServerCert(names, m.ttl)
+	ttl := m.ttl
+	rot := rotateThreshold(ttl)
+	if sc := m.currentServer.Load(); sc != nil {
+		// Reuse the current cert unless it is inside its rotation window.
+		if sc.Leaf != nil && time.Until(sc.Leaf.NotAfter) > rot {
+			return sc, nil
+		}
+	}
+	if m.sans == nil {
+		m.sans = names
+	}
+	certPEM, keyPEM, err := m.root.IssueServerCert(m.sans, ttl)
 	if err != nil {
 		return nil, err
 	}
@@ -101,21 +171,53 @@ func (m *Manager) ServerCert(names []string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ca: server keypair: %w", err)
 	}
-	m.server = &sc
-	return m.server, nil
+	cert := &sc
+	m.currentServer.Store(cert)
+	m.server = cert // back-compat cache (ServerCert callers)
+	return cert, nil
+}
+
+// ServerCert is the W3-1 API: return a *tls.Certificate for the mTLS
+// listener, signed by the org root and carrying the given SAN names. It
+// delegates to ServerCertNow, which rotates it in place as it nears expiry
+// (W3-2).
+func (m *Manager) ServerCert(names []string) (*tls.Certificate, error) {
+	return m.ServerCertNow(names)
+}
+
+// rotateThreshold is how long before a cert's not-after rotation should
+// happen: the smaller of ~20% of the cert's lifetime and 1h, so a 1h leaf
+// rotates ~12m before expiry and a short test cert rotates promptly too.
+func rotateThreshold(ttl time.Duration) time.Duration {
+	frac := ttl / 5
+	if frac <= 0 || ttl < time.Minute {
+		// Tiny TTLs (tests) rotate as soon as they are due.
+		return 0
+	}
+	if frac > time.Hour {
+		frac = time.Hour
+	}
+	return frac
 }
 
 // TLSConfig builds the tls.Config for the mTLS gRPC listener: it serves the
-// server cert and requires a client cert signed by the org root.
+// (rotating, via GetCertificate) server cert and requires a client cert
+// signed by the org root.
 func (m *Manager) TLSConfig(names []string) (*tls.Config, error) {
-	sc, err := m.ServerCert(names)
-	if err != nil {
+	// Mint the first server cert so the hook never returns a nil cert.
+	if _, err := m.ServerCertNow(names); err != nil {
 		return nil, err
 	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{*sc},
-		ClientCAs:    m.root.CertPool(),
-		ClientAuth:   tls.RequireAndVerifyClientCert,
+		MinVersion: tls.VersionTLS12,
+		// Every handshake goes through ServerCertNow, which re-issues the
+		// server cert in place once it enters its rotation window (W3-2:
+		// no listener restart, in-flight handshakes undisturbed). The check
+		// is a mutex + time comparison — cheap enough per handshake.
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return m.ServerCertNow(names)
+		},
+		ClientCAs:  m.root.CertPool(),
+		ClientAuth: tls.RequireAndVerifyClientCert,
 	}, nil
 }

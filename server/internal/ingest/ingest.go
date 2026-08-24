@@ -335,6 +335,35 @@ func (s *Service) Enroll(ctx context.Context, req *agentv1.EnrollRequest) (*agen
 	return resp, nil
 }
 
+// RefreshLeaf (W3-2) re-issues the calling device's mTLS leaf — a fresh
+// short-lived cert signed by the same org root — so the agent can swap it in
+// without dropping its uplink. The caller's identity comes from the JWT
+// interceptor (the device id) plus the mTLS handshake (the agent is only
+// here if its CURRENT leaf is valid — that is the whole point: rotation
+// happens while the old cert still works). If the server has no org CA
+// (pre-W3-1 / plain-listener deployments) the RPC is not implemented.
+func (s *Service) RefreshLeaf(ctx context.Context, req *agentv1.RefreshLeafRequest) (*agentv1.RefreshLeafResponse, error) {
+	if s.cfg.OrgCA == nil {
+		return nil, status.Error(codes.Unimplemented, "org CA not configured (mTLS channel disabled)")
+	}
+	devID, ok := DeviceIDFromContext(ctx)
+	if !ok || devID == "" {
+		return nil, status.Error(codes.Unauthenticated, "no device id in context")
+	}
+	if ok, _ := s.devices.Contains(ctx, devID); !ok {
+		return nil, status.Error(codes.Unauthenticated, "unknown device")
+	}
+	leafCert, leafKey, expiresAt, err := s.cfg.OrgCA.RefreshLeaf(ctx, devID, req.GetHostname())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "refresh leaf: %v", err)
+	}
+	return &agentv1.RefreshLeafResponse{
+		LeafCertPem: string(leafCert),
+		LeafKeyPem:  string(leafKey),
+		ExpiresMs:   expiresAt.UnixMilli(),
+	}, nil
+}
+
 // Stream is the agent's long-lived uplink/downlink.
 func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 	tok, err := bearerFromMD(stream.Context())

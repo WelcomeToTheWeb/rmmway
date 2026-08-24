@@ -278,14 +278,27 @@ parallel. Within a track, respect `Depends on` ordering.
   agent leaf streamed live on :50052; random cert rejected).
 
 #### W3-2 — Short-lived cert rotation
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @eng2way
-- **Started:** 2026-08-24  ·  **Done:** —
+- **Started:** 2026-08-24  ·  **Done:** 2026-08-24
 - **Depends on:** W3-1
 - **Effort/Impact:** M / High
 - Leaf certs ~1h, auto-rotate, no downtime.
 - **Definition of done:** certs renew automatically across an hour boundary
   without dropping the agent connection.
+- Proof: leaves default to ~1h (`RMMWAY_LEAF_TTL`); the agent's `rotate`
+  loop renews via the new `RefreshLeaf` gRPC RPC over the mTLS channel it
+  already holds (auth-gated, JWT + org-verified leaf), then atomically swaps
+  the fresh pair into the persisted identity — `secure` reads the leaf at
+  each handshake, so the next connect presents the new cert. The server's
+  own mTLS cert also rotates in place via `GetCertificate`. The server cert
+  stays the same listener across rotation (no restart). Unit tests: `ca`
+  (RefreshLeaf under same root, in-place server cert), `ingest` (auth-gated
+  fresh-leaf RPC), `agent/rotate` (threshold, immediate refresh, retry
+  after failure, reject incomplete), `agent/secure` (swapped leaf presented
+  on next handshake). Live proof: milestone step 4c (`RMMWAY_ROTATE_AFTER`
+  e2e knob) — real systemd agent's leaf rotated `...1299 -> ...2532` in
+  place, same root, same server cert, uplink kept streaming.
 
 #### W3-3 — Per-action capability tokens
 - **Status:** ⬜ pending

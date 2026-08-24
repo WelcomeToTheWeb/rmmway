@@ -48,12 +48,28 @@ func (c *Credentials) Identity() TLSIdentity { return c.identity }
 // certificate against the pinned org root. serverName pins the hostname used
 // for verification — it must match a SAN on the server's certificate (empty
 // falls back to the dial target's host).
+//
+// W3-2: the client leaf is read through GetClientCertificate at EACH
+// handshake, so the rotator's in-place leaf swap (TLSIdentity.SwapLeaf) is
+// picked up automatically on the next connection — no channel rebuild, no
+// downtime. In-flight connections keep the cert they negotiated.
 func (c *Credentials) TransportCredentials(serverName string) (credentials.TransportCredentials, error) {
+	cfg, err := c.TLSConfig(serverName)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(cfg), nil
+}
+
+// TLSConfig returns the underlying *tls.Config for the mTLS channel. It is
+// exposed (beyond TransportCredentials) so callers and tests can drive the
+// real handshake semantics — in particular to observe that GetClientCertificate
+// re-reads the leaf on every handshake (W3-2 rotation).
+func (c *Credentials) TLSConfig(serverName string) (*tls.Config, error) {
 	if c.identity == nil || !c.identity.Valid() {
 		return nil, fmt.Errorf("secure: incomplete mTLS identity (need leaf cert, leaf key, and org root)")
 	}
-	kp, err := c.identity.KeyPair()
-	if err != nil {
+	if _, err := c.identity.KeyPair(); err != nil {
 		return nil, fmt.Errorf("secure: load leaf keypair: %w", err)
 	}
 	roots, err := c.identity.RootCAs()
@@ -61,14 +77,22 @@ func (c *Credentials) TransportCredentials(serverName string) (credentials.Trans
 		return nil, fmt.Errorf("secure: load org root: %w", err)
 	}
 	cfg := &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{kp},
-		RootCAs:      roots,
+		MinVersion: tls.VersionTLS12,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			// Re-read on every handshake: the rotator may have swapped the
+			// leaf since the channel was built.
+			kp, err := c.identity.KeyPair()
+			if err != nil {
+				return nil, err
+			}
+			return &kp, nil
+		},
+		RootCAs: roots,
 	}
 	if serverName != "" {
 		cfg.ServerName = serverName
 	}
-	return credentials.NewTLS(cfg), nil
+	return cfg, nil
 }
 
 // Insecure is the plain transport used only for the initial bootstrap Enroll

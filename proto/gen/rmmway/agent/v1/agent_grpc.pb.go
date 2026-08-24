@@ -37,8 +37,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_Enroll_FullMethodName = "/rmmway.agent.v1.AgentService/Enroll"
-	AgentService_Stream_FullMethodName = "/rmmway.agent.v1.AgentService/Stream"
+	AgentService_Enroll_FullMethodName      = "/rmmway.agent.v1.AgentService/Enroll"
+	AgentService_Stream_FullMethodName      = "/rmmway.agent.v1.AgentService/Stream"
+	AgentService_RefreshLeaf_FullMethodName = "/rmmway.agent.v1.AgentService/RefreshLeaf"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -56,6 +57,14 @@ type AgentServiceClient interface {
 	// connection drops, the agent reconnects with exponential backoff and
 	// replays spooled metrics (server-side dedup by (device_id, metric, ts)).
 	Stream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamRequest, StreamResponse], error)
+	// RefreshLeaf (W3-2) re-issues the calling device's mTLS leaf while the
+	// OLD leaf is still valid: the agent calls it over the mTLS channel it
+	// already holds (presenting the current leaf + its agent JWT), the server
+	// signs a fresh short-lived leaf (RMMWAY_LEAF_TTL, default ~1h) and the
+	// agent swaps it in without dropping the uplink. This is what keeps leaf
+	// lifetimes short without a gap: rotation always happens well inside the
+	// previous cert's validity window.
+	RefreshLeaf(ctx context.Context, in *RefreshLeafRequest, opts ...grpc.CallOption) (*RefreshLeafResponse, error)
 }
 
 type agentServiceClient struct {
@@ -89,6 +98,16 @@ func (c *agentServiceClient) Stream(ctx context.Context, opts ...grpc.CallOption
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_StreamClient = grpc.BidiStreamingClient[StreamRequest, StreamResponse]
 
+func (c *agentServiceClient) RefreshLeaf(ctx context.Context, in *RefreshLeafRequest, opts ...grpc.CallOption) (*RefreshLeafResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RefreshLeafResponse)
+	err := c.cc.Invoke(ctx, AgentService_RefreshLeaf_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -104,6 +123,14 @@ type AgentServiceServer interface {
 	// connection drops, the agent reconnects with exponential backoff and
 	// replays spooled metrics (server-side dedup by (device_id, metric, ts)).
 	Stream(grpc.BidiStreamingServer[StreamRequest, StreamResponse]) error
+	// RefreshLeaf (W3-2) re-issues the calling device's mTLS leaf while the
+	// OLD leaf is still valid: the agent calls it over the mTLS channel it
+	// already holds (presenting the current leaf + its agent JWT), the server
+	// signs a fresh short-lived leaf (RMMWAY_LEAF_TTL, default ~1h) and the
+	// agent swaps it in without dropping the uplink. This is what keeps leaf
+	// lifetimes short without a gap: rotation always happens well inside the
+	// previous cert's validity window.
+	RefreshLeaf(context.Context, *RefreshLeafRequest) (*RefreshLeafResponse, error)
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -119,6 +146,9 @@ func (UnimplementedAgentServiceServer) Enroll(context.Context, *EnrollRequest) (
 }
 func (UnimplementedAgentServiceServer) Stream(grpc.BidiStreamingServer[StreamRequest, StreamResponse]) error {
 	return status.Error(codes.Unimplemented, "method Stream not implemented")
+}
+func (UnimplementedAgentServiceServer) RefreshLeaf(context.Context, *RefreshLeafRequest) (*RefreshLeafResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RefreshLeaf not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -166,6 +196,24 @@ func _AgentService_Stream_Handler(srv interface{}, stream grpc.ServerStream) err
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type AgentService_StreamServer = grpc.BidiStreamingServer[StreamRequest, StreamResponse]
 
+func _AgentService_RefreshLeaf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RefreshLeafRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).RefreshLeaf(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_RefreshLeaf_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).RefreshLeaf(ctx, req.(*RefreshLeafRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -176,6 +224,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Enroll",
 			Handler:    _AgentService_Enroll_Handler,
+		},
+		{
+			MethodName: "RefreshLeaf",
+			Handler:    _AgentService_RefreshLeaf_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

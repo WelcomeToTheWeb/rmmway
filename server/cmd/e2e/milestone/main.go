@@ -41,6 +41,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"math"
@@ -209,8 +210,27 @@ func main() {
 		die("installer not found at %s: %v", install, err)
 	}
 	agentBin := filepath.Join(repoRoot, "agent/dist/rmmway-agent-linux-amd64")
-	if _, err := os.Stat(agentBin); err != nil {
+	agentBinInfo, err := os.Stat(agentBin)
+	if err != nil {
 		die("agent binary missing (run `make agent` first): %v", err)
+	}
+	// A STALE dist binary silently downgrades the demo (e.g. running a
+	// pre-W3-2 agent on a W3-2 server): fail fast instead of debugging a
+	// "missing feature" that's really a missing rebuild.
+	newest, newestM := agentBin, agentBinInfo.ModTime()
+	for _, f := range []string{filepath.Join(repoRoot, "agent/go.mod"),
+		filepath.Join(repoRoot, "agent/cmd/agent/main.go"),
+		filepath.Join(repoRoot, "agent/internal/rotate/rotate.go")} {
+		fi, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+		if fi.ModTime().After(newestM) {
+			newest, newestM = f, fi.ModTime()
+		}
+	}
+	if newest != agentBin {
+		die("agent dist binary is older than %s — run `make agent` and rerun", filepath.Base(newest))
 	}
 	verOut, err := exec.Command(agentBin, "--version").CombinedOutput()
 	if err != nil {
@@ -397,6 +417,16 @@ func main() {
 	}
 	info("mTLS DoD: agent leaf verified on :50052; random (non-org) cert rejected at the handshake")
 
+	// ---------------------------------------------------------------- 4c.
+	// W3-2 DoD, proven on the wire: the agent's short-lived leaf (~1h)
+	// renews ITSELF — its own rotator calls RefreshLeaf over the mTLS
+	// channel it already holds — and the uplink never drops for it.
+	step("4c. short-lived cert rotation DoD (leaf renews live, no downtime)")
+	if err := verifyRotation(httpAddr, pgConn); err != nil {
+		die("rotation DoD: %v", err)
+	}
+	info("rotation DoD: agent leaf rotated in place (same root, same listener, uplink kept streaming)")
+
 	// ---------------------------------------------------------------- 5.
 	// The precision + live-fault windows are pinned to the current UTC hour;
 	// don't let the run straddle an hour boundary mid-measurement.
@@ -449,6 +479,7 @@ func main() {
 	fmt.Printf("  alert recall (injected faults)      : %.1f%%\n", 100*est.Recall)
 	fmt.Printf("  dedup: 1 open alert per faulted series; auto-resolve + manual ack/resolve OK\n")
 	fmt.Printf("  mTLS (W3-1): agent's own leaf streamed live on :50052; non-org leaf rejected at handshake\n")
+	fmt.Printf("  cert rotation (W3-2): leaf renewed live via RefreshLeaf; same root + listener, uplink undropped\n")
 	fmt.Printf("  real artifacts: installer + systemd service + agent binary + live collectors\n")
 	fmt.Println("=======================================================")
 }
@@ -920,6 +951,238 @@ type agentIdentity struct {
 		LeafKeyPEM  string `json:"leaf_key_pem"`
 		OrgRootPEM  string `json:"org_root_ca_pem"`
 	} `json:"tls"`
+}
+
+// verifyRotation proves the W3-2 DoD against the LIVE server: the agent's
+// leaf (~1h) renews itself automatically — via its own rotator calling
+// RefreshLeaf on the mTLS channel — and the uplink never drops for it. The
+// demo can't wait an hour, so RMMWAY_ROTATE_AFTER=45s (an e2e-only knob)
+// forces the first rotation shortly after the agent comes back up:
+//
+//  1. capture the enrolled leaf (identity file + device_certs) and the
+//     server cert the :50052 listener is currently serving;
+//  2. set the knob, restart the systemd agent, and wait for the agent's
+//     rotator to swap the leaf — the persisted identity AND device_certs
+//     must change to a NEW leaf under the SAME org root;
+//  3. the NEW leaf streams a live heartbeat+ack on the SAME mTLS port with
+//     the SAME server cert (same listener — no restart), and Timescale
+//     metrics kept arriving across the rotation (no dropped uplink).
+func verifyRotation(httpAddr string, pg *pgx.Conn) error {
+	u, err := url.Parse(httpAddr)
+	if err != nil {
+		return err
+	}
+	host := u.Hostname()
+	mtlsAddr := net.JoinHostPort(host, "50052")
+
+	// 1. the enrolled (pre-rotation) material.
+	b, err := os.ReadFile(identityFile)
+	if err != nil {
+		return fmt.Errorf("read agent identity %s: %w", identityFile, err)
+	}
+	var id agentIdentity
+	if err := json.Unmarshal(b, &id); err != nil {
+		return fmt.Errorf("parse identity: %w", err)
+	}
+	if id.TLS == nil || id.TLS.LeafCertPEM == "" {
+		return fmt.Errorf("identity has no leaf — step 4b already requires this (server predates W3-1?)")
+	}
+	oldLeaf := []byte(id.TLS.LeafCertPEM)
+	var dbOld []byte
+	if err := pg.QueryRow(context.Background(),
+		`SELECT leaf_cert_pem FROM device_certs WHERE device_id=$1`, id.DeviceID).Scan(&dbOld); err != nil {
+		return fmt.Errorf("device_certs leaf: %w", err)
+	}
+	oldC, err := parseCertPEM(oldLeaf)
+	if err != nil {
+		return fmt.Errorf("parse enrolled leaf: %w", err)
+	}
+	rootPool := x509.NewCertPool()
+	if !rootPool.AppendCertsFromPEM([]byte(id.TLS.OrgRootPEM)) {
+		return fmt.Errorf("no cert in the persisted org root PEM")
+	}
+	// The server cert currently served on :50052 (rotation must not
+	// restart the listener, so it must be the same one afterwards).
+	oldServerSerial := serverCertSerial(tlsClientFor(id.TLS.OrgRootPEM, host), mtlsAddr)
+
+	// Metrics baseline (proves the uplink stayed live across the rotation).
+	var before int
+	if err := pg.QueryRow(context.Background(),
+		`SELECT count(*) FROM metrics WHERE device_id=$1`, id.DeviceID).Scan(&before); err != nil {
+		return fmt.Errorf("metrics baseline: %w", err)
+	}
+
+	// 2. force a rotation ~45s after the agent restarts (e2e knob), then
+	// come back up on the same mTLS channel.
+	cfg := "/etc/rmmway/agent.env"
+	env, err := os.ReadFile(cfg)
+	if err != nil {
+		return fmt.Errorf("read agent env: %w", err)
+	}
+	if err := os.WriteFile(cfg, append(env, []byte("RMMWAY_ROTATE_AFTER=45s\n")...), 0600); err != nil {
+		return fmt.Errorf("write rotate knob: %w", err)
+	}
+	// Belt and braces for a rerun: restore the original env when done.
+	defer func() {
+		_ = os.WriteFile(cfg, env, 0600)
+	}()
+	if out, err := exec.Command("systemctl", "restart", "rmmway-agent.service").CombinedOutput(); err != nil {
+		return fmt.Errorf("restart agent for rotation: %v: %s", err, out)
+	}
+	if err := pollUntil("rotated leaf in device_certs", 90*time.Second, func() error {
+		var leaf []byte
+		if err := pg.QueryRow(context.Background(),
+			`SELECT leaf_cert_pem FROM device_certs WHERE device_id=$1`, id.DeviceID).Scan(&leaf); err != nil {
+			return err
+		}
+		if bytes.Equal(leaf, oldLeaf) {
+			return fmt.Errorf("device_certs still holds the original leaf")
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("leaf never rotated: %v\njournal:\n%s", err, journal(30))
+	}
+
+	// The FRESH leaf — from the agent's persisted identity (what it now
+	// presents) — must be the same one the server recorded, and it must
+	// verify against the SAME org root (rotation, not a re-enroll).
+	b2, err := os.ReadFile(identityFile)
+	if err != nil {
+		return fmt.Errorf("re-read identity after rotation: %w", err)
+	}
+	var id2 agentIdentity
+	if err := json.Unmarshal(b2, &id2); err != nil {
+		return fmt.Errorf("parse rotated identity: %w", err)
+	}
+	if bytes.Equal([]byte(id2.TLS.LeafCertPEM), oldLeaf) {
+		return fmt.Errorf("persisted identity still carries the ORIGINAL leaf after rotation")
+	}
+	var dbNew []byte
+	if err := pg.QueryRow(context.Background(),
+		`SELECT leaf_cert_pem FROM device_certs WHERE device_id=$1`, id.DeviceID).Scan(&dbNew); err != nil {
+		return fmt.Errorf("device_certs leaf: %w", err)
+	}
+	if !bytes.Equal(dbNew, []byte(id2.TLS.LeafCertPEM)) {
+		rotC, _ := parseCertPEM([]byte(id2.TLS.LeafCertPEM))
+		return fmt.Errorf("rotated leaf: agent identity (%s) != device_certs", shortSerial(rotC))
+	}
+	newC, err := parseCertPEM([]byte(id2.TLS.LeafCertPEM))
+	if err != nil {
+		return fmt.Errorf("parse rotated leaf: %w", err)
+	}
+	if newC.SerialNumber.Cmp(oldC.SerialNumber) == 0 {
+		return fmt.Errorf("rotation returned the same cert serial %s", oldC.SerialNumber)
+	}
+	if _, err := newC.Verify(x509.VerifyOptions{
+		Roots:     rootPool,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}); err != nil {
+		return fmt.Errorf("rotated leaf does not verify against the ORIGINAL org root: %w", err)
+	}
+	if time.Until(newC.NotAfter) < time.Minute {
+		return fmt.Errorf("rotated leaf expires in %s (rotation should re-issue a full-life leaf)", time.Until(newC.NotAfter).Round(time.Second))
+	}
+	if newC.Subject.CommonName != oldC.Subject.CommonName {
+		return fmt.Errorf("rotated leaf CN %q != enrolled CN %q (expected the same device)", newC.Subject.CommonName, oldC.Subject.CommonName)
+	}
+
+	// 3. the NEW leaf streams live on the SAME port, and the server cert is
+	// unchanged (same listener — rotation was in place, no restart).
+	creds := credentials.NewTLS(&tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			kp, err := tls.X509KeyPair([]byte(id2.TLS.LeafCertPEM), []byte(id2.TLS.LeafKeyPEM))
+			if err != nil {
+				return nil, err
+			}
+			return &kp, nil
+		},
+		RootCAs:  rootPool,
+		ServerName: host,
+	})
+	conn, err := grpc.NewClient(mtlsAddr, grpc.WithTransportCredentials(creds))
+	if err != nil {
+		return fmt.Errorf("dial mTLS %s: %w", mtlsAddr, err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	md := metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+id.JWT))
+	stream, err := agentv1.NewAgentServiceClient(conn).Stream(md)
+	if err != nil {
+		return fmt.Errorf("stream with the ROTATED leaf: %w", err)
+	}
+	now := time.Now().UnixMilli()
+	if err := stream.Send(&agentv1.StreamRequest{
+		Payload: &agentv1.StreamRequest_Heartbeat{Heartbeat: &agentv1.Heartbeat{
+			TimestampMs: now, CpuPercent: 1.0, MemoryPercent: 1.0,
+		}},
+	}); err != nil {
+		return fmt.Errorf("heartbeat over mTLS: %w", err)
+	}
+	ack, err := stream.Recv()
+	if err != nil {
+		return fmt.Errorf("ack over mTLS: %w", err)
+	}
+	if ack.GetHeartbeatAck() == nil {
+		return fmt.Errorf("expected a heartbeat ack over mTLS, got %T", ack.GetPayload())
+	}
+	if ns := serverCertSerial(tlsClientFor(id.TLS.OrgRootPEM, host), mtlsAddr); ns == "" || oldServerSerial == "" || ns != oldServerSerial {
+		return fmt.Errorf("server cert changed across the rotation (%s -> %s) — the listener was restarted, which is not 'no downtime'", oldServerSerial, ns)
+	}
+	// And the uplink itself never dropped: the agent's own collector
+	// metrics kept landing while the leaf rotated underneath it.
+	var after int
+	if err := pg.QueryRow(context.Background(),
+		`SELECT count(*) FROM metrics WHERE device_id=$1`, id.DeviceID).Scan(&after); err != nil {
+		return fmt.Errorf("metrics count: %w", err)
+	}
+	if after <= before {
+		return fmt.Errorf("no new metrics across the rotation window (before=%d after=%d) — the uplink dropped", before, after)
+	}
+	info("leaf rotated live: %s -> %s (same root, same server cert, uplink kept streaming: %d -> %d samples)",
+		shortSerial(oldC), shortSerial(newC), before, after)
+	return nil
+}
+
+// parseCertPEM decodes a single PEM cert block.
+func parseCertPEM(leaf []byte) (*x509.Certificate, error) {
+	cb, _ := pem.Decode(leaf)
+	if cb == nil {
+		return nil, fmt.Errorf("no PEM block in leaf")
+	}
+	return x509.ParseCertificate(cb.Bytes)
+}
+
+func shortSerial(c *x509.Certificate) string {
+	if c == nil {
+		return "<unparsable>"
+	}
+	s := c.SerialNumber.String()
+	return fmt.Sprintf("serial ...%s", s[len(s)-4:])
+}
+
+// serverCertSerial returns the serial (last 4 hex) of the cert currently
+// served on addr, or "" on any error.
+func serverCertSerial(clientCfg *tls.Config, addr string) string {
+	nc, err := tls.Dial("tcp", addr, clientCfg)
+	if err != nil {
+		return ""
+	}
+	defer nc.Close()
+	s := nc.ConnectionState().PeerCertificates
+	if len(s) == 0 {
+		return ""
+	}
+	return s[0].SerialNumber.String()
+}
+
+// tlsClientFor builds a minimal client config trusting only the given root
+// PEM (server-name pinned to host) — used to inspect the mTLS port.
+func tlsClientFor(rootPEM, host string) *tls.Config {
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM([]byte(rootPEM))
+	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: host}
 }
 
 // verifyMTLS proves the W3-1 DoD against the LIVE mTLS gRPC port:

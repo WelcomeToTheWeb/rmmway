@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Identity is the agent's persistent enrollment record, written to disk so a
@@ -26,7 +27,12 @@ type Identity struct {
 // TLSIdentity is the PEM material the agent uses for the mTLS channel: its
 // leaf cert + key (presented to the server) and the org root CA (pinned, so
 // the agent verifies the server's own certificate too — genuinely mutual).
+//
+// W3-2: the leaf pair is ROTATED in place (SwapLeaf) well before expiry; the
+// org root never changes. The leaf fields are guarded by a mutex because the
+// uplink reads them at handshake time while the rotator goroutine writes them.
 type TLSIdentity struct {
+	mu         sync.RWMutex
 	LeafCertPEM string `json:"leaf_cert_pem"`
 	LeafKeyPEM  string `json:"leaf_key_pem"`
 	OrgRootPEM  string `json:"org_root_ca_pem"`
@@ -34,23 +40,73 @@ type TLSIdentity struct {
 
 // Valid reports whether all three PEM fields are present.
 func (t *TLSIdentity) Valid() bool {
-	return t != nil && t.LeafCertPEM != "" && t.LeafKeyPEM != "" && t.OrgRootPEM != ""
+	if t == nil {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.LeafCertPEM != "" && t.LeafKeyPEM != "" && t.OrgRootPEM != ""
 }
 
-// KeyPair loads the agent's leaf cert + key as a tls.Certificate (the client
-// identity presented on the mTLS handshake).
+// CurrentLeafPEM returns the current leaf cert (PEM) for the rotator's watch.
+func (t *TLSIdentity) CurrentLeafPEM() []byte {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return []byte(t.LeafCertPEM)
+}
+
+// SwapLeaf (W3-2) atomically replaces the leaf cert + key (the rotator runs
+// this inside the old cert's validity window, so the uplink never has to
+// present an expired leaf).
+func (t *TLSIdentity) SwapLeaf(certPEM, keyPEM []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.LeafCertPEM = string(certPEM)
+	t.LeafKeyPEM = string(keyPEM)
+}
+
+// SetLeaf is kept for callers that prefer the rotate.Identity name; it
+// delegates to SwapLeaf.
+func (t *TLSIdentity) SetLeaf(certPEM, keyPEM []byte) { t.SwapLeaf(certPEM, keyPEM) }
+
+// KeyPair loads the agent's current leaf cert + key as a tls.Certificate
+// (the client identity presented on the mTLS handshake). A fresh handshake
+// after a swap presents the new leaf; an in-flight connection keeps using the
+// one it already negotiated.
 func (t *TLSIdentity) KeyPair() (tls.Certificate, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return tls.X509KeyPair([]byte(t.LeafCertPEM), []byte(t.LeafKeyPEM))
 }
 
 // RootCAs returns an x509 pool containing only the org root — the trust
 // anchor the agent uses to verify the server on the mTLS channel.
 func (t *TLSIdentity) RootCAs() (*x509.CertPool, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	p := x509.NewCertPool()
 	if !p.AppendCertsFromPEM([]byte(t.OrgRootPEM)) {
 		return nil, fmt.Errorf("agent: no cert in the org root PEM")
 	}
 	return p, nil
+}
+
+// MarshalJSON reads all fields under the lock so a persist that races the
+// rotator's SwapLeaf can't capture a torn (cert/key) pair.
+func (t *TLSIdentity) MarshalJSON() ([]byte, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	type wire TLSIdentity
+	return json.Marshal((*wire)(t))
+}
+
+// UnmarshalJSON populates the identity (fresh load / first enroll).
+func (t *TLSIdentity) UnmarshalJSON(b []byte) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	type wire TLSIdentity
+	w := (*wire)(t)
+	return json.Unmarshal(b, &w)
 }
 
 // Store persists the Identity to a single root-only file.

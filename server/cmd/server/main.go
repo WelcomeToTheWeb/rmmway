@@ -105,6 +105,22 @@ func sha256Short(pemBytes []byte) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// leafTTL is the device leaf (and server cert) lifetime (W3-2): the default
+// is the ~1h short-lived window the org CA package defines; RMMWAY_LEAF_TTL
+// overrides it for tests / long dev sessions (e.g. "24h").
+func leafTTL() time.Duration {
+	v := os.Getenv("RMMWAY_LEAF_TTL")
+	if v == "" {
+		return 0 // 0 -> the ca package default (~1h)
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		log.Printf("WARN: bad RMMWAY_LEAF_TTL %q — using the default ~1h", v)
+		return 0
+	}
+	return d
+}
+
 // alertAutoResolve is the number of consecutive clean passes before an
 // open alert auto-resolves (RMMWAY_ALERT_AUTO_RESOLVE, default 1). With the
 // default 5-min engine cadence, 1 = an alert closes ~5 min after the metric
@@ -291,18 +307,22 @@ func main() {
 	// boot, reused across restarts so enrolled devices' leaf certs stay
 	// valid. Enroll hands each device its leaf (signed by the root); the
 	// mTLS gRPC listener serves a root-signed server cert and requires the
-	// leaf. With Postgres the root lives in org_ca; in-memory mode keeps
-	// the whole flow self-contained (root lives for the process lifetime).
+	// leaf. W3-2: leaves are short-lived (~1h, RMMWAY_LEAF_TTL) and the
+	// agent rotates them via RefreshLeaf while the old leaf is still valid;
+	// the server cert the listener serves rotates in place via
+	// GetCertificate (no listener restart). With Postgres the root lives in
+	// org_ca; in-memory mode keeps the whole flow self-contained (root
+	// lives for the process lifetime).
 	var caMgr *ca.Manager
 	if hasPG {
-		caMgr, err = ca.NewManager(ca.NewPostgresOrgStore(pgPool), 0)
+		caMgr, err = ca.NewManager(ca.NewPostgresOrgStore(pgPool), leafTTL())
 	} else {
-		caMgr, err = ca.NewManager(ca.NewMemoryOrgStore(), 0)
+		caMgr, err = ca.NewManager(ca.NewMemoryOrgStore(), leafTTL())
 	}
 	if err != nil {
 		log.Fatalf("org CA: %v", err)
 	}
-	log.Printf("org CA ready (cert sha256:%s)", sha256Short(caMgr.RootCertPEM()))
+	log.Printf("org CA ready (cert sha256:%s; leaf TTL %s)", sha256Short(caMgr.RootCertPEM()), caMgr.LeafTTL())
 
 	// ---- dynamic baselining (W2-3) + alerts (W2-4) -------------------
 	// Deterministic background job: scores every series' latest hourly

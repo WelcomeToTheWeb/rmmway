@@ -1,6 +1,7 @@
 package secure
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -230,4 +231,123 @@ func TestTransportCredentialsIncompleteIdentity(t *testing.T) {
 	if _, err := New(full).TransportCredentials("127.0.0.1"); err != nil {
 		t.Fatalf("complete identity: expected credentials, got %v", err)
 	}
+}
+
+// TestLeafSwappedBetweenHandshakes is the W3-2 DoD at the transport layer:
+// the SAME *tls.Config (built once, as the agent builds its channel config)
+// must present the SWAPPED leaf on the next handshake — i.e. rotation works
+// without rebuilding the transport credentials. Each round runs a real mTLS
+// handshake over a net.Pipe; the server's ConnectionState shows which client
+// leaf it was presented. After identity.SwapLeaf, round 2 presents a
+// DIFFERENT (the new) leaf, still verifying against the pinned org root.
+func TestLeafSwappedBetweenHandshakes(t *testing.T) {
+	org := newTestCA(t, "RMMWay Org Root CA (test)")
+
+	// A server cert signed by the org root (the client verifies against it).
+	srvKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	srvSerial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	srvDer, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: srvSerial,
+		Subject:      pkix.Name{CommonName: "rmmway-server"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}, org.cert, &srvKey.PublicKey, org.key)
+	if err != nil {
+		t.Fatalf("server cert: %v", err)
+	}
+	srvCert, err := tls.X509KeyPair(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srvDer}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mustPKCS8(t, srvKey)}),
+	)
+	if err != nil {
+		t.Fatalf("server keypair: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caRootPEM(org))
+	serverCfg := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{srvCert},
+		ClientCAs:    pool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	}
+
+	id := newTestIdentity(t, "dev-001", "127.0.0.1", org)
+	cred := New(id)
+
+	// Build the client config ONCE (the agent builds its channel config at
+	// startup and keeps it across rotations).
+	clientCfg, err := cred.TLSConfig("")
+	if err != nil {
+		t.Fatalf("TLSConfig: %v", err)
+	}
+	// Over a net.Pipe there is no address to derive a server name from, so
+	// skip NAME verification only — RootCAs still chains the server cert to
+	// the pinned org root (which is the property under test anyway).
+	clientCfg.InsecureSkipVerify = true
+
+	// round runs one mTLS handshake and returns the client cert the server
+	// saw (its ConnectionState). Deterministic via a net.Pipe.
+	round := func() *x509.Certificate {
+		cr, sr := net.Pipe()
+		serverConn := tls.Server(sr, serverCfg)
+		sctx, scancel := context.WithTimeout(context.Background(), 3*time.Second)
+		done := make(chan struct{})
+		go func() {
+			_ = serverConn.HandshakeContext(sctx)
+			close(done)
+		}()
+		clientConn := tls.Client(cr, clientCfg)
+		cctx, ccancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer ccancel()
+		if err := clientConn.HandshakeContext(cctx); err != nil {
+			t.Fatalf("client handshake: %v", err)
+		}
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("server handshake did not complete")
+		}
+		scancel()
+		peer := serverConn.ConnectionState().PeerCertificates
+		// net.Pipe close is symmetric (each Close blocks until the peer
+		// closes), so close both sides concurrently.
+		go func() { _ = serverConn.Close() }()
+		_ = clientConn.Close()
+		if len(peer) == 0 {
+			t.Fatal("server saw no client certificate")
+		}
+		return peer[0]
+	}
+
+	first := round()
+
+	// The rotator swaps the leaf in place (same identity object, same cfg).
+	newCert, newKey := org.leaf(t, "dev-001", "127.0.0.1")
+	id.leafCertPEM, id.leafKeyPEM = newCert, newKey
+	second := round()
+
+	if second.SerialNumber.Cmp(first.SerialNumber) == 0 {
+		t.Fatalf("the second handshake must present the SWAPPED leaf (same serial %v both times)", first.SerialNumber)
+	}
+	// And the presented serial is exactly the new leaf's — proving the swap
+	// is what reached the handshake (not a stale copy).
+	leafCB, _ := pem.Decode([]byte(newCert))
+	leafCert, err := x509.ParseCertificate(leafCB.Bytes)
+	if err != nil {
+		t.Fatalf("parse new leaf: %v", err)
+	}
+	if leafCert.SerialNumber.Cmp(second.SerialNumber) != 0 {
+		t.Fatalf("handshake presented serial %v, want the swapped leaf's %v", second.SerialNumber, leafCert.SerialNumber)
+	}
+}
+
+func mustPKCS8(t *testing.T, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("pkcs8: %v", err)
+	}
+	return der
 }

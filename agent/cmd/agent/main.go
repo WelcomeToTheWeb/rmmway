@@ -38,9 +38,11 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/welcometotheweb/rmmway/agent/internal/collectors"
 	"github.com/welcometotheweb/rmmway/agent/internal/enroll"
+	"github.com/welcometotheweb/rmmway/agent/internal/rotate"
 	"github.com/welcometotheweb/rmmway/agent/internal/secure"
 	"github.com/welcometotheweb/rmmway/agent/internal/uplink"
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
@@ -216,11 +218,15 @@ func mtlsHost(target string) string {
 	return h
 }
 
-// runCommand is the W1-3/W1-4/W3-1 service entrypoint: connect (plain, for
-// the bootstrap Enroll), enroll on first boot (reusing the persisted
+// runCommand is the W1-3/W1-4/W3-1/W3-2 service entrypoint: connect (plain,
+// for the bootstrap Enroll), enroll on first boot (reusing the persisted
 // identity thereafter), then — once the identity carries mTLS material —
 // switch to the mTLS channel and run the authenticated heartbeat/metric
 // uplink over it until signalled.
+//
+// W3-2: with the mTLS channel the agent also runs a background rotator that
+// refreshes its leaf (~1h certs) via the RefreshLeaf RPC while the current
+// leaf is still valid — the uplink never drops for a renewal.
 func runCommand(args []string) {
 	cfg := loadConfig(configPath(args))
 	if cfg.Server == "" {
@@ -272,7 +278,20 @@ func runCommand(args []string) {
 			fmt.Fprintf(os.Stderr, "run: mTLS credentials: %v\n", err)
 			os.Exit(1)
 		}
-		mtlsConn, err := grpc.NewClient(mtlsTarget, grpc.WithTransportCredentials(creds))
+		mtlsConn, err := grpc.NewClient(mtlsTarget,
+			grpc.WithTransportCredentials(creds),
+			// Every unary RPC on the mTLS channel (RefreshLeaf, and any
+			// future device RPC) must carry the device JWT — the server's
+			// interceptor is auth-gated and does not see the Stream's
+			// per-call metadata. Stream attaches its own via the caller's
+			// context, so this only ever FILLS an unset header.
+			grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+				if md, _ := metadata.FromOutgoingContext(ctx); len(md.Get("authorization")) == 0 {
+					ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+jwt)
+				}
+				return invoker(ctx, method, req, reply, cc, opts...)
+			}),
+		)
 		if err != nil {
 			plainConn.Close()
 			fmt.Fprintf(os.Stderr, "run: dial mTLS %s: %v\n", mtlsTarget, err)
@@ -280,6 +299,32 @@ func runCommand(args []string) {
 		}
 		client = agentv1.NewAgentServiceClient(mtlsConn)
 		target, channel = mtlsTarget, "mTLS"
+		// W3-2: background leaf rotation. Refreshes the device's leaf via the
+		// RefreshLeaf RPC — over THIS mTLS connection, presenting the still-
+		// valid current leaf — and swaps the fresh pair into the persisted
+		// identity (in memory + disk). The uplink's own channel re-reads the
+		// leaf at each handshake, so the next reconnect presents the new
+		// cert; no downtime.
+		go func() {
+			rotCfg := rotate.Config{Logger: log}
+			// RMMWAY_ROTATE_AFTER (duration, e.g. 45s) forces the first
+			// rotation that long after start — the e2e milestone sets it so
+			// a ~1h leaf is observed rotating live in seconds.
+			if ra := os.Getenv("RMMWAY_ROTATE_AFTER"); ra != "" {
+				if d, perr := time.ParseDuration(ra); perr == nil {
+					rotCfg.RotateAfter = d
+				} else {
+					log.Warn("RMMWAY_ROTATE_AFTER is not a duration; ignoring", "value", ra)
+				}
+			}
+			rot := rotate.New(client, res.Identity.TLS, devID, res.Identity.Hostname,
+				rotCfg,
+				rotate.WithPersist(func() error { return store.Save(res.Identity) }),
+			)
+			if err := rot.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Warn("rotator stopped", "err", err)
+			}
+		}()
 	} else {
 		client = plainClient
 	}
