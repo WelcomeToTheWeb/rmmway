@@ -40,8 +40,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/welcometotheweb/rmmway/agent/internal/caps"
 	"github.com/welcometotheweb/rmmway/agent/internal/collectors"
 	"github.com/welcometotheweb/rmmway/agent/internal/enroll"
+	"github.com/welcometotheweb/rmmway/agent/internal/exec"
 	"github.com/welcometotheweb/rmmway/agent/internal/rotate"
 	"github.com/welcometotheweb/rmmway/agent/internal/secure"
 	"github.com/welcometotheweb/rmmway/agent/internal/uplink"
@@ -335,11 +337,30 @@ func runCommand(args []string) {
 		plainConn.Close()
 	}
 
+	// W3-3: command execution with per-action capability tokens. On the
+	// mTLS channel the agent has pinned the org root (from enroll), so it
+	// verifies every dispatched command's capability token against the same
+	// trust anchor that makes its channel valid — and refuses (REFUSED) any
+	// command outside the minted scope. Without a pinned root (legacy plain
+	// channel) the agent keeps the pre-W3-3 log-only behavior.
+	var commander *uplink.Commander
+	if id := res.Identity; id.TLS != nil && id.TLS.Valid() {
+		if v, err := caps.FromRootPEM([]byte(id.TLS.OrgRootPEM), devID); err != nil {
+			log.Warn("capability verification disabled (no valid org root)", "err", err)
+		} else {
+			commander = &uplink.Commander{DevID: devID, Verifier: v, Exec: exec.Default(), Logger: log}
+			log.Info("command execution enabled", "note", "capability tokens verified against the pinned org root")
+		}
+	}
+
 	coll := collectors.NewCollector()
 	u := uplink.New(client, devID, jwt, uplink.Config{
 		HeartbeatInterval: 30 * time.Second,
 		Logger:            log,
-	}, uplink.WithCollector(coll.Collect))
+	},
+		uplink.WithCollector(coll.Collect),
+		uplink.WithCommander(commander),
+	)
 
 	fmt.Printf("rmmway-agent %s: connected to %s (%s) as device %s; uplink running\n", version, target, channel, devID)
 	if err := u.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {

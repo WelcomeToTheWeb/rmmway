@@ -274,7 +274,7 @@ func TestThreshold(t *testing.T) {
 	}{
 		{"quarter of 1h", fastCfg(), time.Hour, 15 * time.Minute},
 		{"capped at lead", fastCfg(), 24 * time.Hour, time.Hour}, // 6h -> 1h cap
-		{"floored at min", Config{RotateFrac: 0.25, MaxRotateLead: time.Hour, MinInterval: time.Minute}, 4*time.Second, time.Minute},
+		{"floored at min", Config{RotateFrac: 0.25, MaxRotateLead: time.Hour, MinInterval: time.Minute}, 4 * time.Second, time.Minute},
 	}
 	for _, tc := range cases {
 		got := tc.cfg.rotateThreshold(tc.life)

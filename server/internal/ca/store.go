@@ -31,10 +31,10 @@ type OrgStore interface {
 // ---- in-memory implementation -----------------------------------------------
 
 type MemoryOrgStore struct {
-	mu          sync.Mutex
-	certPEM     []byte
-	keyPEM      []byte
-	leaves      map[string][2][]byte // deviceID -> {certPEM, keyPEM}
+	mu      sync.Mutex
+	certPEM []byte
+	keyPEM  []byte
+	leaves  map[string][2][]byte // deviceID -> {certPEM, keyPEM}
 }
 
 func NewMemoryOrgStore() *MemoryOrgStore {

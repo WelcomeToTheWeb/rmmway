@@ -31,6 +31,7 @@ import (
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ca"
+	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
@@ -136,6 +137,42 @@ func alertAutoResolve() int {
 		return 1
 	}
 	return n
+}
+
+// capTTL is the lifetime of minted capability tokens (W3-3): the default is
+// a 10-minute time-box for a command to reach + be accepted by the agent;
+// RMMWAY_CAP_TTL overrides it (tests / long-running dispatch queues).
+func capTTL() time.Duration {
+	v := os.Getenv("RMMWAY_CAP_TTL")
+	if v == "" {
+		return 10 * time.Minute
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		log.Printf("WARN: bad RMMWAY_CAP_TTL %q — using 10m", v)
+		return 10 * time.Minute
+	}
+	return d
+}
+
+// adminCaps is the capability set minted into operator session tokens
+// (W3-3). RMMWAY_ADMIN_CAPS is a comma-separated list (e.g. "rmmway.run_script");
+// empty = the full Phase 1 set (all capabilities).
+func adminCaps() []string {
+	v := os.Getenv("RMMWAY_ADMIN_CAPS")
+	if v == "" {
+		return caps.AllCapabilities
+	}
+	out := []string{}
+	for _, c := range strings.Split(v, ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			out = append(out, c)
+		}
+	}
+	if len(out) == 0 {
+		return caps.AllCapabilities
+	}
+	return out
 }
 
 type probe struct {
@@ -324,6 +361,13 @@ func main() {
 	}
 	log.Printf("org CA ready (cert sha256:%s; leaf TTL %s)", sha256Short(caMgr.RootCertPEM()), caMgr.LeafTTL())
 
+	// W3-3: per-action capability tokens. Every dispatched command carries a
+	// short-lived token signed by the org root, bound to (device, capability,
+	// command id); the agent verifies it against its pinned root before
+	// acting and refuses (REFUSED) anything outside the minted scope.
+	capsIssuer := caps.NewIssuer(caMgr.Root(), capTTL())
+	log.Printf("capability tokens: enabled (TTL %s; admin caps %v)", capsIssuer.TTL(), adminCaps())
+
 	// ---- dynamic baselining (W2-3) + alerts (W2-4) -------------------
 	// Deterministic background job: scores every series' latest hourly
 	// mean against its (dow, hour) seasonal baseline + a same-day trend
@@ -377,7 +421,7 @@ func main() {
 	}
 
 	// ---- gRPC ingest (W1-5) + mTLS agent channel (W3-1) ---------------
-	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr}, metricsSink, devicesStore)
+	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr, Caps: capsIssuer}, metricsSink, devicesStore)
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(svc.JWTInterceptor),
 	)
@@ -453,8 +497,12 @@ func main() {
 		AdminPassword: adminPassword,
 		MintBootstrap: svc.MintBootstrapToken,
 		Dispatch:      svc.Dispatcher().Dispatch,
-		Baseline:      baselineJob,
-		Alerts:        alertStore,
+		CommandState: func(deviceID string) ([]*agentv1.Command, []*agentv1.CommandResult) {
+			return svc.Dispatcher().PendingFor(deviceID), svc.Dispatcher().ResultsFor(deviceID)
+		},
+		AdminCaps: adminCaps(),
+		Baseline:  baselineJob,
+		Alerts:    alertStore,
 	})
 	apiSrv.Register(mux)
 

@@ -14,8 +14,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"math"
@@ -32,6 +34,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
+	"github.com/welcometotheweb/rmmway/server/internal/caps"
 )
 
 func die(f string, a ...any) {
@@ -124,7 +127,7 @@ func main() {
 	ackCh := make(chan *agentv1.HeartbeatAck, 1)
 	drainCtx, drainCancel := context.WithCancel(ctx)
 	drainDone := make(chan struct{})
-	var gotCmds []string
+	var gotCmds []*agentv1.Command
 	var cmdMu sync.Mutex
 	go func() {
 		defer close(drainDone)
@@ -146,7 +149,7 @@ func main() {
 			}
 			if cmd := resp.GetCommand(); cmd != nil {
 				cmdMu.Lock()
-				gotCmds = append(gotCmds, cmd.GetId())
+				gotCmds = append(gotCmds, cmd)
 				cmdMu.Unlock()
 			}
 		}
@@ -168,10 +171,12 @@ func main() {
 		die("send metrics batch: %v", err)
 	}
 
-	// 5. W2-2: operator login + dispatch a command through the REAL HTTP
-	// endpoint; assert it arrives on this live stream. The agent only logs
-	// receipt (execution + CommandResult reporting is W5-1); proving the
-	// dispatch half reaches the owning agent's stream is the W2-2 bar.
+	// 5. W2-2 + W3-3: operator login + dispatch a command through the REAL
+	// HTTP endpoint; assert it arrives on this live stream CARRYING a
+	// capability token that verifies against the org root (read from PG —
+	// the same trust anchor the real agent pins from enroll), then play the
+	// W3-3 agent: verify -> execute -> report CommandResult (RECEIVED, then
+	// SUCCEEDED) -> assert the server recorded it.
 	{
 		lb, _ := json.Marshal(map[string]string{"username": "admin", "password": "admin"})
 		lresp, err := http.Post(httpAddr+"/api/login", "application/json", bytes.NewReader(lb))
@@ -179,13 +184,15 @@ func main() {
 			die("login: %v", err)
 		}
 		var loginOut struct {
-			Token string `json:"token"`
+			Token        string   `json:"token"`
+			Capabilities []string `json:"capabilities"`
 		}
 		_ = json.NewDecoder(lresp.Body).Decode(&loginOut)
 		lresp.Body.Close()
 		if lresp.StatusCode != 200 || loginOut.Token == "" {
 			die("login failed: status %d, no token", lresp.StatusCode)
 		}
+		fmt.Printf("operator session minted (caps: %v)\n", loginOut.Capabilities)
 		scriptB64 := base64.StdEncoding.EncodeToString([]byte("echo w22 e2e ping"))
 		db, _ := json.Marshal(map[string]any{
 			"action": "run_script", "lang": "sh", "script": scriptB64,
@@ -210,12 +217,15 @@ func main() {
 		fmt.Printf("dispatched command %s to %s (via /api/devices/{id}/commands)\n", dOut.CommandID, boot.DeviceID)
 		// Wait for the drain goroutine to see it.
 		deadline := time.Now().Add(5 * time.Second)
+		var dispatched *agentv1.Command
 		for {
 			cmdMu.Lock()
-			n := len(gotCmds)
+			if len(gotCmds) > 0 {
+				dispatched = gotCmds[0]
+			}
 			cmdMu.Unlock()
-			if n > 0 {
-				fmt.Printf("command %s received on the live stream (agent uplink drain)\n", gotCmds[0])
+			if dispatched != nil {
+				fmt.Printf("command %s received on the live stream (agent uplink drain)\n", dispatched.GetId())
 				break
 			}
 			if time.Now().After(deadline) {
@@ -223,6 +233,72 @@ func main() {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
+
+		// W3-3: the command must carry a capability token, and it must
+		// verify against the org root for this device + capability +
+		// command id.
+		tok := dispatched.GetRunScript().GetCapabilityToken()
+		if tok == "" {
+			die("dispatched run_script carries no capability token (server capability enforcement off?)")
+		}
+		rootCert, err := orgRootCert(pgDSN)
+		if err != nil {
+			die("org root from PG: %v", err)
+		}
+		if err := caps.Verify(tok, rootCert, boot.DeviceID, caps.CapRunScript, dispatched.GetId(), time.Now()); err != nil {
+			die("capability token does not verify against the org root: %v", err)
+		}
+		fmt.Printf("capability token verified: ES256 org root, device=%s, cap=%s, cmd=%s\n",
+			boot.DeviceID, caps.CapRunScript, dispatched.GetId())
+
+		// Play the W3-3 agent: report RECEIVED, then execute + SUCCEEDED.
+		sendCmdResult := func(st agentv1.CommandResult_Status, tail, errMsg string) {
+			if err := stream.Send(&agentv1.StreamRequest{
+				Payload: &agentv1.StreamRequest_CommandResult{CommandResult: &agentv1.CommandResult{
+					CommandId:     dispatched.GetId(),
+					Status:        st,
+					ExitCode:      0,
+					StdoutTail:    tail,
+					Error:         errMsg,
+					CompletedAtMs: time.Now().UnixMilli(),
+				}},
+			}); err != nil {
+				die("send CommandResult %v: %v", st, err)
+			}
+		}
+		sendCmdResult(agentv1.CommandResult_RECEIVED, "", "")
+		sendCmdResult(agentv1.CommandResult_SUCCEEDED, "w22 e2e ping\n", "")
+		fmt.Println("fake agent reported RECEIVED + SUCCEEDED over the live stream")
+
+		// And the server must have recorded it (W3-3 command audit).
+		aResp, err := http.Get(httpAddr + "/admin/devices/" + boot.DeviceID + "/commands")
+		if err != nil {
+			die("commands audit: %v", err)
+		}
+		aBody, _ := io.ReadAll(aResp.Body)
+		aResp.Body.Close()
+		if aResp.StatusCode != 200 {
+			die("commands audit: status %d: %s", aResp.StatusCode, aBody)
+		}
+		var aOut struct {
+			Results []struct {
+				CommandID string `json:"command_id"`
+				Status    int32  `json:"status"`
+			} `json:"results"`
+		}
+		if err := json.Unmarshal(aBody, &aOut); err != nil {
+			die("commands audit: bad JSON: %v", err)
+		}
+		found := false
+		for _, r := range aOut.Results {
+			if r.CommandID == dOut.CommandID && r.Status == int32(agentv1.CommandResult_SUCCEEDED) {
+				found = true
+			}
+		}
+		if !found {
+			die("SUCCEEDED result for %s not recorded (audit: %s)", dOut.CommandID, aBody)
+		}
+		fmt.Println("W3-3: command result recorded + served by /admin/devices/{id}/commands")
 	}
 
 	drainCancel()
@@ -345,7 +421,7 @@ func main() {
 					die("device with ip 10.0.0.99 not in search hits")
 				}
 			}
-			fmt.Println("PASS: W1-5+W1-6+W1-7+W2-2+W2-3+W2-4 e2e — enroll, stream, command dispatched to live stream, metrics in Timescale, baseline anomaly flagged -> one deduped inbox alert, device searchable in Meilisearch")
+			fmt.Println("PASS: W1-5+W1-6+W1-7+W2-2+W2-3+W2-4+W3-3 e2e — enroll, stream, capability-gated command round-trip (token minted -> verified -> executed -> result recorded), metrics in Timescale, baseline anomaly flagged -> one deduped inbox alert, device searchable in Meilisearch")
 			return
 		}
 		lastErr = fmt.Errorf("search for %q returned 0 hits yet", enrollHost)
@@ -824,4 +900,27 @@ func alertE2E(httpAddr, pgDSN string) {
 		die("alert tidy device: %v", err)
 	}
 	fmt.Println("alerts: W2-4 DoD satisfied — one deduped inbox alert, no storm, auto-resolve + manual ack/resolve")
+}
+
+// orgRootCert reads the org root CA cert from PG (org_ca, the same row the
+// server persists on first boot / W3-1) and parses it — the trust anchor
+// the e2e fake agent uses to verify the dispatched command's capability
+// token, exactly as the real agent uses the root it pinned at enroll.
+func orgRootCert(pgDSN string) (*x509.Certificate, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pgConn, err := pgx.Connect(ctx, pgDSN)
+	if err != nil {
+		return nil, err
+	}
+	defer pgConn.Close(ctx)
+	var rootPEM []byte
+	if err := pgConn.QueryRow(ctx, `SELECT root_cert_pem FROM org_ca WHERE id = 1`).Scan(&rootPEM); err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(rootPEM)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block in org_ca.root_cert_pem")
+	}
+	return x509.ParseCertificate(block.Bytes)
 }

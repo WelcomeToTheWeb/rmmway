@@ -360,6 +360,7 @@ type StreamRequest struct {
 	//
 	//	*StreamRequest_Heartbeat
 	//	*StreamRequest_Metrics
+	//	*StreamRequest_CommandResult
 	Payload       isStreamRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -420,6 +421,15 @@ func (x *StreamRequest) GetMetrics() *MetricBatch {
 	return nil
 }
 
+func (x *StreamRequest) GetCommandResult() *CommandResult {
+	if x != nil {
+		if x, ok := x.Payload.(*StreamRequest_CommandResult); ok {
+			return x.CommandResult
+		}
+	}
+	return nil
+}
+
 type isStreamRequest_Payload interface {
 	isStreamRequest_Payload()
 }
@@ -432,9 +442,20 @@ type StreamRequest_Metrics struct {
 	Metrics *MetricBatch `protobuf:"bytes,2,opt,name=metrics,proto3,oneof"`
 }
 
+type StreamRequest_CommandResult struct {
+	// W3-3: the agent's report on a dispatched command. Sent first as
+	// RECEIVED (the command was accepted + its capability token verified),
+	// then again with the final status (SUCCEEDED / FAILED / TIMED_OUT /
+	// REFUSED / UNSUPPORTED). REFUSED means the capability check failed —
+	// the agent did NOT execute the command.
+	CommandResult *CommandResult `protobuf:"bytes,3,opt,name=command_result,json=commandResult,proto3,oneof"`
+}
+
 func (*StreamRequest_Heartbeat) isStreamRequest_Payload() {}
 
 func (*StreamRequest_Metrics) isStreamRequest_Payload() {}
+
+func (*StreamRequest_CommandResult) isStreamRequest_Payload() {}
 
 // StreamResponse is one downlink frame on Stream.
 type StreamResponse struct {
@@ -691,10 +712,11 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\fleaf_key_pem\x18\x02 \x01(\tR\n" +
 	"leafKeyPem\x12\x1d\n" +
 	"\n" +
-	"expires_ms\x18\x03 \x01(\x03R\texpiresMs\"\x90\x01\n" +
+	"expires_ms\x18\x03 \x01(\x03R\texpiresMs\"\xd9\x01\n" +
 	"\rStreamRequest\x12:\n" +
 	"\theartbeat\x18\x01 \x01(\v2\x1a.rmmway.agent.v1.HeartbeatH\x00R\theartbeat\x128\n" +
-	"\ametrics\x18\x02 \x01(\v2\x1c.rmmway.agent.v1.MetricBatchH\x00R\ametricsB\t\n" +
+	"\ametrics\x18\x02 \x01(\v2\x1c.rmmway.agent.v1.MetricBatchH\x00R\ametrics\x12G\n" +
+	"\x0ecommand_result\x18\x03 \x01(\v2\x1e.rmmway.agent.v1.CommandResultH\x00R\rcommandResultB\t\n" +
 	"\apayload\"\x97\x01\n" +
 	"\x0eStreamResponse\x12D\n" +
 	"\rheartbeat_ack\x18\x01 \x01(\v2\x1d.rmmway.agent.v1.HeartbeatAckH\x00R\fheartbeatAck\x124\n" +
@@ -739,25 +761,27 @@ var file_rmmway_agent_v1_agent_proto_goTypes = []any{
 	(*Heartbeat)(nil),           // 6: rmmway.agent.v1.Heartbeat
 	(*HeartbeatAck)(nil),        // 7: rmmway.agent.v1.HeartbeatAck
 	(*MetricBatch)(nil),         // 8: rmmway.agent.v1.MetricBatch
-	(*Command)(nil),             // 9: rmmway.agent.v1.Command
+	(*CommandResult)(nil),       // 9: rmmway.agent.v1.CommandResult
+	(*Command)(nil),             // 10: rmmway.agent.v1.Command
 }
 var file_rmmway_agent_v1_agent_proto_depIdxs = []int32{
-	6, // 0: rmmway.agent.v1.StreamRequest.heartbeat:type_name -> rmmway.agent.v1.Heartbeat
-	8, // 1: rmmway.agent.v1.StreamRequest.metrics:type_name -> rmmway.agent.v1.MetricBatch
-	7, // 2: rmmway.agent.v1.StreamResponse.heartbeat_ack:type_name -> rmmway.agent.v1.HeartbeatAck
-	9, // 3: rmmway.agent.v1.StreamResponse.command:type_name -> rmmway.agent.v1.Command
-	8, // 4: rmmway.agent.v1.Heartbeat.metrics:type_name -> rmmway.agent.v1.MetricBatch
-	0, // 5: rmmway.agent.v1.AgentService.Enroll:input_type -> rmmway.agent.v1.EnrollRequest
-	4, // 6: rmmway.agent.v1.AgentService.Stream:input_type -> rmmway.agent.v1.StreamRequest
-	2, // 7: rmmway.agent.v1.AgentService.RefreshLeaf:input_type -> rmmway.agent.v1.RefreshLeafRequest
-	1, // 8: rmmway.agent.v1.AgentService.Enroll:output_type -> rmmway.agent.v1.EnrollResponse
-	5, // 9: rmmway.agent.v1.AgentService.Stream:output_type -> rmmway.agent.v1.StreamResponse
-	3, // 10: rmmway.agent.v1.AgentService.RefreshLeaf:output_type -> rmmway.agent.v1.RefreshLeafResponse
-	8, // [8:11] is the sub-list for method output_type
-	5, // [5:8] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	6,  // 0: rmmway.agent.v1.StreamRequest.heartbeat:type_name -> rmmway.agent.v1.Heartbeat
+	8,  // 1: rmmway.agent.v1.StreamRequest.metrics:type_name -> rmmway.agent.v1.MetricBatch
+	9,  // 2: rmmway.agent.v1.StreamRequest.command_result:type_name -> rmmway.agent.v1.CommandResult
+	7,  // 3: rmmway.agent.v1.StreamResponse.heartbeat_ack:type_name -> rmmway.agent.v1.HeartbeatAck
+	10, // 4: rmmway.agent.v1.StreamResponse.command:type_name -> rmmway.agent.v1.Command
+	8,  // 5: rmmway.agent.v1.Heartbeat.metrics:type_name -> rmmway.agent.v1.MetricBatch
+	0,  // 6: rmmway.agent.v1.AgentService.Enroll:input_type -> rmmway.agent.v1.EnrollRequest
+	4,  // 7: rmmway.agent.v1.AgentService.Stream:input_type -> rmmway.agent.v1.StreamRequest
+	2,  // 8: rmmway.agent.v1.AgentService.RefreshLeaf:input_type -> rmmway.agent.v1.RefreshLeafRequest
+	1,  // 9: rmmway.agent.v1.AgentService.Enroll:output_type -> rmmway.agent.v1.EnrollResponse
+	5,  // 10: rmmway.agent.v1.AgentService.Stream:output_type -> rmmway.agent.v1.StreamResponse
+	3,  // 11: rmmway.agent.v1.AgentService.RefreshLeaf:output_type -> rmmway.agent.v1.RefreshLeafResponse
+	9,  // [9:12] is the sub-list for method output_type
+	6,  // [6:9] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_rmmway_agent_v1_agent_proto_init() }
@@ -770,6 +794,7 @@ func file_rmmway_agent_v1_agent_proto_init() {
 	file_rmmway_agent_v1_agent_proto_msgTypes[4].OneofWrappers = []any{
 		(*StreamRequest_Heartbeat)(nil),
 		(*StreamRequest_Metrics)(nil),
+		(*StreamRequest_CommandResult)(nil),
 	}
 	file_rmmway_agent_v1_agent_proto_msgTypes[5].OneofWrappers = []any{
 		(*StreamResponse_HeartbeatAck)(nil),

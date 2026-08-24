@@ -1,6 +1,17 @@
 // Commands — server→agent dispatch over the Stream downlink. W1-5 mints and
 // sends commands; W3-3 adds per-action capability tokens that gate which
 // commands an agent may execute.
+//
+// Capability tokens (W3-3): every dispatched action carries a short-lived
+// capability token (capability_token, a compact JWT signed ES256 by the org
+// root CA — the same trust anchor the agent pins from enroll). A token is
+// bound to ONE device (sub), ONE capability (cap: rmmway.run_script /
+// rmmway.reboot) and ONE command id (cmd/jti), and expires after a short
+// window (server RMMWAY_CAP_TTL, default 10m). The agent verifies signature
+// + device + capability + expiry against its pinned org root BEFORE acting;
+// any failure is answered with CommandResult.status=REFUSED and the command
+// is not executed. The channel being a valid mTLS+JWT session is not enough
+// on its own — the agent can't act beyond the minted scope.
 syntax = "proto3";
 
 package rmmway.agent.v1;
@@ -33,12 +44,13 @@ message RunScript {
   string lang = 1;      // "sh" | "powershell" | "python"
   string script_b64 = 2;
   repeated string args = 3;
-  // W3-3: capability token that authorizes this specific action type.
+  // W3-3: capability token authorizing this specific action on this device
+  // (verified by the agent before execution; see the file header).
   string capability_token = 4;
 }
 
-// Reboot restarts the agent host. High-impact: gated by W3-3 capability
-// tokens once those land.
+// Reboot restarts the agent host. High-impact: gated by the W3-3 capability
+// token (cap=rmmway.reboot) exactly like run_script.
 message Reboot {
   int32 delay_s = 1;    // 0 = immediate
   string capability_token = 2;

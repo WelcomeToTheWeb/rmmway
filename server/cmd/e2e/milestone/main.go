@@ -30,6 +30,11 @@
 //     appears (a second pass bumps events — no storm) -> it auto-resolves
 //     when the series returns to baseline -> re-fire + manual ack/resolve
 //     work through the auth-gated API (401 without a token).
+//     6b. CAPABILITY-GATED COMMAND on the real agent (W3-3 DoD): an
+//     operator-dispatched run_script carries a capability token the agent
+//     verifies against its pinned org root before executing; the script's
+//     on-disk side effect + the recorded SUCCEEDED CommandResult prove the
+//     agent acts only inside its minted scope.
 //  7. Teardown: the demo agent service + install + seeded estate are removed.
 //
 // Usage: go run ./cmd/e2e/milestone [http-host:port] [pg-dsn] [repo-root]
@@ -40,6 +45,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -280,8 +286,7 @@ func main() {
 
 	// ---------------------------------------------------------------- 3.
 	step("3. one-line bootstrap via the REAL installer (systemd)")
-	if old, _ := exec.Command("systemctl", "is-active", "rmmway-agent.service").CombinedOutput();
-		strings.TrimSpace(string(old)) == "active" {
+	if old, _ := exec.Command("systemctl", "is-active", "rmmway-agent.service").CombinedOutput(); strings.TrimSpace(string(old)) == "active" {
 		die("rmmway-agent already active — not a clean machine (teardown a prior run first)")
 	}
 	env := os.Environ()
@@ -427,6 +432,17 @@ func main() {
 	}
 	info("rotation DoD: agent leaf rotated in place (same root, same listener, uplink kept streaming)")
 
+	// ---------------------------------------------------------------- 4d.
+	// W3-3 DoD, proven with the REAL agent binary: the operator dispatches
+	// a run_script; the command carries a capability token; the agent must
+	// verify it (org root + device + capability + command + expiry) before
+	// executing — and the proof is the script's side effect on THIS disk.
+	step("4d. capability-gated command on the REAL agent (W3-3 DoD)")
+	if err := verifyCommandCapability(httpAddr, boot.DeviceID); err != nil {
+		die("capability command DoD: %v", err)
+	}
+	info("capability DoD: real agent verified the org-root token, ran the script (marker on disk), reported SUCCEEDED")
+
 	// ---------------------------------------------------------------- 5.
 	// The precision + live-fault windows are pinned to the current UTC hour;
 	// don't let the run straddle an hour boundary mid-measurement.
@@ -480,6 +496,7 @@ func main() {
 	fmt.Printf("  dedup: 1 open alert per faulted series; auto-resolve + manual ack/resolve OK\n")
 	fmt.Printf("  mTLS (W3-1): agent's own leaf streamed live on :50052; non-org leaf rejected at handshake\n")
 	fmt.Printf("  cert rotation (W3-2): leaf renewed live via RefreshLeaf; same root + listener, uplink undropped\n")
+	fmt.Printf("  capability tokens (W3-3): real agent verified the org-root token before executing; marker on disk + SUCCEEDED recorded\n")
 	fmt.Printf("  real artifacts: installer + systemd service + agent binary + live collectors\n")
 	fmt.Println("=======================================================")
 }
@@ -726,11 +743,11 @@ func estatePrecision(httpAddr, pgDSN string, pg *pgx.Conn) estateStats {
 	}
 	precision := 0.0
 	if tp+fp > 0 {
-		precision = float64(tp) / float64(tp + fp)
+		precision = float64(tp) / float64(tp+fp)
 	}
 	recall := 0.0
 	if tp+fn > 0 {
-		recall = float64(tp) / float64(tp + fn)
+		recall = float64(tp) / float64(tp+fn)
 	}
 	info("engine scored %d series (live pass); flagged %d estate series (TP=%d FP=%d FN=%d), max z=%.1f",
 		runOut.Series, len(liveFlagged), tp, fp, fn, maxZ)
@@ -1097,7 +1114,7 @@ func verifyRotation(httpAddr string, pg *pgx.Conn) error {
 			}
 			return &kp, nil
 		},
-		RootCAs:  rootPool,
+		RootCAs:    rootPool,
 		ServerName: host,
 	})
 	conn, err := grpc.NewClient(mtlsAddr, grpc.WithTransportCredentials(creds))
@@ -1305,6 +1322,126 @@ func verifyMTLS(httpAddr string, pg *pgx.Conn) error {
 	} else {
 		info("random cert rejected as expected (%v)", err)
 	}
+	return nil
+}
+
+// ---- 4d. W3-3 capability-gated command on the real agent -----------------------
+
+// verifyCommandCapability proves the W3-3 DoD against the REAL agent binary
+// running under systemd: an operator-dispatched run_script carries a
+// capability token; the agent verifies it against the org root it pinned at
+// enroll (signature, device, capability, command binding, expiry) and only
+// then executes. The proof is twofold:
+//
+//   - the script's side effect exists on THIS machine (the agent really
+//     ran a shell process — nothing simulated);
+//   - the SUCCEEDED CommandResult (with the script's stdout) was reported
+//     over the stream and is served by the command audit endpoint.
+//
+// A REFUSED result (or a missing marker) fails the step: the agent may act
+// only inside its minted scope.
+func verifyCommandCapability(httpAddr, devID string) error {
+	// Operator login; the default dev session holds ALL capabilities.
+	lb, _ := json.Marshal(map[string]string{"username": "admin", "password": "admin"})
+	var loginOut struct {
+		Token        string   `json:"token"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if _, err := postJSON(httpAddr+"/api/login", lb, &loginOut); err != nil {
+		return fmt.Errorf("login: %w", err)
+	}
+	hasRunScript := false
+	for _, c := range loginOut.Capabilities {
+		if c == "rmmway.run_script" {
+			hasRunScript = true
+		}
+	}
+	if !hasRunScript {
+		return fmt.Errorf("operator session lacks rmmway.run_script (caps: %v)", loginOut.Capabilities)
+	}
+
+	// The agent runs under ProtectSystem=strict + PrivateTmp (the
+	// installer's hardening): the only writable path is /etc/rmmway, so
+	// the marker lands there (visible to the harness, which runs as root).
+	marker := "/etc/rmmway/w33-marker"
+	_ = os.Remove(marker)
+	script := "echo rmmway-w33-ok > " + marker + " && echo w33-executed"
+	body, _ := json.Marshal(map[string]any{
+		"action": "run_script",
+		"lang":   "sh",
+		"script": base64.StdEncoding.EncodeToString([]byte(script)),
+	})
+	var dOut struct {
+		CommandID string `json:"command_id"`
+		Error     string `json:"error"`
+	}
+	// The 4b/4c probe streams supersede the agent's stream (one live stream
+	// per device); the agent re-registers within its reconnect window, so
+	// dispatch retries over it.
+	var derr error
+	for i := 0; i < 40; i++ {
+		var attempt struct {
+			CommandID string `json:"command_id"`
+			Error     string `json:"error"`
+		}
+		var code int
+		code, derr = requestJSON("POST", httpAddr+"/api/devices/"+devID+"/commands", body,
+			map[string]string{"Authorization": "Bearer " + loginOut.Token}, &attempt)
+		if derr == nil {
+			dOut = attempt
+			break
+		}
+		if code == http.StatusBadGateway { // 502: no live stream (yet)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		break
+	}
+	if derr != nil {
+		return fmt.Errorf("dispatch run_script: %w (status %d)", derr, 0)
+	}
+	info("dispatched %s (run_script sh); the agent must verify its capability token first", dOut.CommandID)
+
+	// Terminal statuses: SUCCEEDED=3, FAILED=4, REFUSED=7 (commands.proto).
+	var res struct {
+		Results []struct {
+			CommandID  string `json:"command_id"`
+			Status     int32  `json:"status"`
+			ExitCode   int32  `json:"exit_code"`
+			StdoutTail string `json:"stdout_tail"`
+			Error      string `json:"error"`
+		} `json:"results"`
+	}
+	if err := pollUntil("terminal CommandResult for "+dOut.CommandID, 30*time.Second, func() error {
+		if err := getJSON(httpAddr+"/admin/devices/"+devID+"/commands", &res); err != nil {
+			return err
+		}
+		for _, r := range res.Results {
+			if r.CommandID == dOut.CommandID {
+				switch r.Status {
+				case 3: // SUCCEEDED
+					return nil
+				case 4, 7: // FAILED / REFUSED
+					return fmt.Errorf("terminal %d (exit=%d err=%q) — the capability gate failed", r.Status, r.ExitCode, r.Error)
+				default:
+					return fmt.Errorf("result %d not terminal yet", r.Status)
+				}
+			}
+		}
+		return fmt.Errorf("no result recorded yet")
+	}); err != nil {
+		return fmt.Errorf("wait for SUCCEEDED: %w", err)
+	}
+
+	// The on-disk side effect: a REAL shell process ran on this machine.
+	b, err := os.ReadFile(marker)
+	if err != nil {
+		return fmt.Errorf("marker file %s missing — the agent did not actually run the script: %w", marker, err)
+	}
+	if !strings.Contains(string(b), "rmmway-w33-ok") {
+		return fmt.Errorf("marker file content wrong: %q", b)
+	}
+	info("real agent executed the script: %s written on disk (capability token verified first)", marker)
 	return nil
 }
 

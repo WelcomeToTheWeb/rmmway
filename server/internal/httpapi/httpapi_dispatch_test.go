@@ -95,6 +95,99 @@ func TestDispatchAuthGate(t *testing.T) {
 	}
 }
 
+// TestDispatchCapabilityGate (W3-3): the operator's SESSION token carries a
+// capability set; dispatching an action the session doesn't hold is refused
+// with 403 before anything reaches the dispatcher. A session minted without
+// capabilities (pre-W3-3 token shape) can't dispatch at all.
+func TestDispatchCapabilityGate(t *testing.T) {
+	// Restricted session: run_script only (no reboot).
+	devs := store.NewMemoryDeviceStore()
+	_ = devs.Register(context.Background(), "dev-abc", "fileserver-01", "linux", "amd64", "0.1.0", []string{"10.0.0.9"}, 30, 30)
+	calls := &[]dispatchCall{}
+	s := New(Config{
+		Devices:       devs,
+		JWTSecret:     []byte("test-secret"),
+		TokenLifetime: time.Hour,
+		AdminUser:     "admin",
+		AdminPassword: "s3cret",
+		Dispatch: func(deviceID string, action any) (string, error) {
+			*calls = append(*calls, dispatchCall{device: deviceID, action: action})
+			return "cmd-1", nil
+		},
+		AdminCaps: []string{"rmmway.run_script"},
+	})
+	_, body := login(t, s, "admin", "s3cret")
+	tok, _ := body["token"].(string)
+
+	// The login response advertises the session's capabilities.
+	caps, _ := body["capabilities"].([]any)
+	if len(caps) != 1 || caps[0] != "rmmway.run_script" {
+		t.Fatalf("login capabilities: %v", body["capabilities"])
+	}
+
+	// reboot: the session lacks rmmway.reboot -> 403, dispatcher untouched.
+	code, out := postDispatch(t, s, tok, "/api/devices/dev-abc/commands", dispatchRequest{Action: "reboot"})
+	if code != http.StatusForbidden {
+		t.Fatalf("reboot without cap: got %d, want 403 (%v)", code, out)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("dispatcher must not be called on 403, got %d calls", len(*calls))
+	}
+	// run_script: the session holds it -> 200.
+	code, _ = postDispatch(t, s, tok, "/api/devices/dev-abc/commands",
+		dispatchRequest{Action: "run_script", Lang: "sh", Script: base64.StdEncoding.EncodeToString([]byte("echo hi"))})
+	if code != http.StatusOK {
+		t.Fatalf("run_script with cap: got %d, want 200", code)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected exactly 1 dispatch call, got %d", len(*calls))
+	}
+
+	// A legacy token (no caps claim) authenticates but cannot dispatch.
+	legacy, err := ingest.MintOperatorJWT([]byte("test-secret"), time.Hour, nil)
+	if err != nil {
+		t.Fatalf("mint legacy: %v", err)
+	}
+	code, _ = postDispatch(t, s, legacy, "/api/devices/dev-abc/commands", dispatchRequest{Action: "run_script", Lang: "sh", Script: base64.StdEncoding.EncodeToString([]byte("echo hi"))})
+	if code != http.StatusForbidden {
+		t.Fatalf("no-caps session: got %d, want 403", code)
+	}
+}
+
+// TestDeviceCommandsEndpoint (W3-3): GET {/api|/admin}/devices/{id}/commands
+// serves the pending + recorded command state, auth-gated under /api.
+func TestDeviceCommandsEndpoint(t *testing.T) {
+	devs := store.NewMemoryDeviceStore()
+	_ = devs.Register(context.Background(), "dev-abc", "fileserver-01", "linux", "amd64", "0.1.0", []string{"10.0.0.9"}, 30, 30)
+	s := New(Config{
+		Devices:       devs,
+		JWTSecret:     []byte("test-secret"),
+		AdminUser:     "admin",
+		AdminPassword: "s3cret",
+		CommandState: func(deviceID string) ([]*agentv1.Command, []*agentv1.CommandResult) {
+			return []*agentv1.Command{{Id: "cmd-9"}},
+				[]*agentv1.CommandResult{{CommandId: "cmd-9", Status: agentv1.CommandResult_REFUSED}}
+		},
+	})
+	// /api without a token -> 401.
+	if code := doAuthed(t, s, http.MethodGet, "/api/devices/dev-abc/commands", ""); code != http.StatusUnauthorized {
+		t.Fatalf("no token: got %d, want 401", code)
+	}
+	// /admin is open: 200 with the wired state.
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/commands", ""); code != http.StatusOK {
+		t.Fatalf("admin commands: got %d, want 200", code)
+	}
+	// Unknown device -> 404.
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-nope/commands", ""); code != http.StatusNotFound {
+		t.Fatalf("unknown device: got %d, want 404", code)
+	}
+	// Not wired -> 503.
+	s2 := New(Config{Devices: devs, JWTSecret: []byte("test-secret"), AdminUser: "admin", AdminPassword: "s3cret"})
+	if code := doAuthed(t, s2, http.MethodGet, "/admin/devices/dev-abc/commands", ""); code != http.StatusServiceUnavailable {
+		t.Fatalf("nil commandState: got %d, want 503", code)
+	}
+}
+
 func TestDispatchActionValidation(t *testing.T) {
 	s, _, _ := newDispatchServer(t, false)
 	_, body := login(t, s, "admin", "s3cret")

@@ -10,6 +10,8 @@ package uplink
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -18,6 +20,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/welcometotheweb/rmmway/agent/internal/caps"
+	"github.com/welcometotheweb/rmmway/agent/internal/exec"
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 )
 
@@ -56,12 +60,25 @@ func (c *Config) withDefaults() {
 
 // Uplink owns one authenticated Stream for a device.
 type Uplink struct {
-	client  Streamer
-	devID   string
-	jwt     string
-	cfg     Config
-	collect func(ctx context.Context) (*agentv1.MetricBatch, error) // W1-2 collector
-	rng     *rand.Rand
+	client    Streamer
+	devID     string
+	jwt       string
+	cfg       Config
+	collect   func(ctx context.Context) (*agentv1.MetricBatch, error) // W1-2 collector
+	commander *Commander                                              // W3-3 (nil = legacy log-only)
+	rng       *rand.Rand
+}
+
+// Commander (W3-3) turns a dispatched command into verified action: it
+// checks the command's capability token (Verifier, against the pinned org
+// root), and only then runs it (Exec), reporting CommandResults on the
+// stream. A nil Verifier = legacy mode (log-only, no capability
+// enforcement — pre-W3-3 plain-listener deployments keep working).
+type Commander struct {
+	DevID    string
+	Verifier *caps.Verifier
+	Exec     *exec.Executor
+	Logger   *slog.Logger
 }
 
 // Option customizes a Uplink.
@@ -73,6 +90,17 @@ func WithCollector(fn func(ctx context.Context) (*agentv1.MetricBatch, error)) O
 		if fn != nil {
 			u.collect = fn
 		}
+	}
+}
+
+// WithCommander enables W3-3 command handling (capability-gated execution
+// + CommandResult reporting). Without it the agent only logs commands.
+func WithCommander(c *Commander) Option {
+	return func(u *Uplink) {
+		if c != nil && c.Logger == nil {
+			c.Logger = slog.Default()
+		}
+		u.commander = c
 	}
 }
 
@@ -155,12 +183,17 @@ func (u *Uplink) streamSession(ctx context.Context) error {
 			}
 			switch p := resp.GetPayload().(type) {
 			case *agentv1.StreamResponse_Command:
-				// W1-4 only proves the downlink is alive and authenticated.
-				// Executing commands (RunScript/Reboot) + CommandResult
-				// reporting is a later task; we log receipt here so the
-				// full round-trip is exercised on the wire.
-				u.cfg.Logger.Info("command received",
-					"id", p.Command.GetId(), "action", actionName(p.Command.GetAction()))
+				// W1-4 proves the downlink is alive and authenticated.
+				// W3-3 adds the capability gate: verify the command's
+				// token against the pinned org root, act only inside the
+				// minted scope, and report CommandResults (RECEIVED, then
+				// the final status). Commands run SEQUENTIALLY in this
+				// goroutine (a reboot kills the process anyway); a send
+				// failure ends the session so the reconnect loop re-establishes.
+				if err := u.handleCommand(ctx, stream, p.Command); err != nil {
+					u.cfg.Logger.Warn("command handling ended the downlink", "err", err)
+					return
+				}
 			case *agentv1.StreamResponse_HeartbeatAck:
 				// cadence steering is a future hook; keep current for now.
 			}
@@ -212,6 +245,115 @@ func (u *Uplink) sendHeartbeat(ctx context.Context, stream agentv1.AgentService_
 		Payload: &agentv1.StreamRequest_Heartbeat{Heartbeat: hb},
 	})
 }
+
+// handleCommand (W3-3) is the agent's capability gate + executor for one
+// dispatched command. It runs in the downlink goroutine (commands execute
+// sequentially) and reports via CommandResult frames:
+//
+//	unknown action            -> UNSUPPORTED (nothing to check)
+//	bad/missing/expired token -> REFUSED (NOT executed)
+//	valid                     -> RECEIVED, execute, final SUCCEEDED/FAILED/TIMED_OUT
+//
+// A nil Commander (legacy deployment, no pinned org root) keeps the
+// pre-W3-3 behavior: log receipt only.
+func (u *Uplink) handleCommand(ctx context.Context, stream agentv1.AgentService_StreamClient, cmd *agentv1.Command) error {
+	if u.commander == nil {
+		u.cfg.Logger.Info("command received (no capability enforcement — legacy channel)",
+			"id", cmd.GetId(), "action", actionName(cmd.GetAction()))
+		return nil
+	}
+	c := u.commander
+	capName, token, ok := caps.ForCommand(cmd)
+	if !ok {
+		_ = u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_UNSUPPORTED, 0, nil, nil, "unsupported action type")
+		return nil
+	}
+	// THE GATE: the token must verify against the pinned org root for this
+	// device AND this capability. A valid mTLS channel alone is not enough.
+	if err := c.Verifier.Check(token, capName, cmd.GetId()); err != nil {
+		c.Logger.Warn("command refused", "id", cmd.GetId(), "capability", capName, "err", err)
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_REFUSED, 0, nil, nil, err.Error())
+	}
+	if err := u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_RECEIVED, 0, nil, nil, ""); err != nil {
+		return err
+	}
+	switch cmd.GetAction().(type) {
+	case *agentv1.Command_RunScript:
+		return u.runScriptCommand(ctx, c, stream, cmd)
+	case *agentv1.Command_Reboot:
+		return u.rebootCommand(ctx, c, stream, cmd)
+	}
+	return nil
+}
+
+func (u *Uplink) runScriptCommand(ctx context.Context, c *Commander, stream agentv1.AgentService_StreamClient, cmd *agentv1.Command) error {
+	rs := cmd.GetRunScript()
+	script, err := base64.StdEncoding.DecodeString(rs.GetScriptB64())
+	if err != nil {
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, "script_b64: "+err.Error())
+	}
+	timeout := c.Exec.TimeoutFor(cmd.GetTimeoutS())
+	c.Logger.Info("executing command", "id", cmd.GetId(), "lang", rs.GetLang(), "timeout", timeout.String())
+	exitCode, out, errTail, err := c.Exec.RunScript(ctx, rs.GetLang(), script, rs.GetArgs(), timeout)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_TIMED_OUT, int32(exitCode), out, errTail, "timeout after "+timeout.String())
+	case err != nil:
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, int32(exitCode), out, errTail, err.Error())
+	case exitCode != 0:
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, int32(exitCode), out, errTail, "exit code "+itoa(exitCode))
+	default:
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_SUCCEEDED, int32(exitCode), out, errTail, "")
+	}
+}
+
+func (u *Uplink) rebootCommand(ctx context.Context, c *Commander, stream agentv1.AgentService_StreamClient, cmd *agentv1.Command) error {
+	// The host is about to go away: report first, wait the delay (0 = a
+	// short flush window so the result actually reaches the server), then
+	// reboot. The process usually does not return from Reboot.
+	if err := u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_SUCCEEDED, 0, nil, nil, "reboot scheduled"); err != nil {
+		return err
+	}
+	delay := time.Duration(cmd.GetReboot().GetDelayS()) * time.Second
+	if delay <= 0 {
+		delay = 2 * time.Second
+	}
+	select {
+	case <-time.After(delay):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := c.Exec.Reboot(ctx); err != nil {
+		c.Logger.Error("reboot failed", "id", cmd.GetId(), "err", err)
+	}
+	return nil // the reboot is in motion; keep the session if the exec survived
+}
+
+// sendResult reports one CommandResult uplink frame (W3-3).
+func (u *Uplink) sendResult(stream agentv1.AgentService_StreamClient, cmdID string, st agentv1.CommandResult_Status, exitCode int32, stdout, stderr []byte, errMsg string) error {
+	res := &agentv1.CommandResult{
+		CommandId:     cmdID,
+		Status:        st,
+		ExitCode:      exitCode,
+		StdoutTail:    tail(stdout),
+		StderrTail:    tail(stderr),
+		Error:         errMsg,
+		CompletedAtMs: time.Now().UnixMilli(),
+	}
+	return stream.Send(&agentv1.StreamRequest{
+		Payload: &agentv1.StreamRequest_CommandResult{CommandResult: res},
+	})
+}
+
+// tail returns the last 4KB of b (the CommandResult stdout/stderr contract).
+func tail(b []byte) string {
+	if len(b) > 4096 {
+		b = b[len(b)-4096:]
+	}
+	return string(b)
+}
+
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
 
 // actionName renders the command's action oneof for logging.
 func actionName(a any) string {

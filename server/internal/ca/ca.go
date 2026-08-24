@@ -42,10 +42,10 @@ const (
 // Root is the org root CA: a self-signed CA cert + the private key that signs
 // everything.
 type Root struct {
-	cert     *x509.Certificate
-	key      *ecdsa.PrivateKey
-	certPEM  []byte
-	keyPEM   []byte
+	cert    *x509.Certificate
+	key     *ecdsa.PrivateKey
+	certPEM []byte
+	keyPEM  []byte
 }
 
 // ---- PEM helpers -------------------------------------------------------------
@@ -137,6 +137,14 @@ func (r *Root) CertPEM() []byte { return r.certPEM }
 // KeyPEM returns the root signing key (PEM) — persisted, never transmitted.
 func (r *Root) KeyPEM() []byte { return r.keyPEM }
 
+// Cert returns the parsed root CA certificate (W3-3: capability-token
+// verification needs its ECDSA public key).
+func (r *Root) Cert() *x509.Certificate { return r.cert }
+
+// Key returns the root ECDSA private key (W3-3: capability tokens are
+// signed with it — the same key that signs device leaves).
+func (r *Root) Key() *ecdsa.PrivateKey { return r.key }
+
 // CertPool builds an x509 pool containing just the org root, for use as
 // tls.Config.ClientCAs (server) or RootCAs (a client that only trusts us).
 func (r *Root) CertPool() *x509.CertPool {
@@ -213,14 +221,14 @@ func (r *Root) IssueServerCert(names []string, ttl time.Duration) (certPEMOut, k
 	}
 	dns, ips := splitNames(names)
 	tmpl := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "rmmway-server", Organization: []string{"RMMWay"}},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(ttl),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     dns,
-		IPAddresses:  ips,
+		SerialNumber:   serial,
+		Subject:        pkix.Name{CommonName: "rmmway-server", Organization: []string{"RMMWay"}},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(ttl),
+		KeyUsage:       x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:       dns,
+		IPAddresses:    ips,
 		AuthorityKeyId: x509v3SubjectKeyId(r.cert),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, r.cert, &key.PublicKey, r.key)

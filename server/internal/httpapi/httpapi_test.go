@@ -62,27 +62,40 @@ func doAuthed(t *testing.T, s *Server, method, path, token string) int {
 
 func TestOperatorJWTRoundTrip(t *testing.T) {
 	secret := []byte("test-secret")
-	tok, err := ingest.MintOperatorJWT(secret, time.Hour)
+	tok, err := ingest.MintOperatorJWT(secret, time.Hour, []string{"rmmway.run_script"})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
 	}
-	if !ingest.ParseOperatorJWT(secret, tok) {
+	capList, ok := ingest.ParseOperatorJWT(secret, tok)
+	if !ok {
 		t.Fatal("valid operator token rejected")
 	}
+	if len(capList) != 1 || capList[0] != "rmmway.run_script" {
+		t.Fatalf("caps claim not round-tripped: %v", capList)
+	}
+	// A token minted without capabilities parses with an empty set
+	// (secure by default: it cannot dispatch anything).
+	tokNoCaps, err := ingest.MintOperatorJWT(secret, time.Hour, nil)
+	if err != nil {
+		t.Fatalf("mint no-caps: %v", err)
+	}
+	if c, ok := ingest.ParseOperatorJWT(secret, tokNoCaps); !ok || len(c) != 0 {
+		t.Fatalf("no-caps token: caps=%v ok=%v, want empty+ok", c, ok)
+	}
 	// Wrong secret must not verify.
-	if ingest.ParseOperatorJWT([]byte("other-secret"), tok) {
+	if _, ok := ingest.ParseOperatorJWT([]byte("other-secret"), tok); ok {
 		t.Fatal("token verified under the wrong secret")
 	}
 	// Expired token must not verify.
-	expired, err := ingest.MintOperatorJWT(secret, -time.Minute)
+	expired, err := ingest.MintOperatorJWT(secret, -time.Minute, []string{"rmmway.reboot"})
 	if err != nil {
 		t.Fatalf("mint expired: %v", err)
 	}
-	if ingest.ParseOperatorJWT(secret, expired) {
+	if _, ok := ingest.ParseOperatorJWT(secret, expired); ok {
 		t.Fatal("expired token accepted")
 	}
 	// A garbage token must not verify.
-	if ingest.ParseOperatorJWT(secret, "not-a-jwt") {
+	if _, ok := ingest.ParseOperatorJWT(secret, "not-a-jwt"); ok {
 		t.Fatal("malformed token accepted")
 	}
 }

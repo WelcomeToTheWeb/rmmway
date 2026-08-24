@@ -19,6 +19,7 @@ import (
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ca"
+	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -38,6 +39,10 @@ type Config struct {
 	// mTLS identity fields in EnrollResponse stay empty (pre-W3-1
 	// deployments / unit tests keep working on the plain listener).
 	OrgCA *ca.Manager
+	// Caps (W3-3) mints the per-action capability token embedded in every
+	// dispatched command. Nil = legacy dispatch (no capability tokens;
+	// agents without a pinned org root keep working unscoped).
+	Caps *caps.Issuer
 }
 
 func (c *Config) withDefaults() {
@@ -69,16 +74,19 @@ type Service struct {
 	// the mint endpoint; for W1-5, MintBootstrapToken is the API).
 	mu              sync.Mutex
 	bootstrapTokens map[string]string
-	// streams: live agent downlink writers, device_id -> chan.
-	streams map[string]chan *agentv1.StreamResponse
+	// streamW: live agent downlink writers, device_id -> writer.
 	streamW map[string]*streamWriter
 }
 
 // streamWriter couples a device's response channel to its gRPC server stream
-// so command dispatch can push to a live agent.
+// so command dispatch can push to a live agent. ctx/cancel let a NEWER stream
+// for the same device terminate the older one (one live stream per device):
+// the evicted agent sees its stream end and reconnects, re-registering.
 type streamWriter struct {
-	devID string
-	ch    chan *agentv1.StreamResponse
+	devID  string
+	ch     chan *agentv1.StreamResponse
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewService builds an AgentService. When devices is nil, an in-memory
@@ -94,10 +102,9 @@ func NewService(cfg Config, metrics store.MetricsSink, devices store.DeviceStore
 		devices:         devices,
 		metrics:         metrics,
 		bootstrapTokens: make(map[string]string),
-		streams:         make(map[string]chan *agentv1.StreamResponse),
 		streamW:         make(map[string]*streamWriter),
 	}
-	s.dispatch = NewDispatcher(s)
+	s.dispatch = NewDispatcher(s, cfg.Caps)
 	return s
 }
 
@@ -244,26 +251,39 @@ const (
 )
 
 // OperatorJWT is the operator variant of JWTClaims.
+//
+// W3-3: the session token also carries the operator's capability set
+// (caps) — the time-boxed session/capability token at the human layer.
+// Dispatching an action the session doesn't hold is refused (403) before
+// any command reaches the estate. Tokens minted before W3-3 (no caps
+// claim) parse with an EMPTY set: secure by default, they simply cannot
+// dispatch (re-login mints a caps-bearing session).
 type OperatorJWT struct {
+	Caps []string `json:"caps,omitempty"`
 	jwt.RegisteredClaims
 }
 
-// MintOperatorJWT signs an operator token valid for lifetime.
-func MintOperatorJWT(secret []byte, lifetime time.Duration) (string, error) {
+// MintOperatorJWT signs an operator token valid for lifetime, carrying the
+// session's capability set (nil = no capabilities).
+func MintOperatorJWT(secret []byte, lifetime time.Duration, capList []string) (string, error) {
 	now := time.Now()
-	claims := OperatorJWT{RegisteredClaims: jwt.RegisteredClaims{
-		Subject:   OperatorSubject,
-		Issuer:    JWTIssuer,
-		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(lifetime)),
-	}}
+	claims := OperatorJWT{
+		Caps: capList,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   OperatorSubject,
+			Issuer:    JWTIssuer,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(lifetime)),
+		},
+	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret)
 }
 
-// ParseOperatorJWT validates a Bearer-style operator token. It returns false
-// for any token that isn't a well-formed, correctly signed, unexpired
-// operator token (wrong kind, bad signature, expired, or malformed).
-func ParseOperatorJWT(secret []byte, tok string) bool {
+// ParseOperatorJWT validates a Bearer-style operator token. It returns the
+// session's capability set and false for any token that isn't a
+// well-formed, correctly signed, unexpired operator token (wrong kind, bad
+// signature, expired, or malformed).
+func ParseOperatorJWT(secret []byte, tok string) (capList []string, ok bool) {
 	claims := &OperatorJWT{}
 	_, err := jwt.ParseWithClaims(tok, claims, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -272,9 +292,12 @@ func ParseOperatorJWT(secret []byte, tok string) bool {
 		return secret, nil
 	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 	if err != nil {
-		return false
+		return nil, false
 	}
-	return claims.Subject == OperatorSubject && claims.Issuer == JWTIssuer
+	if claims.Subject != OperatorSubject || claims.Issuer != JWTIssuer {
+		return nil, false
+	}
+	return claims.Caps, true
 }
 
 // ---- AgentService implementation -------------------------------------------
@@ -378,20 +401,34 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 		return status.Error(codes.Unauthenticated, "unknown device")
 	}
 
-	// Register the live stream for command dispatch.
+	// Register the live stream for command dispatch. One live stream per
+	// device: a newer stream supersedes the older one — the older agent is
+	// terminated (Aborted) so it reconnects and re-registers. Without the
+	// explicit termination the evicted stream would stay open but untracked
+	// (still sending heartbeats, invisible to dispatch — the W3-3 e2e caught
+	// this: an operator mTLS probe stream orphaned the real agent's dispatch
+	// registration).
+	ctx, cancel := context.WithCancel(stream.Context())
 	ch := make(chan *agentv1.StreamResponse, 16)
 	s.mu.Lock()
 	old, existed := s.streamW[devID]
 	if existed {
-		// Close the prior stream's writer so the old connection gets told
-		// to go away (one live stream per device).
+		// Close the prior stream's downlink and cancel its context: its
+		// handler notices on the next uplink frame and ends the RPC with
+		// Aborted, so the evicted agent reconnects and re-registers.
 		close(old.ch)
+		old.cancel()
 	}
-	s.streamW[devID] = &streamWriter{devID: devID, ch: ch}
+	s.streamW[devID] = &streamWriter{devID: devID, ch: ch, ctx: ctx, cancel: cancel}
 	s.mu.Unlock()
 	defer func() {
+		cancel()
 		s.mu.Lock()
 		if w := s.streamW[devID]; w != nil && w.ch == ch {
+			// Close the downlink channel (same lock Push takes, so no
+			// send-on-closed race) so the pump goroutine exits and the
+			// dead stream can no longer look dispatchable.
+			close(ch)
 			delete(s.streamW, devID)
 		}
 		s.mu.Unlock()
@@ -406,17 +443,40 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 		}
 	}()
 
-	_ = s.devices.Touch(stream.Context(), devID)
+	_ = s.devices.Touch(ctx, devID)
 	s.cfg.Indexer.Touch(devID) // re-index on (re)connect: online/last_seen flipped
+	// The Recv loop must be interruptible: when a NEWER stream supersedes
+	// this one (see registration above), ctx is cancelled and the handler
+	// ends the RPC with Aborted — the evicted agent's Recv then fails and
+	// its uplink reconnects, re-registering the fresh stream. Without this,
+	// an evicted stream stays open (heartbeats keep landing) but invisible
+	// to dispatch until the client happens to reconnect.
 	for {
-		frame, err := stream.Recv()
-		if err != nil {
-			return err // client disconnect / RPC error
+		rc := make(chan struct {
+			frame *agentv1.StreamRequest
+			err   error
+		}, 1)
+		go func() {
+			f, e := stream.Recv()
+			rc <- struct {
+				frame *agentv1.StreamRequest
+				err   error
+			}{f, e}
+		}()
+		var frame *agentv1.StreamRequest
+		select {
+		case <-ctx.Done():
+			return status.Error(codes.Aborted, "stream superseded by a newer connection")
+		case r := <-rc:
+			if r.err != nil {
+				return r.err // client disconnect / RPC error
+			}
+			frame = r.frame
 		}
 		switch p := frame.GetPayload().(type) {
 		case *agentv1.StreamRequest_Heartbeat:
 			hb := p.Heartbeat
-			_ = s.devices.Touch(stream.Context(), devID)
+			_ = s.devices.Touch(ctx, devID)
 			if b := hb.GetMetrics(); b != nil && len(b.GetSamples()) > 0 {
 				if werr := s.metrics.Write(devID, b); werr != nil {
 					log.Printf("metrics write (heartbeat) %s: %v", devID, werr)
@@ -439,6 +499,14 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 					// the agent's offline spool + replay covers the gap.
 					continue
 				}
+			}
+		case *agentv1.StreamRequest_CommandResult:
+			// W3-3: the agent's report on a dispatched command — RECEIVED
+			// first, then the final status (SUCCEEDED/FAILED/.../REFUSED).
+			// Recorded for the dispatcher; a REFUSED result means the agent's
+			// capability check failed and the command was NOT executed.
+			if res := p.CommandResult; res != nil && res.GetCommandId() != "" {
+				s.dispatch.RecordResult(res)
 			}
 		}
 	}

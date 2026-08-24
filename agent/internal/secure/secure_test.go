@@ -217,10 +217,10 @@ func TestTransportCredentialsIncompleteIdentity(t *testing.T) {
 	full := newTestIdentity(t, "dev-001", "127.0.0.1", org)
 
 	cases := map[string]TLSIdentity{
-		"nil":      nil,
-		"no root":  &testIdentity{leafCertPEM: full.leafCertPEM, leafKeyPEM: full.leafKeyPEM},
-		"no key":   &testIdentity{leafCertPEM: full.leafCertPEM, orgRootPEM: full.orgRootPEM},
-		"no leaf":  &testIdentity{leafKeyPEM: full.leafKeyPEM, orgRootPEM: full.orgRootPEM},
+		"nil":     nil,
+		"no root": &testIdentity{leafCertPEM: full.leafCertPEM, leafKeyPEM: full.leafKeyPEM},
+		"no key":  &testIdentity{leafCertPEM: full.leafCertPEM, orgRootPEM: full.orgRootPEM},
+		"no leaf": &testIdentity{leafKeyPEM: full.leafKeyPEM, orgRootPEM: full.orgRootPEM},
 	}
 	for name, id := range cases {
 		if _, err := New(id).TransportCredentials("127.0.0.1"); err == nil {

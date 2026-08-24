@@ -112,6 +112,12 @@ message StreamRequest {
   oneof payload {
     Heartbeat heartbeat = 1;
     MetricBatch metrics = 2;
+    // W3-3: the agent's report on a dispatched command. Sent first as
+    // RECEIVED (the command was accepted + its capability token verified),
+    // then again with the final status (SUCCEEDED / FAILED / TIMED_OUT /
+    // REFUSED / UNSUPPORTED). REFUSED means the capability check failed —
+    // the agent did NOT execute the command.
+    CommandResult command_result = 3;
   }
 }
 

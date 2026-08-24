@@ -67,7 +67,7 @@ type Config struct {
 	// It applies to the first rotation only; afterwards the normal
 	// threshold governs.
 	RotateAfter time.Duration
-	Logger     *slog.Logger // nil -> default
+	Logger      *slog.Logger // nil -> default
 }
 
 func (c *Config) withDefaults() {
@@ -210,8 +210,8 @@ func (r *Rotator) refresh(ctx context.Context) error {
 	rpcCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	resp, err := r.client.RefreshLeaf(rpcCtx, &agentv1.RefreshLeafRequest{
-		Hostname:              r.hostname,
-		CurrentLeafExpiresMs:  cert.NotAfter.UnixMilli(),
+		Hostname:             r.hostname,
+		CurrentLeafExpiresMs: cert.NotAfter.UnixMilli(),
 	})
 	if err != nil {
 		return fmt.Errorf("refresh RPC: %w", err)

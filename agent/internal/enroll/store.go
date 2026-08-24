@@ -32,7 +32,7 @@ type Identity struct {
 // org root never changes. The leaf fields are guarded by a mutex because the
 // uplink reads them at handshake time while the rotator goroutine writes them.
 type TLSIdentity struct {
-	mu         sync.RWMutex
+	mu          sync.RWMutex
 	LeafCertPEM string `json:"leaf_cert_pem"`
 	LeafKeyPEM  string `json:"leaf_key_pem"`
 	OrgRootPEM  string `json:"org_root_ca_pem"`

@@ -10,6 +10,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -25,6 +26,7 @@ import (
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/baseline"
+	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
@@ -45,6 +47,9 @@ type Server struct {
 
 	jwtSecret     []byte
 	tokenLifetime time.Duration
+	// adminCaps (W3-3) is the capability set minted into every operator
+	// session token; dispatching an action outside it is refused (403).
+	adminCaps []string
 
 	adminUser string
 	adminSalt []byte
@@ -54,6 +59,9 @@ type Server struct {
 	// dispatch mints + pushes a command to a device's live stream (W2-2).
 	// Nil disables /api/devices/{id}/commands.
 	dispatch func(deviceID string, action any) (commandID string, err error)
+	// commandState (W3-3) serves the device's pending commands + recorded
+	// results. Nil disables GET /{api|admin}/devices/{id}/commands.
+	commandState func(deviceID string) (pending []*agentv1.Command, results []*agentv1.CommandResult)
 }
 
 // Config wires a Server. AdminPassword is hashed with a fresh per-boot salt
@@ -70,6 +78,12 @@ type Config struct {
 	// Dispatch mints + pushes a command to a device's live stream (W2-2);
 	// nil disables /api/devices/{id}/commands.
 	Dispatch func(deviceID string, action any) (commandID string, err error)
+	// CommandState serves GET {/api|/admin}/devices/{id}/commands (W3-3):
+	// the device's pending commands + recorded results (nil disables).
+	CommandState func(deviceID string) (pending []*agentv1.Command, results []*agentv1.CommandResult)
+	// AdminCaps is the capability set granted to operator sessions
+	// (W3-3); empty = the full Phase 1 set.
+	AdminCaps []string
 	// Baseline is the W2-3 dynamic baselining job; nil disables
 	// /api/baseline/* and /admin/baseline/*.
 	Baseline *store.Baseline
@@ -92,6 +106,9 @@ func New(cfg Config) *Server {
 	if cfg.AdminPassword == "" {
 		cfg.AdminPassword = "admin"
 	}
+	if len(cfg.AdminCaps) == 0 {
+		cfg.AdminCaps = caps.AllCapabilities
+	}
 	devices := cfg.Devices
 	if devices == nil {
 		devices = store.NewMemoryDeviceStore()
@@ -111,8 +128,10 @@ func New(cfg Config) *Server {
 		adminUser:     cfg.AdminUser,
 		adminSalt:     salt,
 		adminHash:     pbkdf2.Key([]byte(cfg.AdminPassword), salt, pbkdf2Iterations, pbkdf2KeyLen, sha256.New),
+		adminCaps:     cfg.AdminCaps,
 		mintBootstrap: cfg.MintBootstrap,
 		dispatch:      cfg.Dispatch,
+		commandState:  cfg.CommandState,
 	}
 }
 
@@ -122,7 +141,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/devices", s.requireOperator(s.deviceList))
 	// W2-2: fuzzy device search (Cmd-K backing) + command dispatch, both auth-gated.
 	mux.HandleFunc("/api/search", s.requireOperator(s.handleSearch))
-	mux.HandleFunc("/api/devices/", s.requireOperator(s.dispatchCommand))
+	mux.HandleFunc("/api/devices/", s.requireOperator(s.deviceSub))
+	// W3-3: the device's dispatched commands + results, open for e2e/ops.
+	mux.HandleFunc("/admin/devices/", s.deviceSub)
 	// W2-3: dynamic baselining — anomaly feed (auth-gated) + manual pass.
 	mux.HandleFunc("/api/baseline/anomalies", s.requireOperator(s.handleBaselineAnomalies))
 	mux.HandleFunc("/api/baseline/run", s.requireOperator(s.handleBaselineRun))
@@ -164,26 +185,49 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
 		return
 	}
-	tok, err := ingest.MintOperatorJWT(s.jwtSecret, s.tokenLifetime)
+	tok, err := ingest.MintOperatorJWT(s.jwtSecret, s.tokenLifetime, s.adminCaps)
 	if err != nil {
 		http.Error(w, "mint token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"token":  tok,
-		"expiry": time.Now().Add(s.tokenLifetime).UTC().Format(time.RFC3339),
+		"token":        tok,
+		"expiry":       time.Now().Add(s.tokenLifetime).UTC().Format(time.RFC3339),
+		"capabilities": s.adminCaps, // W3-3: what this session may dispatch
 	})
 }
 
-// requireOperator gates a handler behind a valid operator JWT.
+// capsKey carries the authenticated operator's capability set (W3-3) on the
+// request context, set by requireOperator from the session token's caps claim.
+type capsKey struct{}
+
+func sessionCaps(ctx context.Context) []string {
+	if c, ok := ctx.Value(capsKey{}).([]string); ok {
+		return c
+	}
+	return nil
+}
+
+func hasCapability(ctx context.Context, want string) bool {
+	for _, c := range sessionCaps(ctx) {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+// requireOperator gates a handler behind a valid operator JWT and binds the
+// session's capability set (W3-3) to the request context.
 func (s *Server) requireOperator(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := bearerToken(r.Header.Get("Authorization"))
-		if !ok || !ingest.ParseOperatorJWT(s.jwtSecret, tok) {
+		capList, ok2 := ingest.ParseOperatorJWT(s.jwtSecret, tok)
+		if !ok || !ok2 {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
-		next(w, r)
+		next(w, r.WithContext(context.WithValue(r.Context(), capsKey{}, capList)))
 	}
 }
 
@@ -262,20 +306,68 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
+// deviceSub routes the /{api|admin}/devices/{id}/... subtree (W2-2 + W3-3):
+//
+//	POST {id}/commands  — dispatch (auth-gated under /api, open under /admin)
+//	GET  {id}/commands  — pending commands + recorded results (W3-3)
+func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	// parts: ["api"|"admin", "devices", "<id>", "commands"]
+	if len(parts) != 4 || parts[1] != "devices" || parts[2] == "" || parts[3] != "commands" {
+		http.Error(w, "expected /devices/{id}/commands", http.StatusNotFound)
+		return
+	}
+	if r.Method == http.MethodGet {
+		s.deviceCommands(w, r, parts[2])
+		return
+	}
+	s.dispatchCommand(w, r, parts[2])
+}
+
+// deviceCommands serves the W3-3 command audit view for one device.
+//
+//	GET /{api|admin}/devices/{id}/commands
+//
+//	200 {device_id, pending: [...], results: [...]}
+//	404 unknown device
+//	503 command state not wired
+func (s *Server) deviceCommands(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if s.commandState == nil {
+		http.Error(w, "command state not configured", http.StatusServiceUnavailable)
+		return
+	}
+	ok, err := s.devices.Contains(r.Context(), deviceID)
+	if err != nil {
+		http.Error(w, "device lookup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	pending, results := s.commandState(deviceID)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_id": deviceID,
+		"pending":   pending,
+		"results":   results,
+	})
+}
+
 // dispatchCommand mints a command for a device and pushes it to its live
-// stream (W2-2 "a known action is runnable from the palette"). The agent
-// executes the action and reports a CommandResult — that execution +
-// reporting path lands with W5-1; here we prove the dispatch half: the
-// command reaches the owning agent's stream.
+// stream (W2-2 "a known action is runnable from the palette"). W3-3: the
+// operator's session token must carry the action's capability (403 if not),
+// and the pushed command carries a short-lived capability token the agent
+// verifies before acting.
 //
 // POST /api/devices/{id}/commands   {"action":"run_script"|"reboot", "lang":"sh", "script":"…", "timeout_s":0}
 //
 //	200 {command_id}            — pushed to the live stream
-//	503                          — dispatch not wired (tests) or search-less
+//	503                          — dispatch not wired (tests)
 //	400                          — bad body / unknown action / unsupported lang
+//	403                          — session lacks the action's capability (W3-3)
 //	404                          — unknown device
 //	502                          — device has no live stream (offline)
-func (s *Server) dispatchCommand(w http.ResponseWriter, r *http.Request) {
+func (s *Server) dispatchCommand(w http.ResponseWriter, r *http.Request, deviceID string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
@@ -284,14 +376,6 @@ func (s *Server) dispatchCommand(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "command dispatch not configured", http.StatusServiceUnavailable)
 		return
 	}
-	// /api/devices/{id}/commands
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	// parts: ["api","devices","<id>","commands"]
-	if len(parts) != 4 || parts[3] != "commands" || parts[2] == "" {
-		http.Error(w, "expected /api/devices/{id}/commands", http.StatusNotFound)
-		return
-	}
-	deviceID := parts[2]
 	ok, err := s.devices.Contains(r.Context(), deviceID)
 	if err != nil {
 		http.Error(w, "device lookup: "+err.Error(), http.StatusInternalServerError)
@@ -309,6 +393,18 @@ func (s *Server) dispatchCommand(w http.ResponseWriter, r *http.Request) {
 	action, err := buildCommandAction(in)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// W3-3: the operator's session token must carry this action's capability.
+	capName, ok := caps.ForAction(action)
+	if !ok {
+		http.Error(w, "no capability for action", http.StatusBadRequest)
+		return
+	}
+	if !hasCapability(r.Context(), capName) {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "session lacks capability " + capName,
+		})
 		return
 	}
 	cmdID, err := s.dispatch(deviceID, action)

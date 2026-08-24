@@ -7,6 +7,7 @@ toolchain go1.24.5
 require github.com/welcometotheweb/rmmway/proto/gen v0.0.0
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/shirou/gopsutil/v4 v4.26.7
 	google.golang.org/grpc v1.77.0
 )
