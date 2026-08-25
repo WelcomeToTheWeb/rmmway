@@ -57,8 +57,8 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
 - **W3/W4 Trust:**     5 / 8
-- **W5/W6 Automation:** 1 / 5
-- **Total:** 21 / 28
+- **W5/W6 Automation:** 2 / 5
+- **Total:** 22 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -459,15 +459,38 @@ parallel. Within a track, respect `Depends on` ordering.
   notify; replay passes add no run/dispatch/notify).
 
 #### W5-2 — Event-driven chains over NATS
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-25  ·  **Done:** —
+- **Started:** 2026-08-25  ·  **Done:** 2026-08-25 (commit `5e81a56` on `main`)
 - **Depends on:** W0-1
 - **Effort/Impact:** M / High
 - Model automations as DAGs of triggers→actions wired over NATS; visual
   composer.
 - **Definition of done:** compose `disk>90% → free → if>90% → notify` and it
-  fires correctly on the synthetic trigger.
+  fires correctly on the synthetic trigger. ✅ `server/internal/flow`: flows
+  are validated DAGs (trigger|script|check|notify) stored in
+  `0006_flows.sql` and EXECUTED over the NATS/JetStream bus
+  (stream `RMMWAY_EVENTS`, durable `flow-engine`) — every hop of every run
+  (trigger, step, command.result, notify) is a bus event; Postgres holds
+  only the replay-safe run state (conditional transitions + append-only
+  `flow_events` audit; one active run per (flow, device, source) at the DB
+  layer). Script nodes dispatch through the same capability-gated command
+  path (W3-3); the ingest `OnCommandResult` hook turns final agent answers
+  into `command.result` hops; check nodes RE-measure the metric (fresh
+  sample after the previous node) and branch then/else; sweep + sampler
+  tickers re-cover in-flight runs and publish real-metric triggers.
+  API: `GET/POST /api|admin/flows`, `GET/PATCH/DELETE /{id}`, `POST
+  /{id}/trigger` (synthetic), `GET /runs[/{id}]` (+node log), `POST
+  sweep|sample`. Visual composer: `#/flows` (chain pipeline renderer, step
+  builder, per-flow test trigger, runs table with per-node audit trail).
+  Proof: unit (graph validation) + live-Postgres engine tests (both check
+  branches, waiting re-measure, replay no-ops, failure+notify) and
+  `cmd/e2e/flow` over a REAL NATS stream + real ingest + two
+  capability-verified agents — the DoD chain fires on the synthetic
+  trigger: healed branch (62) ends quietly, still-full branch (95) notifies
+  exactly once, audit trail `t→free→still(→notify)`; full-stack smoke: HTTP
+  trigger → real agent over mTLS runs the dispatched script → check
+  re-measures the live disk sample → terminal run.
 
 #### W6-1 — Loki log integration
 - **Status:** ⬜ pending
