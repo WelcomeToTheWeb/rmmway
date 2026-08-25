@@ -566,15 +566,37 @@ parallel. Within a track, respect `Depends on` ordering.
   with cross-store consistency and a 401-gated `/api` mirror.
 
 #### W6-2 — Webhook + event-stream framework
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-25  ·  **Done:** —
+- **Started:** 2026-08-25  ·  **Done:** 2026-08-25
 - **Depends on:** W0-1
 - **Effort/Impact:** S / High
 - Expose the NATS bus as signed webhooks (HMAC) + SSE/subscription, with
   retries and replay.
 - **Definition of done:** a user-defined endpoint receives signed, replayable
   alert/inventory/automation events.
+- **Done (2026-08-25):** `server/internal/webhook` — every event (alert /
+  inventory / automation) is journaled to Postgres with a monotonic `seq`
+  (the at-least-once, replayable, restart-safe source of truth), then
+  delivered as a Stripe-style HMAC-SHA256-signed POST (`t=<unix>,v1=<hex>`,
+  constant-time, with a timestamp for anti-replay) to user-defined endpoints
+  (`POST /api/webhooks`; the secret is kept server-side and never returned
+  after creation). Per-category filters; non-2xx → exponential backoff
+  (1s,2s,4s…≤5m) with **dead-letter after 5** consecutive failures while the
+  remaining events stay in the journal (re-enable to resume); `POST
+  /webhooks/{id}/replay` re-drives a journal range (`from_seq` / `to_seq`);
+  `GET /events/stream[/{category}]` exposes the same bus as a **live SSE**
+  stream (last-200 catch-up + `Last-Event-ID` resume). Emission hooks (alert
+  `Reconcile`, ingest `Enroll`/`online`, flow `Notifier` / agent command
+  results) publish onto the existing W5-2 NATS bus; the webhook framework
+  consumes it on a **separate durable consumer** (so the flow engine and the
+  webhook framework each see every event). `cmd/e2e/webhook` is the DoD
+  harness (real enroll → inventory, real flow `trigger→notify` → automation,
+  real reconciler → alert, all over a REAL NATS/JetStream bus): the
+  user-defined endpoint receives **all three categories**, every delivery
+  **HMAC-verifies** (a wrong secret is rejected), **retries** (500,500→200),
+  **replays** (cursor reset re-drives), and the **SSE** stream delivers live.
+  CI runs it as a step (NATS service added).
 
 #### W6-3 — 🎯 MILESTONE: full automation E2E
 - **Status:** ⬜ pending

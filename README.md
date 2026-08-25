@@ -463,6 +463,67 @@ independent standard Parquet reader (ts ≡ timestamp_ms on every row,
 values + labels round-trip), and (5) **re-imports** into a fresh database
 with identical row count + time range.
 
+## Webhooks + event stream (W6-2)
+
+The event bus is exposed to the outside world two ways: **signed webhooks**
+(HMAC-SHA256, Stripe-style) to a user-defined HTTP endpoint, and a **SSE**
+server-sent-events stream. Every event — **alert**, **inventory**
+(device created / online / offline), and **automation** (flow triggers /
+steps / notifies / command results) — is first journaled to Postgres with a
+monotonic `seq`, then delivered from that journal. The journal is the source
+of truth: it makes delivery **at-least-once, retryable, replayable, and
+survivable across restarts** (the in-process NATS consumer is only the fast
+path).
+
+**Event envelope** (each delivery body, signed as `t=<unix>,v1=<hex>`):
+
+```json
+{"id":12,"category":"alert","type":"fired","device_id":"dev-…","at":"…","event":{ "id":3,"name":"cpu utilization high",… }}
+```
+
+**Create a user-defined endpoint** (operator JWT): the endpoint is called
+once per journaled event it subscribes to, each delivery signed with the
+shared `secret`. New endpoints start *now* (only new events); `categories`
+filters what you receive (`["alert","inventory","automation"]`).
+
+```sh
+TOKEN=$(curl -s -X POST localhost:8080/api/login -d '{"username":"admin","password":"admin"}' | jq -r .token)
+curl -s -X POST localhost:8080/api/webhooks -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"pagerduty","url":"https://hooks.example.com/rmmway","secret":"shh","categories":["alert"]}'
+# -> {"id":1,"last_seq":11,"status":"ok",…}
+```
+
+**Verify the signature** (anti-tamper + anti-replay — the timestamp must be
+fresh, e.g. within 5 min) with the same `secret`:
+
+```go
+ok, err := webhook.Verify([]byte("shh"), r.Header.Get("Webhook-Signature"), body)
+```
+
+**Operator surface** (JWT, open `/admin` mirror for ops):
+
+| route | what |
+|-------|------|
+| `POST /api/webhooks` | create an endpoint (secret kept server-side; the secret is **not** returned after creation) |
+| `GET /api/webhooks` · `GET /api/webhooks/{id}` · `PATCH` · `DELETE` | list / get / update (URL, secret, categories, enabled) / delete |
+| `GET /api/webhooks/{id}/events` | this endpoint's delivery journal (newest first) |
+| `POST /api/webhooks/{id}/replay` | `{"from_seq":0}` (or `{"to_seq":N}`) — re-drive the range from the journal |
+| `GET /api/events/stream` · `…/{category}` | **SSE** live stream (open); last 200 catch-up, then live; `Last-Event-ID` resumes |
+
+**Delivery semantics:** the endpoint is only advanced past an event after a
+`2xx`. A non-2xx is retried with exponential backoff (1s,2s,4s… to 5m), and
+after 5 consecutive failures the endpoint is **dead-lettered** (`status=error`)
+while its remaining events stay in the journal (re-enable to resume, or
+replay). `GET /events/stream` mirrors every journaled event live.
+
+**Proof:** `make webhook-e2e` runs the whole real stack — a fake agent
+**enrolls** (inventory), a real **flow** fires a `trigger→notify` (automation),
+and the **alert** reconciler fires on an anomaly — all onto a real NATS/
+JetStream bus, and asserts a user-defined endpoint received **all three
+categories** with every delivery **HMAC-verified** (a wrong secret is
+rejected), **retries** (500,500 → 200), **replays** (cursor reset re-drives),
+and streams the same events over **SSE**.
+
 ## Conventions
 
 - Claims: `TASKS.md` is the coordination of record — claim before coding.

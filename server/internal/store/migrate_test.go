@@ -69,8 +69,8 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if n != 7 {
-		t.Fatalf("expected 7 migrations applied, got %d", n)
+	if n != 8 {
+		t.Fatalf("expected 8 migrations applied, got %d", n)
 	}
 
 	mustScan := func(query string, dst ...any) {
@@ -103,6 +103,13 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	mustScan(`SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_name='log_events'`, &count)
 	if count != 1 {
 		t.Fatalf("expected log_events hypertable, got %d", count)
+	}
+
+	// W6-2: the webhook framework tables (endpoints + the monotonic event
+	// journal) must be created by 0008_webhooks.sql.
+	mustScan(`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('webhooks','webhook_events')`, &count)
+	if count != 2 {
+		t.Fatalf("expected webhooks+webhook_events tables, got %d", count)
 	}
 
 	// W5-1: the self-healing tables (playbooks + heal_runs + heal_events)

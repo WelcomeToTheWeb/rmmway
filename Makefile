@@ -126,6 +126,12 @@ export-e2e: ## W4-3 DoD: one-click client export -> self-describing Parquet+JSON
 trust-e2e: ## W4-4 DoD (closes Block 2): a skeptic (a) verifies a signed release + reads the SBOM, (b) exports a client and confirms the data is theirs. Self-contained; Part B needs a Timescale PG (CREATEDB user)
 	@cd server && go run ./cmd/e2e/trust
 
+## ---- Webhook + event-stream framework (W6-2) --------------------------------
+
+.PHONY: webhook-e2e
+webhook-e2e: ## W6-2 DoD: a user-defined endpoint receives signed (HMAC) alert/inventory/automation events, with retries + replay, and the bus is exposed as SSE. Needs Timescale PG (CREATEDB user) + NATS (JetStream)
+	@cd server && go run ./cmd/e2e/webhook
+
 ## ---- SBOM (W4-1) -----------------------------------------------------------
 
 .PHONY: image

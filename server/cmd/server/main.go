@@ -40,6 +40,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/releases"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
+	"github.com/welcometotheweb/rmmway/server/internal/webhook"
 )
 
 // mtlsSANs derives the SAN names for the mTLS server cert from the listen
@@ -214,6 +215,44 @@ func adminCaps() []string {
 		return caps.AllCapabilities
 	}
 	return out
+}
+
+// ---- W6-2: Notifier adapters -----------------------------------------------
+// The flow + heal engines have a Notifier seam (W5-2 "log now; W6-2's
+// NATS/webhook notifier plugs into the same interface"). These adapters
+// implement that seam: they log AND publish an "automation" event to the bus
+// so the webhook / SSE framework journals + delivers it (flow notify, run
+// failures, and self-heal escalations all become automation events).
+
+type busFlowNotifier struct {
+	log *log.Logger
+	pub func(subject, deviceID, message string, data map[string]any)
+}
+
+func (n busFlowNotifier) Notify(ctx context.Context, run *flow.Run, nodeID, reason string) {
+	if n.log != nil {
+		n.log.Printf("flow: NOTIFY run %d (%s) node=%s device=%s: %s", run.ID, run.FlowName, nodeID, run.DeviceID, reason)
+	}
+	n.pub(flow.SubjectNotify, run.DeviceID, "flow "+run.FlowName+" node="+nodeID+": "+reason, map[string]any{
+		"action": "notify", "run_id": run.ID, "flow": run.FlowName,
+		"node": nodeID, "device_id": run.DeviceID, "message": reason,
+	})
+}
+
+type busHealNotifier struct {
+	log *log.Logger
+	pub func(subject, deviceID, message string, data map[string]any)
+}
+
+func (n busHealNotifier) Escalate(run *heal.Run, reason string) {
+	if n.log != nil {
+		n.log.Printf("selfheal: ESCALATED run %d playbook=%s device=%s source=%q: %s (ticket=heal_runs.id=%d)",
+			run.ID, run.PlaybookKey, run.DeviceID, run.Source, reason, run.ID)
+	}
+	n.pub(flow.SubjectNotify, run.DeviceID, "selfheal escalated "+run.PlaybookKey+": "+reason, map[string]any{
+		"action": "escalated", "run_id": run.ID, "playbook": run.PlaybookKey,
+		"device_id": run.DeviceID, "source": run.Source, "reason": reason,
+	})
 }
 
 type probe struct {
@@ -495,6 +534,27 @@ func main() {
 		}
 	}
 
+	// ---- W6-2: event fan-out ---------------------------------------------
+	// A single publish helper the alert / device / notify emitters share.
+	// It references the (possibly nil) flowBus var, so emitters wired before
+	// or after the bus is up all behave: a nil bus (NATS down) is a no-op.
+	publishEvent := func(subject, deviceID, message string, data map[string]any) {
+		if flowBus == nil {
+			return
+		}
+		_ = flowBus.Publish(context.Background(), subject, &flow.Event{
+			Type: subject, DeviceID: deviceID, Message: message, Data: data, At: time.Now().UTC(),
+		})
+	}
+	// Alerts (W2-4) surface lifecycle events (fired/updated/resolved) on the
+	// bus so the webhook / SSE framework journals + delivers them.
+	if hasPG && alertStore != nil {
+		alertStore.SetEventSink(func(action string, payload map[string]any) {
+			devID, _ := payload["device_id"].(string)
+			publishEvent(flow.SubjectAlert, devID, action+" alert "+fmt.Sprint(payload["name"]), payload)
+		})
+	}
+
 	// ---- gRPC ingest (W1-5) + mTLS agent channel (W3-1) ---------------
 	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr, Caps: capsIssuer, Logs: logSink,
 		OnCommandResult: func(res *agentv1.CommandResult) {
@@ -510,6 +570,11 @@ func main() {
 				Message:   res.GetError(),
 				At:        time.Now().UTC(),
 			})
+		},
+		OnDeviceEvent: func(action string, payload map[string]any) {
+			// W6-2: inventory events (created / online) onto the bus.
+			devID, _ := payload["device_id"].(string)
+			publishEvent(flow.SubjectDevice, devID, action+" device", payload)
 		},
 	}, metricsSink, devicesStore)
 	grpcServer := grpc.NewServer(
@@ -573,7 +638,9 @@ func main() {
 					},
 				})
 			}
-			healEngine = heal.New(hst, remediate, svc.Dispatcher().Result, nil)
+			healEngine = heal.New(hst, remediate, svc.Dispatcher().Result, busHealNotifier{
+				log: log.New(os.Stderr, "selfheal: ", 0), pub: publishEvent,
+			})
 			healErrCh := make(chan error, 1)
 			go healEngine.Run(context.Background(), d, healErrCh)
 			go func() {
@@ -603,7 +670,8 @@ func main() {
 				},
 			})
 		}
-		flowEngine = flow.New(flow.NewStore(pgPool), flowBus, remediate, svc.Dispatcher().Result, nil,
+		flowEngine = flow.New(flow.NewStore(pgPool), flowBus, remediate, svc.Dispatcher().Result,
+			busFlowNotifier{log: log.New(os.Stderr, "flow: ", 0), pub: publishEvent},
 			flowInterval("RMMWAY_FLOW_SWEEP", 5*time.Second), flowInterval("RMMWAY_FLOW_SAMPLE", 60*time.Second))
 		flowEngine = flowEngine.WithLogger(log.New(os.Stderr, "flow: ", 0))
 		if err := flowEngine.Start(context.Background()); err != nil {
@@ -614,6 +682,33 @@ func main() {
 		}
 	} else if hasPG {
 		log.Println("flow engine: disabled (nats event bus unavailable)")
+	}
+
+	// ---- webhook + event-stream framework (W6-2) ------------------------
+	// Journals every bus event, fans it out to live SSE subscribers, and
+	// delivers signed (HMAC) webhooks to user-defined endpoints with
+	// cursor-based retries + replay. Needs hasPG (journal + endpoints) and
+	// the bus (the events to expose); in-memory mode has neither.
+	var webhookSvc *webhook.Service
+	var webhookBus flow.Bus
+	if hasPG && flowBus != nil {
+		// A SEPARATE durable consumer on the same stream: the flow engine
+		// ("flow-engine") and the webhook framework ("webhook-engine") each
+		// must see every event, so they can't share one consumer.
+		whb, err := flow.NewNatsBus(context.Background(), env("RMMWAY_NATS_URL", "nats://localhost:4222"), "RMMWAY_EVENTS", "webhook-engine")
+		if err != nil {
+			log.Printf("WARN: nats webhook bus unavailable (%v) — webhooks disabled", err)
+		} else {
+			webhookBus = whb
+			whs := webhook.NewStore(pgPool)
+			webhookSvc = webhook.New(whs, whb).WithLogger(log.New(os.Stderr, "webhook: ", 0))
+			if err := webhookSvc.Start(context.Background()); err != nil {
+				log.Printf("WARN: webhook framework start failed (%v)", err)
+				webhookSvc = nil
+			} else {
+				log.Println("webhook framework: signed webhooks + SSE event stream live (sweep 2s)")
+			}
+		}
 	}
 
 	// ---- HTTP (health + operator API + admin JSON) ---------------------
@@ -691,6 +786,7 @@ func main() {
 		Releases:  relSrv,
 		Flows:     flowEngine,
 		Export:    exportSvc,
+		Webhooks:  webhookSvc,
 	})
 	apiSrv.Register(mux)
 
@@ -721,6 +817,9 @@ func main() {
 	log.Println("shutting down")
 	if flowBus != nil {
 		flowBus.Close()
+	}
+	if webhookBus != nil {
+		webhookBus.Close()
 	}
 	indexer.Stop()
 	grpcServer.GracefulStop()

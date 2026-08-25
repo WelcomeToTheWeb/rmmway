@@ -56,7 +56,18 @@ type AlertStore struct {
 
 	mu    sync.Mutex
 	quiet map[baseline.SeriesKey]int // clean-pass streak per series
+
+	// onEvent (W6-2) is a sink for alert lifecycle events (fired / updated /
+	// resolved) so the event bus / webhook framework can publish them. Nil =
+	// no sink (tests / pre-W6-2).
+	onEvent AlertEventSink
 }
+
+// AlertEventSink receives one alert lifecycle event. action is "fired" (a new
+// open alert), "updated" (an existing open alert re-fired), or "resolved"
+// (auto- or manually resolved). payload carries the alert's identifying +
+// observation fields (device_id, name, source, value, score, channel, status).
+type AlertEventSink func(action string, payload map[string]any)
 
 // NewAlertStore builds an AlertStore. quietNeeded is the number of
 // consecutive clean passes before auto-resolve (1 with the default 5-min
@@ -66,6 +77,47 @@ func NewAlertStore(db *pgxpool.Pool, quietNeeded int) *AlertStore {
 		quietNeeded = 1
 	}
 	return &AlertStore{db: db, quietNeeded: quietNeeded, quiet: make(map[baseline.SeriesKey]int)}
+}
+
+// SetEventSink installs the W6-2 alert-event sink (nil clears it). It is
+// called from Reconcile for fired / updated / resolved alerts.
+func (s *AlertStore) SetEventSink(sink AlertEventSink) {
+	s.mu.Lock()
+	s.onEvent = sink
+	s.mu.Unlock()
+}
+
+// emit fires one alert lifecycle event to the installed sink (no-op when
+// unset). It never fails the reconcile.
+func (s *AlertStore) emit(action string, payload map[string]any) {
+	s.mu.Lock()
+	sink := s.onEvent
+	s.mu.Unlock()
+	if sink != nil {
+		sink(action, payload)
+	}
+}
+
+// alertPayload builds the W6-2 alert event payload from a series key + the
+// fired anomaly.
+func alertPayload(k baseline.SeriesKey, a baseline.Anomaly, channel string, status string) map[string]any {
+	m := map[string]any{
+		"action":    "alert",
+		"device_id": k.DeviceID,
+		"name":      k.Name,
+		"source":    k.Source,
+		"value":     a.Value,
+		"score":     a.Score,
+		"channel":   channel,
+		"status":    status,
+		"at":        a.At.UTC().Format(time.RFC3339),
+	}
+	if a.Seasonal != nil {
+		m["expected"] = a.Seasonal.Median
+	} else if a.Trend != nil {
+		m["expected"] = a.Trend.Median
+	}
+	return m
 }
 
 const alertSelect = `
@@ -298,12 +350,16 @@ func (s *AlertStore) Reconcile(anoms []baseline.Anomaly, scored map[baseline.Ser
 		channel, expected := alertFields(a)
 		if err := s.upsertAlert(ctx, k, a, channel, expected); err != nil {
 			log.Printf("alerts: create %s: %v", k, err)
+		} else {
+			s.emit("fired", alertPayload(k, a, channel, "open"))
 		}
 	}
 	for k, a := range plan.bump {
 		channel, expected := alertFields(a)
 		if err := s.bumpAlert(ctx, k, a, channel, expected); err != nil {
 			log.Printf("alerts: bump %s: %v", k, err)
+		} else {
+			s.emit("updated", alertPayload(k, a, channel, "open"))
 		}
 	}
 	for _, k := range plan.resolve {
@@ -317,6 +373,10 @@ func (s *AlertStore) Reconcile(anoms []baseline.Anomaly, scored map[baseline.Ser
 		}
 		if tag.RowsAffected() > 0 {
 			log.Printf("alerts: auto-resolved %s (clean for %d pass(es))", k, s.quietNeeded)
+			s.emit("resolved", map[string]any{
+				"action": "alert", "device_id": k.DeviceID, "name": k.Name,
+				"source": k.Source, "status": "resolved",
+			})
 		}
 	}
 }

@@ -81,12 +81,26 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      nats:
+        # JetStream stream the W5-2 flow engine + W6-2 webhook framework run
+        # over (the e2e deletes/recreates the RMMWAY_EVENTS stream per run).
+        image: nats:2.10-alpine
+        ports:
+          - 4222:4222
+        command: ["nats-server", "--jetstream", "--port", "4222", "--http_port", "8222"]
+        options: >-
+          --health-cmd "wget -qO- http://localhost:8222/healthz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     env:
       RMMWAY_MEILI_TEST_ENDPOINT: http://localhost:7700
       RMMWAY_MEILI_TEST_KEY: ci-master-key
       # Enables the live-Postgres tests (each skips itself when unset):
       # migrations, baseline, alerts, heal state machine, client export.
       RMMWAY_TEST_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
+      # NATS/JetStream for the W5-2/W6-2 e2e (real event bus).
+      RMMWAY_NATS_URL: nats://localhost:4222
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -136,6 +150,18 @@ jobs:
         env:
           RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
         run: go run ./cmd/e2e/trust
+      - name: "webhook e2e (W6-2: a user-defined endpoint gets signed alert/inventory/automation events, with retries + replay + SSE)"
+        # Real ingest (enroll -> inventory) + real flow engine (trigger->notify
+        # -> automation) + real alert reconciler (-> alert) all publish to a
+        # REAL NATS/JetStream bus; the webhook framework journals each event
+        # and delivers it HMAC-signed to a local receiver. Proves: 3 categories
+        # received + signature verified (wrong secret rejected), retry
+        # (500,500 -> 200), replay (cursor reset re-drives), and the SSE stream.
+        working-directory: server
+        env:
+          RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
+          RMMWAY_NATS_URL: nats://localhost:4222
+        run: go run ./cmd/e2e/webhook
 
   build:
     name: Build

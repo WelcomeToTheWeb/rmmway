@@ -19,18 +19,25 @@ import (
 //	flow.step:        RunID, NodeID
 //	command.result:   CommandID, Status, DeviceID
 //	flow.notify:      RunID, NodeID, DeviceID, Message (fan-out for W6-2)
+//	alert:             DeviceID, Message, Data{action, name, source, value, ...}
+//	device:            DeviceID, Message, Data{action, hostname, os, arch, ...}
+
+// Data carries the event-specific structured detail (alert fields, device
+// identity, notify context). Flow hops leave it empty; W6-2's journal records
+// the whole event (incl. Data) so a replay is byte-faithful.
 type Event struct {
-	Type      string    `json:"type"`
-	FlowID    int64     `json:"flow_id,omitempty"`
-	RunID     int64     `json:"run_id,omitempty"`
-	NodeID    string    `json:"node_id,omitempty"`
-	DeviceID  string    `json:"device_id,omitempty"`
-	Source    string    `json:"source,omitempty"`
-	Value     *float64  `json:"value,omitempty"`
-	CommandID string    `json:"command_id,omitempty"`
-	Status    string    `json:"status,omitempty"`
-	Message   string    `json:"message,omitempty"`
-	At        time.Time `json:"at"`
+	Type      string         `json:"type"`
+	FlowID    int64          `json:"flow_id,omitempty"`
+	RunID     int64          `json:"run_id,omitempty"`
+	NodeID    string         `json:"node_id,omitempty"`
+	DeviceID  string         `json:"device_id,omitempty"`
+	Source    string         `json:"source,omitempty"`
+	Value     *float64       `json:"value,omitempty"`
+	CommandID string         `json:"command_id,omitempty"`
+	Status    string         `json:"status,omitempty"`
+	Message   string         `json:"message,omitempty"`
+	Data      map[string]any `json:"data,omitempty"`
+	At        time.Time      `json:"at"`
 }
 
 // Bus subject names (NATS subject per event type; the engine subscribes to
@@ -40,7 +47,11 @@ const (
 	SubjectStep    = "rmmway.events.flow.step"
 	SubjectCommand = "rmmway.events.command.result"
 	SubjectNotify  = "rmmway.events.flow.notify"
-	SubjectAll     = "rmmway.events.>"
+	// W6-2: non-flow event sources published onto the same bus so the
+	// webhook / SSE framework can journal + fan them out like any other.
+	SubjectAlert  = "rmmway.events.alert"
+	SubjectDevice = "rmmway.events.device"
+	SubjectAll    = "rmmway.events.>"
 )
 
 // Bus is the transport interface.

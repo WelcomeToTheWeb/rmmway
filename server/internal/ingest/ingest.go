@@ -53,6 +53,12 @@ type Config struct {
 	// logs frames) per device — the Timescale copy the RMM surfaces. Nil =
 	// log frames are accepted and dropped (pre-W6-1 servers / tests).
 	Logs store.LogSink
+	// OnDeviceEvent (W6-2) fires on inventory changes so the event bus /
+	// webhook framework can publish them: action is "created" (a brand-new
+	// device enrolls) or "online" (a device's uplink stream opens or
+	// reconnects). payload carries device_id + (for created) identity fields.
+	// Nil = no hook (tests).
+	OnDeviceEvent func(action string, payload map[string]any)
 }
 
 func (c *Config) withDefaults() {
@@ -312,6 +318,13 @@ func ParseOperatorJWT(secret []byte, tok string) (capList []string, ok bool) {
 
 // ---- AgentService implementation -------------------------------------------
 
+// emitDevice fires the W6-2 inventory-event hook (no-op when unset).
+func (s *Service) emitDevice(action string, payload map[string]any) {
+	if s.cfg.OnDeviceEvent != nil {
+		s.cfg.OnDeviceEvent(action, payload)
+	}
+}
+
 // Enroll exchanges a one-time bootstrap token for the device's persistent
 // identity (device_id + agent JWT). Re-enroll is refused: a device that
 // already exists keeps its identity (restart must not re-enroll).
@@ -346,6 +359,15 @@ func (s *Service) Enroll(ctx context.Context, req *agentv1.EnrollRequest) (*agen
 	}
 	// W1-7: the new device must be searchable right away.
 	s.cfg.Indexer.Touch(devID)
+	// W6-2: inventory event — a brand-new device enrolled.
+	s.emitDevice("created", map[string]any{
+		"action":        "created",
+		"device_id":     devID,
+		"hostname":      req.GetHostname(),
+		"os":            req.GetOs(),
+		"arch":          req.GetArch(),
+		"agent_version": req.GetAgentVersion(),
+	})
 	resp := &agentv1.EnrollResponse{
 		DeviceId:           devID,
 		Jwt:                tok,
@@ -455,6 +477,8 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 
 	_ = s.devices.Touch(ctx, devID)
 	s.cfg.Indexer.Touch(devID) // re-index on (re)connect: online/last_seen flipped
+	// W6-2: inventory event — a device's uplink is (re)online.
+	s.emitDevice("online", map[string]any{"action": "online", "device_id": devID})
 	// The Recv loop must be interruptible: when a NEWER stream supersedes
 	// this one (see registration above), ctx is cancelled and the handler
 	// ends the RPC with Aborted — the evicted agent's Recv then fails and

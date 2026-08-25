@@ -121,10 +121,10 @@ func main() {
 	step("migrate")
 	if n, err := store.Migrate(ctx, pool, "migrations"); err != nil {
 		die("migrate: %v (n=%d)", err, n)
-	} else if n != 7 {
-		die("expected 7 migrations, got %d", n)
+	} else if n != 8 {
+		die("expected 8 migrations, got %d", n)
 	}
-	info("7 migrations applied to scratch db %s (starter playbooks seeded)", dbName)
+	info("8 migrations applied to scratch db %s (starter playbooks seeded)", dbName)
 
 	// ---- in-process server: real ingest gRPC service + org CA + caps ----
 	step("boot in-process server")
