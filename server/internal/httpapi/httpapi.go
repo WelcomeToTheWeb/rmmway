@@ -27,6 +27,7 @@ import (
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/baseline"
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
+	"github.com/welcometotheweb/rmmway/server/internal/export"
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
@@ -68,6 +69,8 @@ type Server struct {
 	// commandState (W3-3) serves the device's pending commands + recorded
 	// results. Nil disables GET /{api|admin}/devices/{id}/commands.
 	commandState func(deviceID string) (pending []*agentv1.Command, results []*agentv1.CommandResult)
+	// export (W4-3) builds the per-client full export bundle.
+	export *export.Service
 }
 
 // Config wires a Server. AdminPassword is hashed with a fresh per-boot salt
@@ -105,6 +108,9 @@ type Config struct {
 	// Flows is the W5-2 event-driven automation engine; nil disables
 	// /api/flows* and /admin/flows* (in-memory-mode deployments).
 	Flows *flow.Engine
+	// Export (W4-3) builds the per-client full export bundle; nil disables
+	// /{api|admin}/devices/{id}/export (in-memory-mode deployments).
+	Export *export.Service
 }
 
 // New builds a Server. A nil Devices falls back to an in-memory store.
@@ -150,6 +156,7 @@ func New(cfg Config) *Server {
 		mintBootstrap: cfg.MintBootstrap,
 		dispatch:      cfg.Dispatch,
 		commandState:  cfg.CommandState,
+		export:        cfg.Export,
 	}
 }
 
@@ -385,22 +392,31 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-// deviceSub routes the /{api|admin}/devices/{id}/... subtree (W2-2 + W3-3):
+// deviceSub routes the /{api|admin}/devices/{id}/... subtree (W2-2 + W3-3 +
+// W4-3):
 //
 //	POST {id}/commands  — dispatch (auth-gated under /api, open under /admin)
 //	GET  {id}/commands  — pending commands + recorded results (W3-3)
+//	GET  {id}/export    — the per-client full export bundle (W4-3)
 func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	// parts: ["api"|"admin", "devices", "<id>", "commands"]
-	if len(parts) != 4 || parts[1] != "devices" || parts[2] == "" || parts[3] != "commands" {
-		http.Error(w, "expected /devices/{id}/commands", http.StatusNotFound)
+	// parts: ["api"|"admin", "devices", "<id>", "commands"|"export"]
+	if len(parts) != 4 || parts[1] != "devices" || parts[2] == "" {
+		http.Error(w, "expected /devices/{id}/(commands|export)", http.StatusNotFound)
 		return
 	}
-	if r.Method == http.MethodGet {
-		s.deviceCommands(w, r, parts[2])
-		return
+	switch parts[3] {
+	case "commands":
+		if r.Method == http.MethodGet {
+			s.deviceCommands(w, r, parts[2])
+			return
+		}
+		s.dispatchCommand(w, r, parts[2])
+	case "export":
+		s.handleDeviceExport(w, r, parts[2])
+	default:
+		http.Error(w, "expected /devices/{id}/(commands|export)", http.StatusNotFound)
 	}
-	s.dispatchCommand(w, r, parts[2])
 }
 
 // deviceCommands serves the W3-3 command audit view for one device.
@@ -430,6 +446,71 @@ func (s *Server) deviceCommands(w http.ResponseWriter, r *http.Request, deviceID
 		"pending":   pending,
 		"results":   results,
 	})
+}
+
+// handleDeviceExport streams the client's FULL export bundle (W4-3 — the
+// no-lock-in promise): one request, one self-describing ZIP with the
+// device's inventory + config, all metrics (Parquet), 1-minute rollups
+// (Parquet), complete alert history, and a manifest that drives
+// verification (export.Verify).
+//
+//	GET /{api|admin}/devices/{id}/export[?since=RFC3339&until=RFC3339&rollups=0]
+//
+//	200  application/zip attachment (the bundle)
+//	400  bad since/until window
+//	404  unknown device
+//	503  export not wired (in-memory-mode deployments)
+//	500  build error (after headers are out the stream just ends short —
+//	     the manifest is the integrity contract, a truncated bundle fails
+//	     export.Verify instead of passing as complete)
+func (s *Server) handleDeviceExport(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.export == nil {
+		http.Error(w, "export not configured", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	var since, until time.Time
+	if v := q.Get("since"); v != "" {
+		var err error
+		if since, err = time.Parse(time.RFC3339, v); err != nil {
+			http.Error(w, "since must be RFC3339", http.StatusBadRequest)
+			return
+		}
+	}
+	if v := q.Get("until"); v != "" {
+		var err error
+		if until, err = time.Parse(time.RFC3339, v); err != nil {
+			http.Error(w, "until must be RFC3339", http.StatusBadRequest)
+			return
+		}
+	}
+	if !since.IsZero() && !until.IsZero() && !until.After(since) {
+		http.Error(w, "until must be after since", http.StatusBadRequest)
+		return
+	}
+	ok, err := s.devices.Contains(r.Context(), deviceID)
+	if err != nil {
+		http.Error(w, "device lookup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	withRollups := q.Get("rollups") != "0"
+	fname := "rmmway-export-" + deviceID + "-" + time.Now().UTC().Format("20060102-150405") + ".zip"
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+fname+`"`)
+	w.WriteHeader(http.StatusOK)
+	if _, err := s.export.Export(r.Context(), deviceID, since, until, withRollups, w); err != nil {
+		// Headers already sent: the bundle is truncated. The manifest
+		// contract makes that detectable (export.Verify fails), but log it.
+		fmt.Fprintf(w, "\nexport error: %v\n", err)
+	}
 }
 
 // dispatchCommand mints a command for a device and pushes it to its live

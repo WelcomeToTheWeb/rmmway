@@ -372,6 +372,69 @@ server, and runs the real `update` command — a valid release is applied
 (1.0.0 → 2.0.0), a tampered build is refused by the **signature** gate,
 and an unsigned build is refused, each leaving the previous binary intact.
 
+## Client export (W4-3)
+
+The no-lock-in promise: one request exports **everything RMMWay knows about a
+client** into a portable, self-describing bundle — inventory + config,
+raw metrics + 1-minute rollups (standard Apache **Parquet**), the complete
+alert history, and a manifest that drives verification. The bundle is
+portable data (Parquet + JSON), not a database dump: it opens in any
+standard tool and re-imports anywhere.
+
+**One-click export** (operator JWT, or the open `/admin` mirror for ops):
+
+```sh
+TOKEN=$(curl -s -X POST localhost:8080/api/login -d '{"username":"admin","password":"admin"}' | jq -r .token)
+# full history (bounded by the raw retention window):
+curl -s -H "Authorization: Bearer $TOKEN" \
+  localhost:8080/api/devices/<id>/export -o client.zip
+# a time window (RFC3339), rollups optional:
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'localhost:8080/api/devices/<id>/export?since=2026-08-01T00:00:00Z&until=2026-08-15T00:00:00Z&rollups=0' \
+  -o client-window.zip
+```
+
+**Bundle contents** (a ZIP):
+
+| file | what | opens in |
+|------|------|----------|
+| `manifest.json` | the contract: format/version, device, per-file **sha256 + size + row count** | any JSON tool |
+| `device.json` | inventory (id, hostname, os/arch, agent version, interfaces) + config (intervals, tags) | any JSON tool |
+| `metrics.parquet` | raw samples: `timestamp_ms, ts, name, source, value, labels`(JSON-string) | duckdb / pandas / polars |
+| `metrics_1m.parquet` | 1-minute rollups: `bucket, name, source, avg/min/max, n` (survives raw retention) | duckdb / pandas / polars |
+| `alerts.json` | complete alert history (all statuses) | any JSON tool |
+| `README.md` | how to open + verify + re-import | — |
+
+**Open it with a standard tool:**
+
+```sh
+unzip client.zip
+duckdb -c "SELECT * FROM 'metrics.parquet' WHERE name='cpu.utilization_percent' ORDER BY ts DESC LIMIT 100;"
+python -c "import pandas as pd; print(pd.read_parquet('metrics.parquet').head())"
+```
+
+**Self-describing / tamper-evident:** `manifest.json` alone is enough to
+verify the whole bundle — every file's sha256 + size + row count is checked,
+and each Parquet section is re-read with a standard Parquet reader. Flip a
+single byte and verification fails:
+
+```sh
+jq -r '.files[] | select(.sha256 != null) | "\(.sha256)  \(.name)"' manifest.json | sha256sum -c -
+```
+
+The Go server ships the same check (`export.Verify`), which is what the
+e2e uses.
+
+**Proof:** `make export-e2e` boots the real operator HTTP surface against a
+scratch Timescale DB (one device, 2 days × 3 series = 17,280 samples,
+materialized rollups, 3 alerts) and proves the full no-lock-in story: the
+one-click export streams a bundle that (1) passes `export.Verify` against its
+own manifest, (2) is **rejected** after a single flipped byte in
+`metrics.parquet`, (3) honors `?since=&until=` exactly, (4) re-reads with an
+independent standard Parquet reader (ts ≡ timestamp_ms on every row,
+values + labels round-trip), and (5) **re-imports** into a fresh database
+with identical row count + time range.
+
 ## Conventions
 
 - Claims: `TASKS.md` is the coordination of record — claim before coding.

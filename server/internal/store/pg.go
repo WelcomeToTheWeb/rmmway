@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
@@ -101,6 +102,27 @@ func (d *PostgresDevices) Contains(ctx context.Context, id string) (bool, error)
 	var ok bool
 	err := d.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM devices WHERE id=$1)`, id).Scan(&ok)
 	return ok, err
+}
+
+// Get returns one device by id (W4-3 export); store.ErrNotFound when
+// unknown.
+func (d *PostgresDevices) Get(ctx context.Context, id string) (*Device, error) {
+	var o Device
+	err := d.db.QueryRow(ctx, `
+		SELECT id, hostname, os, arch, agent_version, interfaces, tags,
+		       online, first_seen, last_seen,
+		       metric_interval_s, heartbeat_interval_s
+		FROM devices WHERE id = $1`, id).Scan(
+		&o.ID, &o.Hostname, &o.OS, &o.Arch, &o.AgentVersion,
+		&o.Interfaces, &o.Tags, &o.Online, &o.FirstSeen, &o.LastSeen,
+		&o.MetricIntS, &o.HeartbeatIntS)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &o, nil
 }
 
 func (d *PostgresDevices) Touch(ctx context.Context, id string) error {

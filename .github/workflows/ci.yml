@@ -54,6 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: lint
     # Meilisearch for the W1-7 live indexing tests (skipped when absent).
+    # Timescale for the live-Postgres tests (W1-6/W2-3/W2-4/W4-3/W5-1) —
+    # superuser user (CREATEDB) so each test can create a scratch database.
     services:
       meilisearch:
         image: getmeili/meilisearch:v1.12
@@ -66,9 +68,25 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      timescale:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_DB: rmmway
+          POSTGRES_USER: rmmway
+          POSTGRES_PASSWORD: rmmway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rmmway -d rmmway"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     env:
       RMMWAY_MEILI_TEST_ENDPOINT: http://localhost:7700
       RMMWAY_MEILI_TEST_KEY: ci-master-key
+      # Enables the live-Postgres tests (each skips itself when unset):
+      # migrations, baseline, alerts, heal state machine, client export.
+      RMMWAY_TEST_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -94,6 +112,15 @@ jobs:
         # refused (binary untouched).
         working-directory: server
         run: go run ./cmd/e2e/update
+      - name: "export e2e (W4-3: one-click client export -> self-describing Parquet+JSON bundle)"
+        # Real operator HTTP surface on a scratch Timescale DB: export a
+        # client, Verify the bundle against its own manifest, tamper-detect,
+        # window it, re-read the Parquet with a standard reader, and
+        # re-import it into a fresh database.
+        working-directory: server
+        env:
+          RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
+        run: go run ./cmd/e2e/export
 
   build:
     name: Build

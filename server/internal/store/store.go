@@ -12,6 +12,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,9 @@ import (
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 )
+
+// ErrNotFound is returned by DeviceStore.Get for unknown device ids.
+var ErrNotFound = errors.New("device not found")
 
 // ---- interfaces -------------------------------------------------------------
 
@@ -43,6 +47,8 @@ type DeviceStore interface {
 	Register(ctx context.Context, id, hostname, os, arch, agentVersion string, interfaces []string, heartbeatIntS, metricIntS int32) error
 	// Contains reports whether a device id is enrolled (JWT auth path).
 	Contains(ctx context.Context, id string) (bool, error)
+	// Get returns one device by id (W4-3 export); ErrNotFound when unknown.
+	Get(ctx context.Context, id string) (*Device, error)
 	// Touch marks a device online/seen (heartbeat path).
 	Touch(ctx context.Context, id string) error
 	// List returns all devices (admin / W2-1 / W1-7 indexing source).
@@ -169,8 +175,20 @@ func (r *MemoryDeviceStore) List(_ context.Context) ([]*Device, error) {
 	return out, nil
 }
 
-// Get is a test helper for the memory store.
-func (r *MemoryDeviceStore) Get(id string) (*Device, bool) {
+// Get returns one device by id (W4-3 export); ErrNotFound when unknown.
+func (r *MemoryDeviceStore) Get(_ context.Context, id string) (*Device, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	d, ok := r.devices[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *d
+	return &cp, nil
+}
+
+// GetByID is a test helper for the memory store.
+func (r *MemoryDeviceStore) GetByID(id string) (*Device, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	d, ok := r.devices[id]

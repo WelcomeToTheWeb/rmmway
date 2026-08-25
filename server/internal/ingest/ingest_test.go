@@ -182,7 +182,7 @@ func TestEnrollThenStreamAndMetrics(t *testing.T) {
 	}
 
 	// 6. The device is registered and online.
-	d, ok := devices.Get(devID)
+	d, ok := devices.GetByID(devID)
 	if !ok {
 		t.Fatalf("device %s not in registry", devID)
 	}

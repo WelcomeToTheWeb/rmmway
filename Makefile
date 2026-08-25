@@ -110,6 +110,12 @@ pin-release-key: ## W4-2: re-pin the release public key into the agent (run afte
 	@cp keys/minisign.pub agent/internal/update/minisign.pub
 	@echo "re-pinned agent/internal/update/minisign.pub — commit it and rebuild the agent"
 
+## ---- Per-client full export (W4-3) -------------------------------------------
+
+.PHONY: export-e2e
+export-e2e: ## W4-3 DoD: one-click client export -> self-describing Parquet+JSON bundle (verify + tamper + window + re-read + re-import). Needs a Timescale PG where the user can CREATE DATABASE
+	@cd server && go run ./cmd/e2e/export
+
 ## ---- SBOM (W4-1) -----------------------------------------------------------
 
 .PHONY: image

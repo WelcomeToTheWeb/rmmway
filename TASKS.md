@@ -56,9 +56,9 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
-- **W3/W4 Trust:**     5 / 8
+- **W3/W4 Trust:**     6 / 8
 - **W5/W6 Automation:** 2 / 5
-- **Total:** 22 / 28
+- **Total:** 23 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -399,15 +399,39 @@ parallel. Within a track, respect `Depends on` ordering.
   verification matrix + pinned-key==repo-key.
 
 #### W4-3 — Per-client full export
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-25  ·  **Done:** —
+- **Started:** 2026-08-25  ·  **Done:** 2026-08-25 (commit below on `main`; CI adds a Timescale service so the live-Postgres tests + export e2e now run in CI)
 - **Depends on:** W1-6
 - **Effort/Impact:** M / High
 - One-click export of a client's inventory + metrics + config to a portable
   bundle. This is the no-lock-in promise.
 - **Definition of done:** export a client → a self-describing bundle
   (e.g. Parquet + JSON) that re-imports or opens in a standard tool.
+  ✅ `GET /api/devices/{id}/export` (operator JWT) + `/admin` mirror
+  (`?since=&until=` RFC3339 window, `&rollups=0` to skip) streams one
+  self-describing ZIP — `server/internal/export`: `manifest.json` (format
+  `rmmway-client-bundle` v1; every file's size + sha256 + row count — the
+  contract `export.Verify` checks end-to-end, incl. re-reading each Parquet
+  section with a standard reader), `device.json` (inventory + server-side
+  config), `metrics.parquet` (raw samples streamed straight from the
+  hypertable: `timestamp_ms, ts, name, source, value, labels-JSON`; pure-Go
+  parquet-go, no CGO), `metrics_1m.parquet` (1-minute rollups — full history
+  beyond the 90d raw retention), `alerts.json` (complete history, all
+  statuses), `README.md` (duckdb/pandas/polars open + `sha256sum -c` verify
+  + re-import recipes). `DeviceStore.Get` added (store.ErrNotFound). **Proof:**
+  `make export-e2e` (also in CI on a new Timescale service): real operator
+  HTTP surface on a scratch Timescale DB (1 device, 2 days × 3 series =
+  17,280 samples, materialized CA, 3 alerts) — 401/404 gates; one-click
+  export (login + ONE GET, `application/zip` attachment) verifies against its
+  own manifest (6 files, all hashes/sizes/rows); a flipped byte in
+  metrics.parquet is rejected; `?since=&until=` bounds the raw section
+  exactly (8,640); an independent standard Parquet reader re-reads all rows
+  (ts ≡ timestamp_ms everywhere, value + labels round-trip); and the exported
+  Parquet **re-imports** into a fresh migrated database with identical count
+  + time range. Live-Postgres unit test in `internal/export` runs in CI via
+  the new `RMMWAY_TEST_PG_DSN` (which also enables the previously-skipped
+  W1-6/W2-3/W2-4/W5-1 live tests).
 
 #### W4-4 — 🎯 MILESTONE: "provable trust" demo
 - **Status:** ⬜ pending
