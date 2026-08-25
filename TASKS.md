@@ -57,8 +57,8 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
 - **W3/W4 Trust:**     4 / 8
-- **W5/W6 Automation:** 0 / 5
-- **Total:** 19 / 28
+- **W5/W6 Automation:** 1 / 5
+- **Total:** 20 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -410,15 +410,38 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W5/W6 — Automation & Integrations
 
 #### W5-1 — Self-healing playbook engine
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-25  ·  **Done:** —
+- **Started:** 2026-08-25  ·  **Done:** 2026-08-25 (commit `035dd69` on `main`; e2e `server/cmd/e2e/heal` green on the live stack)
 - **Depends on:** W1-2, W1-5
 - **Effort/Impact:** M / High
 - State machine: detect → verify-safe → remediate → confirm → escalate.
   Idempotent, replay-safe. Starter library: disk full, service down, WSUS stuck.
 - **Definition of done:** a failing condition is detected, remediated, and the
   *confirm* step re-measures; on confirm-fail it escalates (ticket+notify).
+  ✅ `server/internal/heal`: Playbook model (detect/confirm conditions, per-OS
+  scripts, `{{source}}` substitution, os + sample-freshness + cooldown safety
+  guards); Postgres state machine in `0005_selfheal.sql` (playbooks seeded with
+  disk.full / service.down / wsus.stuck, heal_runs stage-timestamped, heal_events
+  append-only audit log); every transition is a conditional UPDATE so runs are
+  idempotent and a restart mid-run resumes from the persisted stage; one active
+  run per (playbook, device, source) enforced by a partial unique index (no
+  double-remediation, even across interleaved passes). Remediation = RunScript
+  through the W3-3 capability-gated dispatch (token rides the command); confirm
+  re-measures from a sample strictly after the dispatch — only a passing
+  re-measurement resolves; confirm-fail / refused / timed-out / no-fresh-sample
+  escalates: the run row is the ticket, the Notifier (LogNotifier now, W6-2
+  plugs NATS/webhook into the same seam) is the notification. API: `GET
+  /api|admin/heal/playbooks`, `GET /api|admin/heal/runs[/{id}]` (+event trail),
+  `POST /api|admin/heal/pass`; engine runs on `RMMWAY_HEAL_INTERVAL` (5m,
+  `off` disables). Proof: unit tests (conditions/os/scripts), live-Postgres
+  lifecycle tests (replay-safe resolve at the re-measured 62, confirm-fail
+  escalation at 95 + exactly-one notify, REFUSED escalation, remediation-timeout
+  escalation, offline/stale verify-safe skips, service.down + wsus.stuck incl.
+  os_filter), and `cmd/e2e/heal` (real gRPC ingest + org CA + caps + engine on a
+  scratch DB; two agents verify the capability token vs the pinned root like the
+  real agent: A heals 95→62 → resolved; B stays 95 → escalated ticket + one
+  notify; replay passes add no run/dispatch/notify).
 
 #### W5-2 — Event-driven chains over NATS
 - **Status:** ⬜ pending
