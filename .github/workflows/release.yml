@@ -18,8 +18,26 @@ permissions:
   id-token: write # cosign keyless signing (Sigstore OIDC)
 
 jobs:
+  # Creates the GitHub release first so the agent/server jobs (which run in
+  # parallel) can both upload assets without racing on release creation.
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create release (idempotent)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "RMMWay ${TAG}" \
+              --notes "Signed release (W3-4): agent binaries + installers + SHA256SUMS carry minisign signatures (minisign.pub ships alongside); the server image ghcr.io/welcometotheweb/rmmway:${TAG#v} is cosign/Sigstore-signed. Every artifact ships a CycloneDX SBOM (W4-1): <artifact>.cdx.json (+ .minisig)."
+          fi
+
   agent:
     name: Agent binaries + installers (minisign)
+    needs: release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,10 +73,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "RMMWay ${TAG}" \
-              --notes "Signed release (W3-4): agent binaries + installers + SHA256SUMS carry minisign signatures (minisign.pub ships alongside); the server image ghcr.io/welcometotheweb/rmmway:${TAG#v} is cosign/Sigstore-signed. Every artifact ships a CycloneDX SBOM (W4-1): <artifact>.cdx.json (+ .minisig)."
-          fi
           # Upload one file at a time, retrying on transient name-collision
           # 422s (eventual-consistency in the asset store); --clobber makes
           # re-cutting a tag idempotent.
@@ -90,6 +104,7 @@ jobs:
 
   server:
     name: Server image (cosign/Sigstore)
+    needs: release
     runs-on: ubuntu-latest
     env:
       # ${GITHUB_REF_NAME#v} only expands in shell steps; compute it once so
