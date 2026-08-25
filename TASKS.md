@@ -566,9 +566,9 @@ parallel. Within a track, respect `Depends on` ordering.
   with cross-store consistency and a 401-gated `/api` mirror.
 
 #### W6-2 — Webhook + event-stream framework
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi
+- **Started:** 2026-08-25  ·  **Done:** —
 - **Depends on:** W0-1
 - **Effort/Impact:** S / High
 - Expose the NATS bus as signed webhooks (HMAC) + SSE/subscription, with
