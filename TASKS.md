@@ -57,8 +57,8 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
 - **W3/W4 Trust:**     7 / 8
-- **W5/W6 Automation:** 2 / 5
-- **Total:** 24 / 28
+- **W5/W6 Automation:** 3 / 5
+- **Total:** 25 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -540,15 +540,30 @@ parallel. Within a track, respect `Depends on` ordering.
   re-measures the live disk sample → terminal run.
 
 #### W6-1 — Loki log integration
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** ✅ done
+- **Claimed by:** @pi
+- **Started:** 2026-08-23  ·  **Done:** 2026-08-23 (commit `a31b2da` on `main`)
 - **Depends on:** W0-1
 - **Effort/Impact:** M / High
 - Agent tails structured events → ship to Loki; keep indexed events in
   Timescale.
 - **Definition of done:** agent log lines queryable in Loki; the RMM surfaces
-  recent indexed events per device.
+  recent indexed events per device. ✅ `agent/internal/logship` TEEs the
+  agent's `slog` events into a JSON-lines file and tails it, shipping each
+  batch to BOTH Loki (HTTP push, `device_id`/`job`/`level` labels) and the
+  server over the existing gRPC Stream (new `LogBatch` frame, `logs.proto`).
+  The server indexes them in the `log_events` Timescale hypertable
+  (`0007_log_events.sql`) and serves `GET /{api|admin}/devices/{id}/events`
+  (newest first, level filter, auth-gated under `/api`); the Devices view
+  expands a row into a live recent-events panel. Replay-safe end to end:
+  stable content-derived entry ids (dedup by id at both sinks) + a persisted
+  offset state, so a reconnect or restart re-sends at most a no-op. Loki 3.5.4
+  runs in the compose stack (`:3100`, single-binary local config); health
+  gates on all 6 services. Proof: unit (tail/batch/both-sinks/retry/offset-persist)
+  + `make logs-e2e` over a REAL agent binary, scratch Timescale, in-process
+  ingest/API, and REAL Loki — a dispatched command's receipt + `agent ready`
+  are queryable in Loki by `device_id` AND surfaced per-device in the RMM,
+  with cross-store consistency and a 401-gated `/api` mirror.
 
 #### W6-2 — Webhook + event-stream framework
 - **Status:** ⬜ pending
