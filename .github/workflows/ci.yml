@@ -113,12 +113,24 @@ jobs:
           file agent/dist/rmmway-agent-linux-amd64
           ldd agent/dist/rmmway-agent-linux-amd64 2>&1 | grep -Ei 'not a dynamic|statically linked'
           ./agent/dist/rmmway-agent-linux-amd64 --version
+      # W4-1: CycloneDX SBOM for every agent binary (pinned syft via script).
+      - name: Generate agent SBOMs (CycloneDX, W4-1)
+        run: |
+          ./scripts/install-syft.sh
+          make sbom-agent
       - name: Upload agent binaries
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rmmway-agent
           path: agent/dist/*
+          retention-days: 7
+      - name: Upload agent SBOMs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmmway-sboms
+          path: agent/dist/*.cdx.json
           retention-days: 7
 
   frontend:
@@ -172,8 +184,26 @@ jobs:
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # W4-1: also export the built image to a tar so the SBOM step can
+          # scan the exact bytes (registry push only happens on main).
+          outputs: type=docker,dest=server-image.tar
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # W4-1: CycloneDX SBOM for the server image (Go modules + OS packages
+      # of the distroless base), scanned from the exported tar.
+      - name: Generate image SBOM (CycloneDX, W4-1)
+        run: |
+          ./scripts/install-syft.sh
+          bin/syft docker-archive:server-image.tar \
+            -o cyclonedx-json=dist/rmmway-server.cdx.json -q
+          ls -lh dist/rmmway-server.cdx.json
+      - name: Upload image SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmmway-server-sbom
+          path: dist/rmmway-server.cdx.json
+          retention-days: 7
       # W3-4: sign every pushed server image with cosign/Sigstore (keyless,
       # GitHub OIDC). Verify with: cosign verify ghcr.io/welcometotheweb/rmmway@<digest>
       - name: Install cosign
@@ -182,6 +212,13 @@ jobs:
       - name: Sign image (keyless Sigstore)
         if: github.ref == 'refs/heads/main'
         run: cosign sign --yes "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"
+      # W4-1: attach the image SBOM to the pushed digest in GHCR so it
+      # travels with the image (cosign download sbom <image> to retrieve).
+      - name: Attach SBOM to image (GHCR)
+        if: github.ref == 'refs/heads/main'
+        run: >
+          cosign attach sbom --sbom dist/rmmway-server.cdx.json --type cyclonedx
+          "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"
       - name: Verify signature (self-check)
         if: github.ref == 'refs/heads/main'
         run: |

@@ -95,6 +95,20 @@ verify-sigs: ## W3-4: verify all signed artifacts against keys/minisign.pub
 signer-test: ## Run the tools/signer unit tests (keygen/sign/verify + CLI-fixture interop)
 	go -C tools/signer test ./...
 
+## ---- SBOM (W4-1) -----------------------------------------------------------
+
+.PHONY: image
+image: ## Build the server Docker image locally (rmmway-server:local)
+	docker build -t rmmway-server:local -f server/Dockerfile .
+
+.PHONY: sbom
+sbom: ## W4-1: generate CycloneDX SBOMs (5 agent binaries + server image)
+	@scripts/sbom.sh
+
+.PHONY: sbom-agent
+sbom-agent: ## W4-1: agent binary SBOMs only (no docker needed)
+	@scripts/sbom.sh --skip-image
+
 ## ---- Protos ----------------------------------------------------------------
 
 .PHONY: proto
