@@ -80,9 +80,28 @@ services:
       timeout: 3s
       retries: 20
 
+  # W6-1: log stack. Agents tail their structured events and push them here
+  # (HTTP push API, :3100/loki/api/v1/push). Single-binary local mode, all
+  # on local disk — the config lives in ./loki (see loki-local-config.yaml).
+  loki:
+    image: grafana/loki:3.5.4
+    container_name: rmmway-loki
+    command: ["-config.file=/etc/loki/loki-local-config.yaml"]
+    ports:
+      - "3100:3100"   # HTTP push + query API
+    volumes:
+      - ./loki:/etc/loki:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 volumes:
   timescale-data:
   nats-data:
   redis-data:
   minio-data:
   meili-data:
+  loki-data:

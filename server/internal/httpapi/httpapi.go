@@ -71,6 +71,9 @@ type Server struct {
 	commandState func(deviceID string) (pending []*agentv1.Command, results []*agentv1.CommandResult)
 	// export (W4-3) builds the per-client full export bundle.
 	export *export.Service
+	// logEvents (W6-1) serves the device's recent indexed log events.
+	// Nil disables GET /{api|admin}/devices/{id}/events.
+	logEvents func(deviceID string, limit int, level string) ([]store.LogEvent, error)
 }
 
 // Config wires a Server. AdminPassword is hashed with a fresh per-boot salt
@@ -90,6 +93,9 @@ type Config struct {
 	// CommandState serves GET {/api|/admin}/devices/{id}/commands (W3-3):
 	// the device's pending commands + recorded results (nil disables).
 	CommandState func(deviceID string) (pending []*agentv1.Command, results []*agentv1.CommandResult)
+	// LogEvents (W6-1) serves GET {/api|/admin}/devices/{id}/events: the
+	// device's recent indexed agent-log events (newest first). Nil disables.
+	LogEvents func(deviceID string, limit int, level string) ([]store.LogEvent, error)
 	// AdminCaps is the capability set granted to operator sessions
 	// (W3-3); empty = the full Phase 1 set.
 	AdminCaps []string
@@ -157,6 +163,7 @@ func New(cfg Config) *Server {
 		dispatch:      cfg.Dispatch,
 		commandState:  cfg.CommandState,
 		export:        cfg.Export,
+		logEvents:     cfg.LogEvents,
 	}
 }
 
@@ -393,16 +400,18 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 // deviceSub routes the /{api|admin}/devices/{id}/... subtree (W2-2 + W3-3 +
-// W4-3):
+// W4-3 + W6-1):
 //
 //	POST {id}/commands  — dispatch (auth-gated under /api, open under /admin)
 //	GET  {id}/commands  — pending commands + recorded results (W3-3)
 //	GET  {id}/export    — the per-client full export bundle (W4-3)
+//	GET  {id}/events    — recent indexed agent-log events (W6-1)
 func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	// parts: ["api"|"admin", "devices", "<id>", "commands"|"export"]
-	if len(parts) != 4 || parts[1] != "devices" || parts[2] == "" {
-		http.Error(w, "expected /devices/{id}/(commands|export)", http.StatusNotFound)
+	// parts: ["api"|"admin", "devices", "<id>", "commands"|"export"|"events"]
+	if len(parts) != 4 || parts[1] != "devices" || parts[2] == "" ||
+		(parts[3] != "commands" && parts[3] != "export" && parts[3] != "events") {
+		http.Error(w, "expected /devices/{id}/(commands|export|events)", http.StatusNotFound)
 		return
 	}
 	switch parts[3] {
@@ -414,9 +423,69 @@ func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 		s.dispatchCommand(w, r, parts[2])
 	case "export":
 		s.handleDeviceExport(w, r, parts[2])
+	case "events":
+		s.deviceEvents(w, r, parts[2])
 	default:
-		http.Error(w, "expected /devices/{id}/(commands|export)", http.StatusNotFound)
+		http.Error(w, "expected /devices/{id}/(commands|export|events)", http.StatusNotFound)
 	}
+}
+
+// deviceEvents serves the W6-1 per-device log view: the device's recent
+// indexed agent-log events (the Timescale copy of what also ships to Loki).
+//
+//	GET /{api|admin}/devices/{id}/events?limit=50&level=warn
+//
+//	200 {device_id, events: [{id, level, msg, attrs, timestamp_ms, time}]} (newest first)
+//	400 bad limit/level
+//	404 unknown device
+//	503 log events not wired (pre-W6-1 server)
+func (s *Server) deviceEvents(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.logEvents == nil {
+		http.Error(w, "log events not configured", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	limit := 50
+	if v := q.Get("limit"); v != "" {
+		l, err := strconv.Atoi(v)
+		if err != nil || l <= 0 {
+			http.Error(w, "limit must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		limit = l
+	}
+	level := q.Get("level")
+	switch strings.ToLower(level) {
+	case "", "debug", "info", "warn", "error":
+	default:
+		http.Error(w, "level must be one of debug|info|warn|error", http.StatusBadRequest)
+		return
+	}
+	ok, err := s.devices.Contains(r.Context(), deviceID)
+	if err != nil {
+		http.Error(w, "device lookup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	events, err := s.logEvents(deviceID, limit, strings.ToLower(level))
+	if err != nil {
+		http.Error(w, "log events: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if events == nil {
+		events = []store.LogEvent{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_id": deviceID,
+		"events":    events,
+	})
 }
 
 // deviceCommands serves the W3-3 command audit view for one device.

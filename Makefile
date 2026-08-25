@@ -101,6 +101,10 @@ signer-test: ## Run the tools/signer unit tests (keygen/sign/verify + CLI-fixtur
 update-e2e: ## W4-2 DoD: a validly signed release is applied; a tampered/unsigned build is refused (in-process server + real agent binary + real signer)
 	@cd server && go run ./cmd/e2e/update
 
+.PHONY: logs-e2e
+logs-e2e: ## W6-1 DoD: real agent's log lines are queryable in Loki AND surfaced per-device in the RMM (needs the stack up: make dev)
+	@cd server && go run ./cmd/e2e/logs
+
 .PHONY: release-dir
 release-dir: ## W4-2: assemble a releases dir (RMMWAY_RELEASES_DIR) from agent/dist. Needs: make agent && make sign. $(DIR) [default releases-local]
 	@cd server && go run ./cmd/publish-release -dir $(or $(DIR),releases-local)

@@ -47,6 +47,7 @@ import (
 	"github.com/welcometotheweb/rmmway/agent/internal/collectors"
 	"github.com/welcometotheweb/rmmway/agent/internal/enroll"
 	"github.com/welcometotheweb/rmmway/agent/internal/exec"
+	"github.com/welcometotheweb/rmmway/agent/internal/logship"
 	"github.com/welcometotheweb/rmmway/agent/internal/rotate"
 	"github.com/welcometotheweb/rmmway/agent/internal/secure"
 	"github.com/welcometotheweb/rmmway/agent/internal/update"
@@ -244,6 +245,26 @@ func runCommand(args []string) {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
+	// W6-1: TEE the agent's structured events into a JSON-lines log file —
+	// the tail source for log shipping (Loki + the indexed per-device copy
+	// in the RMM). RMMWAY_LOG_FILE overrides the path (default: agent.jsonl
+	// next to the persisted identity). If the file can't be opened the
+	// agent runs log-only on stderr (shipping disabled, nothing else breaks).
+	logFile := os.Getenv("RMMWAY_LOG_FILE")
+	if logFile == "" {
+		logFile = filepath.Join(filepath.Dir(cfg.IdentityPath), "agent.jsonl")
+	}
+	var jsonl *logship.JSONLHandler
+	if h, jerr := logship.NewJSONLFile(logFile, slog.LevelInfo); jerr != nil {
+		fmt.Fprintf(os.Stderr, "run: structured log file %s: %v (log shipping disabled)\n", logFile, jerr)
+	} else {
+		jsonl = h
+		log = slog.New(logship.Tee(
+			slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}),
+			jsonl,
+		))
+	}
+
 	// W4-2: install an update staged by a previous pass (on Windows the
 	// in-use .exe can't be replaced in place, so it is staged as
 	// <exe>.pending). Re-verify the signature before touching the binary.
@@ -382,6 +403,54 @@ func runCommand(args []string) {
 		uplink.WithCollector(coll.Collect),
 		uplink.WithCommander(commander),
 	)
+
+	// W6-1: ship the structured log events (the tail of the JSON-lines
+	// file above) two ways: to Loki over its HTTP push API (RMMWAY_LOKI_URL,
+	// e.g. http://localhost:3100) and to the server over the uplink (where
+	// they are indexed per device in Timescale for the RMM). Delivery is
+	// at-least-once; both sinks dedup by entry id.
+	if jsonl != nil {
+		sc := logship.Config{
+			FilePath: logFile,
+			DeviceID: devID,
+			// Ship from the START of the file on first boot: the enroll /
+			// "agent ready" lines are logged BEFORE the shipper starts and
+			// must not be lost. On restart the persisted offset state
+			// (<path>.shipoffset) resumes where it left off, and entry ids
+			// make any re-send a no-op.
+			StartAtEnd:    false,
+			FlushInterval: 2 * time.Second,
+			PollInterval:  500 * time.Millisecond,
+			Logger:        log,
+			Uplink: func(ctx context.Context, entries []logship.Entry) error {
+				batch := &agentv1.LogBatch{Entries: make([]*agentv1.LogEntry, 0, len(entries))}
+				for _, e := range entries {
+					batch.Entries = append(batch.Entries, &agentv1.LogEntry{
+						Id: e.ID, TimestampMs: e.Time.UnixMilli(), Level: e.Level,
+						Msg: e.Msg, Attrs: e.Attrs,
+					})
+				}
+				return u.PushLogs(ctx, batch)
+			},
+		}
+		lokiURL := os.Getenv("RMMWAY_LOKI_URL")
+		if lokiURL != "" && lokiURL != "off" {
+			sc.Loki = logship.NewLokiClient(lokiURL, devID, nil)
+		}
+		ship, err := logship.New(sc)
+		if err != nil {
+			log.Warn("logship: start", "err", err)
+		} else {
+			log.Info("log shipping enabled",
+				"file", logFile, "loki", lokiURL, "uplink_indexed", true)
+			go func() {
+				if err := ship.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					log.Warn("logship stopped", "err", err)
+				}
+				_ = ship.Close()
+			}()
+		}
+	}
 
 	// W4-2: signed auto-update. Periodically checks the server for a newer
 	// release; a validly signed one is installed + re-exec'd, a tampered or

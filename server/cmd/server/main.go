@@ -375,6 +375,23 @@ func main() {
 		metricsSink = store.NewPostgresMetricsSink(pgPool)
 	}
 	cancelBg()
+
+	// W6-1: the log store (indexed agent log events). Postgres-backed when
+	// the hypertable is available (the per-device Timescale copy the RMM
+	// surfaces); in-memory otherwise, so the ingest + API behave identically
+	// in degraded mode — the agent still ships to Loki independently.
+	var logSink store.LogSink
+	var logReader store.LogEventReader
+	if hasPG {
+		ls := store.NewPostgresLogStore(pgPool)
+		logSink = ls
+		logReader = ls
+		log.Println("log events: indexed in Timescale (log_events hypertable)")
+	} else {
+		mem := store.NewMemoryLogStore(100000)
+		logSink = mem
+		logReader = mem
+	}
 	if *migrateOnly {
 		log.Println("migrate-only: done")
 		return
@@ -479,7 +496,7 @@ func main() {
 	}
 
 	// ---- gRPC ingest (W1-5) + mTLS agent channel (W3-1) ---------------
-	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr, Caps: capsIssuer,
+	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr, Caps: capsIssuer, Logs: logSink,
 		OnCommandResult: func(res *agentv1.CommandResult) {
 			// W5-2: a FINAL agent command answer becomes a bus event so a
 			// waiting flow script node advances (event-driven chain hop).
@@ -663,6 +680,9 @@ func main() {
 		Dispatch:      svc.Dispatcher().Dispatch,
 		CommandState: func(deviceID string) ([]*agentv1.Command, []*agentv1.CommandResult) {
 			return svc.Dispatcher().PendingFor(deviceID), svc.Dispatcher().ResultsFor(deviceID)
+		},
+		LogEvents: func(deviceID string, limit int, level string) ([]store.LogEvent, error) {
+			return logReader.Recent(context.Background(), deviceID, limit, level)
 		},
 		AdminCaps: adminCaps(),
 		Baseline:  baselineJob,

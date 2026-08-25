@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -67,6 +68,13 @@ type Uplink struct {
 	collect   func(ctx context.Context) (*agentv1.MetricBatch, error) // W1-2 collector
 	commander *Commander                                              // W3-3 (nil = legacy log-only)
 	rng       *rand.Rand
+
+	// cur is the live stream of the current session (nil between
+	// sessions). W6-1: PushLogs (the log shipper) sends LogBatch frames
+	// on it from another goroutine; gRPC client-stream Send is safe for
+	// concurrent use by the heartbeat loop and the shipper.
+	curMu sync.Mutex
+	cur   agentv1.AgentService_StreamClient
 }
 
 // Commander (W3-3) turns a dispatched command into verified action: it
@@ -128,6 +136,31 @@ func New(client Streamer, devID, jwt string, cfg Config, opts ...Option) *Uplink
 // DeviceID returns the uplink's device id.
 func (u *Uplink) DeviceID() string { return u.devID }
 
+// setCur publishes the live stream of the current session (nil on exit).
+func (u *Uplink) setCur(st agentv1.AgentService_StreamClient) {
+	u.curMu.Lock()
+	u.cur = st
+	u.curMu.Unlock()
+}
+
+// PushLogs (W6-1) ships one batch of structured log events on the live
+// stream (a LogBatch uplink frame; the server indexes them in the
+// log_events hypertable). It returns an error when no session is live or
+// the send fails — the caller (the log shipper) keeps the batch queued
+// and retries on its next tick.
+func (u *Uplink) PushLogs(ctx context.Context, batch *agentv1.LogBatch) error {
+	if batch == nil || len(batch.GetEntries()) == 0 {
+		return nil
+	}
+	u.curMu.Lock()
+	st := u.cur
+	u.curMu.Unlock()
+	if st == nil {
+		return errors.New("no live uplink stream")
+	}
+	return st.Send(&agentv1.StreamRequest{Payload: &agentv1.StreamRequest_Logs{Logs: batch}})
+}
+
 // Run drives the stream until ctx is canceled. It reconnects with exponential
 // backoff (capped, jittered) on any stream error and never exits on a dropped
 // connection — that is the whole point of an RMM agent uplink.
@@ -169,6 +202,8 @@ func (u *Uplink) streamSession(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open stream: %w", err)
 	}
+	u.setCur(stream)
+	defer u.setCur(nil)
 
 	// Downlink reader: drain acks/commands so the client-side send buffer
 	// doesn't wedge. W2 command handling hooks in here; for now we just log

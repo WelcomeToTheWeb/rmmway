@@ -49,6 +49,10 @@ type Config struct {
 	// flow script node. Non-final reports (RECEIVED/RUNNING) are not
 	// surfaced (they carry no outcome). Nil = no hook (tests).
 	OnCommandResult func(*agentv1.CommandResult)
+	// Logs (W6-1) indexes the agent's structured log batches (StreamRequest
+	// logs frames) per device — the Timescale copy the RMM surfaces. Nil =
+	// log frames are accepted and dropped (pre-W6-1 servers / tests).
+	Logs store.LogSink
 }
 
 func (c *Config) withDefaults() {
@@ -517,6 +521,15 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 				// flow script node advances (event-driven, not poll-only).
 				if s.cfg.OnCommandResult != nil && isFinalCommandStatus(res.GetStatus()) {
 					s.cfg.OnCommandResult(res)
+				}
+			}
+		case *agentv1.StreamRequest_Logs:
+			// W6-1: structured agent-log events (the same batches the agent
+			// pushes to Loki). Indexed per device; sink errors must not kill
+			// the stream — the shipper re-sends and the entry id dedups.
+			if b := p.Logs; b != nil && len(b.GetEntries()) > 0 && s.cfg.Logs != nil {
+				if werr := s.cfg.Logs.Write(ctx, devID, b); werr != nil {
+					log.Printf("log events write %s: %v", devID, werr)
 				}
 			}
 		}

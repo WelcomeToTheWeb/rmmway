@@ -23,6 +23,7 @@ option go_package = "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1
 
 import "rmmway/agent/v1/metrics.proto";
 import "rmmway/agent/v1/commands.proto";
+import "rmmway/agent/v1/logs.proto";
 
 service AgentService {
   // Enroll is the first contact for a freshly bootstrapped agent. It proves
@@ -118,6 +119,10 @@ message StreamRequest {
     // REFUSED / UNSUPPORTED). REFUSED means the capability check failed —
     // the agent did NOT execute the command.
     CommandResult command_result = 3;
+    // W6-1: structured agent-log events (the agent tails its own JSON-lines
+    // log and ships each batch here AND to Loki). Server-side dedup by
+    // entry id makes the at-least-once replay safe.
+    LogBatch logs = 4;
   }
 }
 

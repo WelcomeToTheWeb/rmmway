@@ -1,7 +1,7 @@
 # RMMWay
 
 Self-hosted RMM (remote monitoring & management): static Go agents, a Go/gRPC
-server on TimescaleDB + NATS + Redis + Meilisearch, React/Tauri frontend.
+server on TimescaleDB + NATS + Redis + Meilisearch + Loki, React/Tauri frontend.
 Strategy: [`IDEA.md`](IDEA.md) · Task board: [`TASKS.md`](TASKS.md).
 
 ## Layout
@@ -20,8 +20,8 @@ Makefile     make dev / up / down / health / build / test / proto
 Requires Docker + Go 1.24+ + Node 18+.
 
 ```sh
-make dev        # boots TimescaleDB, NATS (JetStream), Redis, MinIO, Meilisearch
-                # and blocks until all 5 report healthy
+make dev        # boots TimescaleDB, NATS (JetStream), Redis, MinIO, Meilisearch, Loki
+                # and blocks until all 6 report healthy
 make run-server # Go backend on :8080 (curl localhost:8080/healthz)
 make frontend   # React dev server on :5173 (proxies /healthz → :8080)
 make down       # stop the stack (volumes kept)
@@ -35,8 +35,9 @@ Redis PING, MinIO S3 API, Meilisearch health) — it's the W0-1 DoD check.
 | --- | --- |
 | 8080 | Server HTTP API — health, bootstrap-token mint, device list/search (admin) |
 | 50051 | gRPC agent ingest — enroll + authenticated uplink |
-| 5432 | TimescaleDB — device registry + `metrics` hypertable + 1-min rollups |
+| 5432 | TimescaleDB — device registry + `metrics` hypertable + 1-min rollups + `log_events` (W6-1) |
 | 7700 | Meilisearch — device search index (Cmd-K palette backing) |
+| 3100 | Loki — agent log push + query API (W6-1) |
 
 ## Getting all components up
 
@@ -46,7 +47,7 @@ three terminals:
 
 ```sh
 # Terminal 1 — backing services (Timescale, NATS JetStream, Redis, MinIO,
-# Meilisearch); blocks until all 5 report healthy
+# Meilisearch, Loki); blocks until all 6 report healthy
 make dev
 
 # Terminal 2 — server (applies pending SQL migrations on boot)
@@ -71,6 +72,7 @@ curl -fsS localhost:8080/healthz | python3 -m json.tool
 | Redis | `make dev` | probed by `/healthz`; reserved for dispatch/session work |
 | MinIO | `make dev` | S3 blob store |
 | Meilisearch | `make dev` | device search index (Cmd-K palette) |
+| Loki | `make dev` | agent log push + query API (W6-1) |
 | Server (Go) | `make run-server` | gRPC ingest + HTTP API + baseline/alert engine |
 | Frontend (React) | `make frontend` | operator UI |
 
@@ -95,6 +97,32 @@ docker exec rmmway-timescale psql -U rmmway -d rmmway \
 # 1-minute rollups (lag ~5 min by design — end_offset):
 docker exec rmmway-timescale psql -U rmmway -d rmmway \
   -c "SELECT device_id, name, bucket, round(avg_value::numeric,2), n FROM metrics_1m ORDER BY 1,4 DESC;"
+```
+
+## Agent logs (W6-1)
+
+Each agent TEEs its structured `slog` events into a JSON-lines file
+(default `agent.jsonl` next to the persisted identity, override with
+`RMMWAY_LOG_FILE`) and tails it, shipping every batch **two ways**:
+
+- **Loki** (`RMMWAY_LOKI_URL`, e.g. `http://localhost:3100`) — pushed to
+  `/loki/api/v1/push` with `device_id` / `job` / `level` labels, so the
+  lines are queryable in the log stack;
+- **the server** — as `LogBatch` frames on the existing gRPC uplink, where
+  they are indexed per device in the `log_events` Timescale hypertable and
+  surfaced in the RMM (`GET /api/devices/{id}/events`, newest first, level
+  filter; the Devices view expands a row to show them).
+
+Delivery is at-least-once: every entry carries a stable content-derived id
+so both sinks dedup a re-sent batch (reconnect replay is a no-op). The
+persisted offset (`<file>.shipoffset`) means a restart resumes where it
+left off instead of re-shipping history.
+
+```bash
+# Query an agent's lines in Loki:
+curl -s 'http://localhost:3100/loki/api/v1/query_range?query={device_id="dev-…",job="rmmway-agent"}&limit=50'
+# Or the RMM's per-device copy:
+curl -s http://localhost:8080/admin/devices/dev-…/events?limit=50
 ```
 
 ## Device search (Meilisearch)

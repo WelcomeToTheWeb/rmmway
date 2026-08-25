@@ -69,8 +69,8 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if n != 6 {
-		t.Fatalf("expected 6 migrations applied, got %d", n)
+	if n != 7 {
+		t.Fatalf("expected 7 migrations applied, got %d", n)
 	}
 
 	mustScan := func(query string, dst ...any) {
@@ -97,6 +97,12 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	mustScan(`SELECT count(*) FROM timescaledb_information.continuous_aggregates WHERE view_name='metrics_1m'`, &count)
 	if count != 1 {
 		t.Fatalf("expected metrics_1m continuous aggregate, got %d", count)
+	}
+	// W6-1: the log_events hypertable (indexed agent log events) must be
+	// created by 0007_log_events.sql.
+	mustScan(`SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_name='log_events'`, &count)
+	if count != 1 {
+		t.Fatalf("expected log_events hypertable, got %d", count)
 	}
 
 	// W5-1: the self-healing tables (playbooks + heal_runs + heal_events)

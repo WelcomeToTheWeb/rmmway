@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
@@ -200,5 +201,79 @@ func TestAdminBootstrapStillWorks(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&out)
 	if out["bootstrap_token"] != "bt-test" || out["device_id"] != "dev-xyz" {
 		t.Fatalf("bootstrap output: %v", out)
+	}
+}
+
+// TestDeviceEventsEndpoint (W6-1): GET {/api|/admin}/devices/{id}/events
+// serves the device's recent indexed log events, auth-gated under /api.
+func TestDeviceEventsEndpoint(t *testing.T) {
+	devs := store.NewMemoryDeviceStore()
+	_ = devs.Register(context.Background(), "dev-abc", "fileserver-01", "linux", "amd64", "0.1.0", []string{"10.0.0.9"}, 30, 30)
+	mem := store.NewMemoryLogStore(0)
+	_ = mem.Write(context.Background(), "dev-abc", &agentv1.LogBatch{Entries: []*agentv1.LogEntry{
+		{Id: "e1", TimestampMs: 100, Level: "INFO", Msg: "agent ready"},
+		{Id: "e2", TimestampMs: 300, Level: "WARN", Msg: "uplink stream ended"},
+	}})
+	s := New(Config{
+		Devices:       devs,
+		JWTSecret:     []byte("test-secret"),
+		AdminUser:     "admin",
+		AdminPassword: "s3cret",
+		LogEvents: func(deviceID string, limit int, level string) ([]store.LogEvent, error) {
+			return mem.Recent(context.Background(), deviceID, limit, level)
+		},
+	})
+	// /api without a token -> 401.
+	if code := doAuthed(t, s, http.MethodGet, "/api/devices/dev-abc/events", ""); code != http.StatusUnauthorized {
+		t.Fatalf("no token: got %d, want 401", code)
+	}
+	// /admin is open: 200 with newest-first events.
+	mux := http.NewServeMux()
+	s.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/admin/devices/dev-abc/events", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin events: got %d, want 200", rec.Code)
+	}
+	var out struct {
+		DeviceID string           `json:"device_id"`
+		Events   []store.LogEvent `json:"events"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.DeviceID != "dev-abc" || len(out.Events) != 2 || out.Events[0].ID != "e2" || out.Events[1].ID != "e1" {
+		t.Fatalf("events = %+v, want newest-first e2,e1", out.Events)
+	}
+	// Level filter.
+	req = httptest.NewRequest(http.MethodGet, "/admin/devices/dev-abc/events?level=warn", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	out = struct {
+		DeviceID string           `json:"device_id"`
+		Events   []store.LogEvent `json:"events"`
+	}{}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode warn: %v", err)
+	}
+	if len(out.Events) != 1 || out.Events[0].ID != "e2" {
+		t.Fatalf("warn filter = %+v, want exactly e2", out.Events)
+	}
+	// Bad level -> 400; bad limit -> 400.
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/events?level=verbose", ""); code != http.StatusBadRequest {
+		t.Fatalf("bad level: got %d, want 400", code)
+	}
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/events?limit=abc", ""); code != http.StatusBadRequest {
+		t.Fatalf("bad limit: got %d, want 400", code)
+	}
+	// Unknown device -> 404.
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-nope/events", ""); code != http.StatusNotFound {
+		t.Fatalf("unknown device: got %d, want 404", code)
+	}
+	// Not wired -> 503.
+	s2 := New(Config{Devices: devs, JWTSecret: []byte("test-secret"), AdminUser: "admin", AdminPassword: "s3cret"})
+	if code := doAuthed(t, s2, http.MethodGet, "/admin/devices/dev-abc/events", ""); code != http.StatusServiceUnavailable {
+		t.Fatalf("nil logEvents: got %d, want 503", code)
 	}
 }

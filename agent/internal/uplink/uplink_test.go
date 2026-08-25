@@ -221,23 +221,22 @@ func TestUplinkBearsJwt(t *testing.T) {
 		recvErr: make(chan error, 1),
 		ctx:     ctx,
 	}
-	var captured context.Context
+	captured := make(chan context.Context, 1)
 	streamer := &captureStreamer{
 		base:     &fakeStreamer{stream: stream},
-		captured: &captured,
+		captured: captured,
 	}
 	u := New(streamer, "dev-123", "jwt-secret-token",
 		Config{HeartbeatInterval: 10 * time.Millisecond, Logger: quiet()})
 
 	go func() { _ = u.Run(ctx) }()
-	deadline := time.Now().Add(150 * time.Millisecond)
-	for captured == nil && time.Now().Before(deadline) {
-		time.Sleep(1 * time.Millisecond)
-	}
-	if captured == nil {
+	var gotCtx context.Context
+	select {
+	case gotCtx = <-captured:
+	case <-time.After(150 * time.Millisecond):
 		t.Fatal("Stream() was never called")
 	}
-	md, _ := metadata.FromOutgoingContext(captured)
+	md, _ := metadata.FromOutgoingContext(gotCtx)
 	got := md.Get("authorization")
 	if len(got) != 1 || got[0] != "Bearer jwt-secret-token" {
 		t.Fatalf("authorization metadata = %v, want [Bearer jwt-secret-token]", got)
@@ -246,10 +245,68 @@ func TestUplinkBearsJwt(t *testing.T) {
 
 type captureStreamer struct {
 	base     Streamer
-	captured *context.Context
+	captured chan context.Context
 }
 
 func (c *captureStreamer) Stream(ctx context.Context, opts ...grpc.CallOption) (agentv1.AgentService_StreamClient, error) {
-	*c.captured = ctx
+	select {
+	case c.captured <- ctx:
+	default:
+	}
 	return c.base.Stream(ctx, opts...)
+}
+
+// TestPushLogsRequiresLiveStream (W6-1): PushLogs before a session is an
+// error (the shipper keeps the batch queued), and during a session it sends
+// a LogBatch frame on the stream.
+func TestPushLogsRequiresLiveStream(t *testing.T) {
+	batch := &agentv1.LogBatch{Entries: []*agentv1.LogEntry{{
+		Id: "abc123", TimestampMs: 1, Level: "INFO", Msg: "agent ready",
+	}}}
+	// No session yet: the streamer hasn't been asked for a stream, so cur
+	// is nil and PushLogs must fail (retryable for the shipper).
+	stream := &fakeBidi{
+		recvOut: make(chan *agentv1.StreamResponse, 1),
+		recvErr: make(chan error, 1),
+		ctx:     context.Background(),
+	}
+	u := testUplink(t, stream)
+	if err := u.PushLogs(context.Background(), batch); err == nil {
+		t.Fatalf("PushLogs with no live stream: expected error, got nil")
+	}
+	// An empty batch is a no-op even with no stream.
+	if err := u.PushLogs(context.Background(), &agentv1.LogBatch{}); err != nil {
+		t.Fatalf("PushLogs(empty) = %v, want nil", err)
+	}
+
+	// Run a session (heartbeats flow), then PushLogs must land on the wire.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	stream.ctx = ctx
+	go func() { _ = u.Run(ctx) }()
+
+	// Wait for the session to register a stream (first heartbeat sent).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := u.PushLogs(ctx, batch); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stream.sentMu.Lock()
+	var logsFrames int
+	var last *agentv1.LogBatch
+	for _, f := range stream.sent {
+		if lb := f.GetLogs(); lb != nil {
+			logsFrames++
+			last = lb
+		}
+	}
+	stream.sentMu.Unlock()
+	if logsFrames != 1 {
+		t.Fatalf("LogBatch frames on the wire = %d, want 1", logsFrames)
+	}
+	if last.GetEntries()[0].GetId() != "abc123" || last.GetEntries()[0].GetMsg() != "agent ready" {
+		t.Fatalf("LogBatch content = %v", last)
+	}
 }

@@ -9,7 +9,7 @@ DEADLINE=$(( $(date +%s) + TIMEOUT ))
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
-services=(timescale nats redis minio meilisearch)
+services=(timescale nats redis minio meilisearch loki)
 
 echo "==> Waiting for services to become healthy (timeout ${TIMEOUT}s)"
 

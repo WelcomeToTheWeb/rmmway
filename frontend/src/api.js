@@ -59,6 +59,20 @@ export const api = {
       body,
     }),
 
+  // GET /api/devices/{id}/events?limit=&level= -> { device_id, events[] }
+  // (newest first). W6-1: the device's recent indexed agent-log events
+  // (the Timescale copy of what also ships to Loki). Each event has
+  // id, level, msg, attrs, timestamp_ms, time.
+  events: (token, deviceId, { limit = 100, level = "" } = {}) => {
+    const q = new URLSearchParams();
+    q.set("limit", String(limit));
+    if (level) q.set("level", level);
+    return request(
+      `/api/devices/${encodeURIComponent(deviceId)}/events?${q.toString()}`,
+      { token }
+    );
+  },
+
   // ---- W2-4: baseline-driven alerts + inbox ---------------------------
   // GET /api/alerts?status=open|acked|resolved&device_id=...&limit=...
   // -> Alert[] (id, device_id, hostname, name, source, status, channel,
