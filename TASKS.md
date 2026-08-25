@@ -374,9 +374,9 @@ parallel. Within a track, respect `Depends on` ordering.
   14/14 (incl. all 6 SBOMs) against the release-shipped `minisign.pub`.
 
 #### W4-2 — Agent verifies release signature
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi
+- **Started:** 2026-08-25  ·  **Done:** —
 - **Depends on:** W3-4
 - **Effort/Impact:** M / High
 - Agent checks the server's release signature before auto-updating.
