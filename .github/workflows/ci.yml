@@ -186,6 +186,6 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: |
           cosign verify \
-            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.*" \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"

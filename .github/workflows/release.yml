@@ -53,13 +53,23 @@ jobs:
             gh release create "$TAG" --title "RMMWay ${TAG}" \
               --notes "Signed release (W3-4): agent binaries + installers + SHA256SUMS carry minisign signatures (minisign.pub ships alongside); the server image ghcr.io/welcometotheweb/rmmway:${TAG#v} is cosign/Sigstore-signed."
           fi
-          gh release upload "$TAG" --clobber \
-            agent/dist/rmmway-agent-* \
-            agent/dist/*.minisig \
-            scripts/install.sh scripts/install.sh.minisig \
-            scripts/install.ps1 scripts/install.ps1.minisig \
-            SHA256SUMS SHA256SUMS.minisig \
-            keys/minisign.pub
+          # Upload one file at a time, retrying on transient name-collision
+          # 422s (eventual-consistency in the asset store); --clobber makes
+          # re-cutting a tag idempotent.
+          upload() {
+            local f="$1" a
+            for a in 1 2 3 4 5; do
+              if gh release upload "$TAG" --clobber "$f"; then return 0; fi
+              sleep 3
+            done
+            echo "upload failed after 5 attempts: $f"; return 1
+          }
+          for f in agent/dist/rmmway-agent-* agent/dist/*.minisig \
+                   scripts/install.sh scripts/install.sh.minisig \
+                   scripts/install.ps1 scripts/install.ps1.minisig \
+                   SHA256SUMS SHA256SUMS.minisig keys/minisign.pub; do
+            upload "$f"
+          done
           # Invariant: every shipped artifact has its signature present too.
           EXPECTED='rmmway-agent-linux-amd64 rmmway-agent-linux-arm64 rmmway-agent-darwin-amd64 rmmway-agent-darwin-arm64 rmmway-agent-windows-amd64.exe install.sh install.ps1 SHA256SUMS'
           ACTUAL="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
@@ -108,6 +118,6 @@ jobs:
         # verify against the Sigstore identity of THIS repository's Actions.
         run: |
           cosign verify \
-            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.*" \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "ghcr.io/welcometotheweb/rmmway@${{ steps.build.outputs.digest }}"
