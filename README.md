@@ -38,6 +38,44 @@ Redis PING, MinIO S3 API, Meilisearch health) — it's the W0-1 DoD check.
 | 5432 | TimescaleDB — device registry + `metrics` hypertable + 1-min rollups |
 | 7700 | Meilisearch — device search index (Cmd-K palette backing) |
 
+## Getting all components up
+
+Everything runs locally on defaults — the server's built-in defaults point at
+the compose stack, and the admin login is `admin` / `admin`. Four components,
+three terminals:
+
+```sh
+# Terminal 1 — backing services (Timescale, NATS JetStream, Redis, MinIO,
+# Meilisearch); blocks until all 5 report healthy
+make dev
+
+# Terminal 2 — server (applies pending SQL migrations on boot)
+make run-server     # HTTP :8080 · gRPC :50051 · mTLS :50052
+
+# Terminal 3 — frontend
+make frontend       # http://localhost:5173 — login admin / admin
+```
+
+The "everything is up" signal is `/healthz` — it returns 200 only when all
+five backing services answer (active probes, not just open ports):
+
+```sh
+curl -fsS localhost:8080/healthz | python3 -m json.tool
+# {"ok": true, "version": "…", "probes": [{"service": "timescale", "ok": true}, …]}
+```
+
+| Component | Start | What it does |
+| --- | --- | --- |
+| TimescaleDB | `make dev` | device registry + `metrics` hypertable + rollups |
+| NATS (JetStream) | `make dev` | event bus for automation (W5/W6) |
+| Redis | `make dev` | probed by `/healthz`; reserved for dispatch/session work |
+| MinIO | `make dev` | S3 blob store |
+| Meilisearch | `make dev` | device search index (Cmd-K palette) |
+| Server (Go) | `make run-server` | gRPC ingest + HTTP API + baseline/alert engine |
+| Frontend (React) | `make frontend` | operator UI |
+
+Teardown: `make down` (volumes kept) or `make clean` (volumes deleted).
+
 ## Agent lifecycle
 
 1. **Bootstrap** — `POST /admin/bootstrap/mint` (admin) issues a one-time
