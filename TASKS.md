@@ -56,9 +56,9 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
-- **W3/W4 Trust:**     3 / 8
+- **W3/W4 Trust:**     4 / 8
 - **W5/W6 Automation:** 0 / 5
-- **Total:** 18 / 28
+- **Total:** 19 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -348,14 +348,30 @@ parallel. Within a track, respect `Depends on` ordering.
   guide + key rotation in README ("Release signing").
 
 #### W4-1 — CycloneDX SBOM per artifact
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-25  ·  **Done:** —
+- **Started:** 2026-08-25  ·  **Done:** 2026-08-25 (commits `fed58d3`, `2513256`; release v0.5.0, GH run 32800419608 green)
 - **Depends on:** W0-3
 - **Effort/Impact:** M / High
 - Generate a CycloneDX SBOM for every image/binary in CI.
 - **Definition of done:** each release includes an SBOM listing Go modules +
-  OS packages.
+  OS packages. ✅ release **v0.5.0** ships **29 assets**: every artifact now
+  carries a CycloneDX 1.7 JSON SBOM (`<artifact>.cdx.json`) — 5 agent binaries
+  (13 Go modules each, binary sha256 cross-checked into the SBOM metadata),
+  the server image (23 Go modules + 5 distroless deb OS packages + OS
+  component) — each minisigned like the artifacts themselves (13-artifact
+  sign/verify set, SHA256SUMS extended). Scanner: pinned **syft 1.51.0**
+  (`scripts/install-syft.sh`, sha256-verified download; `scripts/sbom.sh`,
+  `make sbom` / `make sbom-agent`). CI: every build generates SBOMs (GitHub
+  artifacts: `rmmway-sboms`, `rmmway-server-sbom`); the server image is
+  scanned from the exact pushed bytes (buildx `outputs: type=docker` tar →
+  `syft docker-archive:`) and the SBOM is `cosign attach sbom`-ed to the GHCR
+  digest (media type `application/vnd.cyclonedx+json`). Release: asset
+  inventory invariant now includes the SBOMs; a new `release` job creates the
+  GitHub release first (the parallel server job raced "release not found" on
+  the first v0.5.0 cut — fixed in `2513256`). External skeptic pass on
+  v0.5.0: all 29 assets downloaded → `sha256sum -c` 12/12 → signer verify
+  14/14 (incl. all 6 SBOMs) against the release-shipped `minisign.pub`.
 
 #### W4-2 — Agent verifies release signature
 - **Status:** ⬜ pending
