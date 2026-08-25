@@ -348,9 +348,9 @@ parallel. Within a track, respect `Depends on` ordering.
   guide + key rotation in README ("Release signing").
 
 #### W4-1 — CycloneDX SBOM per artifact
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi
+- **Started:** 2026-08-25  ·  **Done:** —
 - **Depends on:** W0-3
 - **Effort/Impact:** M / High
 - Generate a CycloneDX SBOM for every image/binary in CI.
