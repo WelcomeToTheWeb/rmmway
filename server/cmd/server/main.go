@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -32,6 +33,7 @@ import (
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ca"
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
+	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
@@ -153,6 +155,23 @@ func capTTL() time.Duration {
 		return 10 * time.Minute
 	}
 	return d
+}
+
+// healInterval is the W5-1 self-healing pass cadence (RMMWAY_HEAL_INTERVAL,
+// default 5m). One pass detects failing conditions, drives in-flight runs
+// forward (confirm re-measures), and escalates stuck ones. "off" disables.
+func healInterval() (time.Duration, bool) {
+	v := os.Getenv("RMMWAY_HEAL_INTERVAL")
+	if v == "off" {
+		return 0, false
+	}
+	if v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d, true
+		}
+		log.Printf("WARN: bad RMMWAY_HEAL_INTERVAL %q — using 5m", v)
+	}
+	return 5 * time.Minute, true
 }
 
 // adminCaps is the capability set minted into operator session tokens
@@ -466,6 +485,37 @@ func main() {
 		}()
 	}
 
+	// ---- self-healing playbook engine (W5-1) ---------------------------
+	// Detect -> verify-safe -> remediate -> confirm (re-measure) -> escalate.
+	// Postgres-backed (the run state machine + replay-safety live in the DB),
+	// so it needs hasPG; remediations go through the same capability-gated
+	// command dispatch as operator-run actions (W3-3 token on every script).
+	var healEngine *heal.Engine
+	if hasPG {
+		if d, on := healInterval(); on {
+			hst := heal.NewStore(pgPool)
+			remediate := func(ctx context.Context, deviceID, lang, script string) (string, error) {
+				return svc.Dispatcher().Dispatch(deviceID, &agentv1.Command_RunScript{
+					RunScript: &agentv1.RunScript{
+						Lang:      lang,
+						ScriptB64: base64.StdEncoding.EncodeToString([]byte(script)),
+					},
+				})
+			}
+			healEngine = heal.New(hst, remediate, svc.Dispatcher().Result, nil)
+			healErrCh := make(chan error, 1)
+			go healEngine.Run(context.Background(), d, healErrCh)
+			go func() {
+				for err := range healErrCh {
+					log.Printf("selfheal: %v", err)
+				}
+			}()
+			log.Printf("selfheal: playbook engine started (interval %s; playbooks seeded by 0005_selfheal.sql)", d)
+		} else {
+			log.Println("selfheal: disabled (RMMWAY_HEAL_INTERVAL=off)")
+		}
+	}
+
 	// ---- HTTP (health + operator API + admin JSON) ---------------------
 	mux := http.NewServeMux()
 
@@ -503,6 +553,7 @@ func main() {
 		AdminCaps: adminCaps(),
 		Baseline:  baselineJob,
 		Alerts:    alertStore,
+		Heal:      healEngine,
 	})
 	apiSrv.Register(mux)
 

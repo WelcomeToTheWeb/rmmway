@@ -69,8 +69,8 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if n != 4 {
-		t.Fatalf("expected 4 migrations applied, got %d", n)
+	if n != 5 {
+		t.Fatalf("expected 5 migrations applied, got %d", n)
 	}
 
 	mustScan := func(query string, dst ...any) {
@@ -99,6 +99,16 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 		t.Fatalf("expected metrics_1m continuous aggregate, got %d", count)
 	}
 
+	// W5-1: the self-healing tables (playbooks + heal_runs + heal_events)
+	// must be created by 0005_selfheal.sql, with the starter library seeded.
+	mustScan(`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('playbooks','heal_runs','heal_events')`, &count)
+	if count != 3 {
+		t.Fatalf("expected playbooks+heal_runs+heal_events tables, got %d", count)
+	}
+	mustScan(`SELECT count(*) FROM playbooks WHERE key IN ('disk.full','service.down','wsus.stuck')`, &count)
+	if count != 3 {
+		t.Fatalf("expected 3 starter playbooks seeded, got %d", count)
+	}
 	// Idempotency: a second run (server restart) applies nothing.
 	if n, err := Migrate(ctx, db, "server/migrations"); err != nil || n != 0 {
 		t.Fatalf("second migrate should be a no-op, got n=%d err=%v", n, err)
