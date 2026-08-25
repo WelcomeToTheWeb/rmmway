@@ -399,9 +399,9 @@ parallel. Within a track, respect `Depends on` ordering.
   verification matrix + pinned-key==repo-key.
 
 #### W4-3 — Per-client full export
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi
+- **Started:** 2026-08-25  ·  **Done:** —
 - **Depends on:** W1-6
 - **Effort/Impact:** M / High
 - One-click export of a client's inventory + metrics + config to a portable
