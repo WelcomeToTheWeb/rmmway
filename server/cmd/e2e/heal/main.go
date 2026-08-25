@@ -121,8 +121,8 @@ func main() {
 	step("migrate")
 	if n, err := store.Migrate(ctx, pool, "migrations"); err != nil {
 		die("migrate: %v (n=%d)", err, n)
-	} else if n != 5 {
-		die("expected 5 migrations, got %d", n)
+	} else if n != 6 {
+		die("expected 6 migrations, got %d", n)
 	}
 	info("5 migrations applied to scratch db %s (starter playbooks seeded)", dbName)
 

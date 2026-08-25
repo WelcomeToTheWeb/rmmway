@@ -43,6 +43,12 @@ type Config struct {
 	// dispatched command. Nil = legacy dispatch (no capability tokens;
 	// agents without a pinned org root keep working unscoped).
 	Caps *caps.Issuer
+	// OnCommandResult (W5-2) fires after the dispatcher records a FINAL
+	// command result (SUCCEEDED/FAILED/TIMED_OUT/REFUSED/UNSUPPORTED), so
+	// an event bus can publish a command.result hop and advance a waiting
+	// flow script node. Non-final reports (RECEIVED/RUNNING) are not
+	// surfaced (they carry no outcome). Nil = no hook (tests).
+	OnCommandResult func(*agentv1.CommandResult)
 }
 
 func (c *Config) withDefaults() {
@@ -507,7 +513,28 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 			// capability check failed and the command was NOT executed.
 			if res := p.CommandResult; res != nil && res.GetCommandId() != "" {
 				s.dispatch.RecordResult(res)
+				// W5-2: surface FINAL results on the event bus so a waiting
+				// flow script node advances (event-driven, not poll-only).
+				if s.cfg.OnCommandResult != nil && isFinalCommandStatus(res.GetStatus()) {
+					s.cfg.OnCommandResult(res)
+				}
 			}
 		}
 	}
+}
+
+// isFinalCommandStatus reports whether a command result is terminal
+// (SUCCEEDED / FAILED / TIMED_OUT / REFUSED / UNSUPPORTED). Non-terminal
+// reports (RECEIVED, RUNNING, UNSPECIFIED) carry no outcome, so the W5-2
+// OnCommandResult hook does not fire for them.
+func isFinalCommandStatus(st agentv1.CommandResult_Status) bool {
+	switch st {
+	case agentv1.CommandResult_SUCCEEDED,
+		agentv1.CommandResult_FAILED,
+		agentv1.CommandResult_TIMED_OUT,
+		agentv1.CommandResult_REFUSED,
+		agentv1.CommandResult_UNSUPPORTED:
+		return true
+	}
+	return false
 }

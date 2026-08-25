@@ -4,12 +4,14 @@ import { api } from "./api.js";
 import Login from "./Login.jsx";
 import Devices from "./Devices.jsx";
 import Alerts from "./Alerts.jsx";
+import Flows from "./Flows.jsx";
 import Palette from "./Palette.jsx";
 
-// ---- tiny hash router: #/devices (default) and #/alerts -------------------
+// ---- tiny hash router: #/devices (default), #/alerts, #/flows --------------
 function parseRoute() {
   const h = window.location.hash;
   if (h.startsWith("#/alerts")) return "alerts";
+  if (h.startsWith("#/flows")) return "flows";
   return "devices";
 }
 
@@ -46,6 +48,12 @@ function Header({ route, openCount, onOpenPalette }) {
         >
           Alerts
           {openCount > 0 && <span className="badge">{openCount}</span>}
+        </a>
+        <a
+          className={"nav-item" + (route === "flows" ? " active" : "")}
+          href="#/flows"
+        >
+          Flows
         </a>
         <a
           className="nav-item"
@@ -137,6 +145,8 @@ function Shell() {
       <main className="content">
         {route === "alerts" ? (
           <Alerts token={token} onUnauthorized={logout} />
+        ) : route === "flows" ? (
+          <Flows token={token} onUnauthorized={logout} />
         ) : (
           <Devices
             token={token}

@@ -69,8 +69,8 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if n != 5 {
-		t.Fatalf("expected 5 migrations applied, got %d", n)
+	if n != 6 {
+		t.Fatalf("expected 6 migrations applied, got %d", n)
 	}
 
 	mustScan := func(query string, dst ...any) {

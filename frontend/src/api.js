@@ -80,4 +80,43 @@ export const api = {
   // is refused by the server.
   setAlertStatus: (token, id, status) =>
     request(`/api/alerts/${id}`, { method: "PATCH", token, body: { status } }),
+
+  // ---- W5-2: event-driven automation chains (visual composer) --------
+  // GET /api/flows -> Flow[] (id, name, description, graph, enabled, ...)
+  flows: (token) => request("/api/flows", { token }),
+
+  // POST /api/flows { name, description, graph, cooldown_seconds?, enabled? }
+  // -> 201 {flow}. graph = { nodes: [...] } (validated server-side).
+  createFlow: (token, body) =>
+    request("/api/flows", { method: "POST", token, body }),
+
+  // PATCH /api/flows/{id} -> the updated flow (partial body ok).
+  updateFlow: (token, id, body) =>
+    request(`/api/flows/${id}`, { method: "PATCH", token, body }),
+
+  // DELETE /api/flows/{id} -> 204.
+  deleteFlow: (token, id) =>
+    request(`/api/flows/${id}`, { method: "DELETE", token }),
+
+  // POST /api/flows/{id}/trigger { device_id, source?, value? } -> 202.
+  // Fires a SYNTHETIC trigger onto the NATS bus; the chain then proceeds
+  // asynchronously (poll flowRuns to watch it).
+  triggerFlow: (token, id, body) =>
+    request(`/api/flows/${id}/trigger`, { method: "POST", token, body }),
+
+  // GET /api/flows/runs?status=&flow_id=&device_id= -> Run[]
+  flowRuns: (token, { status = "", flow_id = "", device_id = "" } = {}) => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    if (flow_id) q.set("flow_id", String(flow_id));
+    if (device_id) q.set("device_id", device_id);
+    const qs = q.toString();
+    return request(`/api/flows/runs${qs ? `?${qs}` : ""}`, { token });
+  },
+
+  // GET /api/flows/runs/{id} -> { run, events } (the node audit trail).
+  flowRun: (token, id) => request(`/api/flows/runs/${id}`, { token }),
+
+  // POST /api/flows/sweep -> { active_runs } (re-cover in-flight runs).
+  sweepFlows: (token) => request("/api/flows/sweep", { method: "POST", token }),
 };

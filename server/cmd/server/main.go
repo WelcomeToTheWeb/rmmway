@@ -33,6 +33,7 @@ import (
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ca"
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
+	"github.com/welcometotheweb/rmmway/server/internal/flow"
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
@@ -173,6 +174,25 @@ func healInterval() (time.Duration, bool) {
 		log.Printf("WARN: bad RMMWAY_HEAL_INTERVAL %q — using 5m", v)
 	}
 	return 5 * time.Minute, true
+}
+
+// flowInterval parses a duration env for a flow-engine ticker
+// (RMMWAY_FLOW_SWEEP / RMMWAY_FLOW_SAMPLE); "off" returns -1 (disabled),
+// a bad value falls back to def with a warning.
+func flowInterval(key string, def time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	if v == "off" {
+		return -1
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		log.Printf("WARN: bad %s %q — using %s", key, v, def)
+		return def
+	}
+	return d
 }
 
 // adminCaps is the capability set minted into operator session tokens
@@ -440,8 +460,40 @@ func main() {
 		log.Println("meilisearch: disabled (RMMWAY_MEILI_ENDPOINT empty/off)")
 	}
 
+	// ---- event bus (W5-2) -------------------------------------------------
+	// The NATS/JetStream stream that carries every flow hop. Flows are
+	// Postgres-backed (the replay-safe run state), so the engine needs
+	// hasPG; when NATS is down the server degrades to in-memory mode for
+	// the rest of the stack, so the flow engine is disabled too (its whole
+	// point is that the chain runs OVER the bus).
+	var flowBus flow.Bus
+	if hasPG {
+		fb, err := flow.NewNatsBus(context.Background(), env("RMMWAY_NATS_URL", "nats://localhost:4222"), "RMMWAY_EVENTS", "flow-engine")
+		if err != nil {
+			log.Printf("WARN: nats event bus unavailable (%v) — flow engine disabled", err)
+		} else {
+			flowBus = fb
+			log.Println("nats event bus ready (stream RMMWAY_EVENTS)")
+		}
+	}
+
 	// ---- gRPC ingest (W1-5) + mTLS agent channel (W3-1) ---------------
-	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr, Caps: capsIssuer}, metricsSink, devicesStore)
+	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr, Caps: capsIssuer,
+		OnCommandResult: func(res *agentv1.CommandResult) {
+			// W5-2: a FINAL agent command answer becomes a bus event so a
+			// waiting flow script node advances (event-driven chain hop).
+			if flowBus == nil {
+				return
+			}
+			_ = flowBus.Publish(context.Background(), flow.SubjectCommand, &flow.Event{
+				Type:      flow.SubjectCommand,
+				CommandID: res.GetCommandId(),
+				Status:    res.GetStatus().String(),
+				Message:   res.GetError(),
+				At:        time.Now().UTC(),
+			})
+		},
+	}, metricsSink, devicesStore)
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(svc.JWTInterceptor),
 	)
@@ -517,6 +569,35 @@ func main() {
 		}
 	}
 
+	// ---- event-driven automation chains (W5-2) -------------------------
+	// Automations are DAGs of trigger -> script/check/notify nodes executed
+	// OVER the NATS event bus: every hop of every run is a bus event, the
+	// Postgres tables hold only the replay-safe run state. Real triggers
+	// come from the sampler (polls the metrics hypertable); synthetic ones
+	// from POST /api/flows/{id}/trigger.
+	var flowEngine *flow.Engine
+	if hasPG && flowBus != nil {
+		remediate := func(ctx context.Context, deviceID, lang, script string) (string, error) {
+			return svc.Dispatcher().Dispatch(deviceID, &agentv1.Command_RunScript{
+				RunScript: &agentv1.RunScript{
+					Lang:      lang,
+					ScriptB64: base64.StdEncoding.EncodeToString([]byte(script)),
+				},
+			})
+		}
+		flowEngine = flow.New(flow.NewStore(pgPool), flowBus, remediate, svc.Dispatcher().Result, nil,
+			flowInterval("RMMWAY_FLOW_SWEEP", 5*time.Second), flowInterval("RMMWAY_FLOW_SAMPLE", 60*time.Second))
+		flowEngine = flowEngine.WithLogger(log.New(os.Stderr, "flow: ", 0))
+		if err := flowEngine.Start(context.Background()); err != nil {
+			log.Printf("WARN: flow engine start failed (%v) — flows disabled", err)
+			flowEngine = nil
+		} else {
+			log.Println("flow engine: event-driven chains started (sampler + sweep on the NATS bus)")
+		}
+	} else if hasPG {
+		log.Println("flow engine: disabled (nats event bus unavailable)")
+	}
+
 	// ---- HTTP (health + operator API + admin JSON) ---------------------
 	mux := http.NewServeMux()
 
@@ -569,6 +650,7 @@ func main() {
 		Alerts:    alertStore,
 		Heal:      healEngine,
 		Releases:  relSrv,
+		Flows:     flowEngine,
 	})
 	apiSrv.Register(mux)
 
@@ -597,6 +679,9 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 	log.Println("shutting down")
+	if flowBus != nil {
+		flowBus.Close()
+	}
 	indexer.Stop()
 	grpcServer.GracefulStop()
 	if mtlsServer != nil {
