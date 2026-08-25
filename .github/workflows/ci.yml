@@ -87,7 +87,7 @@ jobs:
         # by the reference minisign(1) CLI.
         working-directory: tools/signer
         run: go test ./...
-      - name: update e2e (W4-2: signed release applies; tampered/unsigned refused)
+      - name: "update e2e (W4-2: signed release applies; tampered/unsigned refused)"
         # Builds real agent binaries, signs one with a throwaway key via the
         # real signer, serves it through an in-process server, and runs the
         # real agent `update` command: valid -> applied, tampered/unsigned ->
