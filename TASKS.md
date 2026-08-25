@@ -444,9 +444,9 @@ parallel. Within a track, respect `Depends on` ordering.
   notify; replay passes add no run/dispatch/notify).
 
 #### W5-2 — Event-driven chains over NATS
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi
+- **Started:** 2026-08-25  ·  **Done:** —
 - **Depends on:** W0-1
 - **Effort/Impact:** M / High
 - Model automations as DAGs of triggers→actions wired over NATS; visual
