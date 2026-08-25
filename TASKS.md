@@ -410,9 +410,9 @@ parallel. Within a track, respect `Depends on` ordering.
 ## W5/W6 — Automation & Integrations
 
 #### W5-1 — Self-healing playbook engine
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi
+- **Started:** 2026-08-25  ·  **Done:** —
 - **Depends on:** W1-2, W1-5
 - **Effort/Impact:** M / High
 - State machine: detect → verify-safe → remediate → confirm → escalate.
