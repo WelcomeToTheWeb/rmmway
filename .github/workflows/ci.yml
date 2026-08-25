@@ -121,6 +121,21 @@ jobs:
         env:
           RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
         run: go run ./cmd/e2e/export
+      - name: "trust e2e (W4-4 MILESTONE: a skeptic verifies a signed release + SBOM, and exports a client + confirms it's theirs)"
+        # Closes Block 2. Self-contained: Part A cross-builds the real agent,
+        # scans a CycloneDX SBOM with the pinned syft (auto-installed), signs
+        # binary+SBOM+SHA256SUMS with the real signer under a throwaway release
+        # key, then a fresh trust domain holding ONLY the public key verifies
+        # everything with go-minisign (independent impl) — and rejects a
+        # tampered byte and a wrong key. Part B enrolls a device on a scratch
+        # Timescale DB, does a one-click export through the real operator HTTP
+        # surface, and confirms the bundle is theirs (self-describing Verify,
+        # identity, exact sample count + spot values + range via a standard
+        # Parquet reader, tamper-reject).
+        working-directory: server
+        env:
+          RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
+        run: go run ./cmd/e2e/trust
 
   build:
     name: Build

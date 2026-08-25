@@ -116,6 +116,12 @@ pin-release-key: ## W4-2: re-pin the release public key into the agent (run afte
 export-e2e: ## W4-3 DoD: one-click client export -> self-describing Parquet+JSON bundle (verify + tamper + window + re-read + re-import). Needs a Timescale PG where the user can CREATE DATABASE
 	@cd server && go run ./cmd/e2e/export
 
+## ---- Provable trust milestone (W4-4) -------------------------------------------
+
+.PHONY: trust-e2e
+trust-e2e: ## W4-4 DoD (closes Block 2): a skeptic (a) verifies a signed release + reads the SBOM, (b) exports a client and confirms the data is theirs. Self-contained; Part B needs a Timescale PG (CREATEDB user)
+	@cd server && go run ./cmd/e2e/trust
+
 ## ---- SBOM (W4-1) -----------------------------------------------------------
 
 .PHONY: image
