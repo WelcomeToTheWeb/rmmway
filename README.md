@@ -322,6 +322,56 @@ Key management:
   interop with the reference `minisign(1)` CLI. W4-2 reuses the same
   library in the agent itself (release self-verification before update).
 
+## Agent auto-update (W4-2)
+
+Agents can update themselves from the server — but only a **correctly signed**
+release is ever installed. The trust anchor is the minisign **public key
+pinned inside the agent binary** (`agent/internal/update/minisign.pub`, the
+W3-4 release key, `019BF5A0CA5040DD`). The server is only a carrier: it serves
+a release manifest + the binaries + their `.minisig` files, and the agent
+verifies each download against the pinned key **before** replacing itself. A
+tampered or unsigned build is refused and the running binary is left
+untouched.
+
+**How an update is gated** (all must pass, in order):
+
+1. The manifest's `public_key` is identical to the agent's pinned key
+   (a server naming a different publisher is a refusal).
+2. The release version is newer than the running one (no silent downgrades).
+3. The downloaded bytes match the manifest sha256 (when present).
+4. The `.minisig` verifies against the pinned key (the primary gate).
+
+Only then is the binary atomically installed (and the agent re-execs; on
+Windows, where the in-use `.exe` can't be replaced in place, it is staged as
+`<exe>.pending` and applied at the next start).
+
+**Publish a release** for agents to pick up:
+
+```sh
+make agent && make sign        # build + sign agent/dist (W3-4 key)
+make release-dir DIR=releases-local   # assemble release.json + binaries + .minisig
+# point the server at it:
+RMMWAY_RELEASES_DIR=releases-local make run-server
+```
+
+**The agent side** — automatic while `run` is live (every 15m by default), or
+on demand:
+
+```sh
+rmmway-agent update --server http://rmm.local          # verify + install + re-exec
+rmmway-agent update --server http://rmm.local --check  # verify only
+```
+
+Tuning: `RMMWAY_AUTO_UPDATE=off` disables the background loop,
+`RMMWAY_UPDATE_INTERVAL=5m` sets its cadence, and `RMMWAY_UPDATE_PUBKEY=<pub>`
+overrides the pinned key at runtime (key rotation / test harnesses).
+
+**Proof:** `make update-e2e` builds two real agent binaries, signs one with a
+fresh throwaway key using the real signer, serves it through an in-process
+server, and runs the real `update` command — a valid release is applied
+(1.0.0 → 2.0.0), a tampered build is refused by the **signature** gate,
+and an unsigned build is refused, each leaving the previous binary intact.
+
 ## Conventions
 
 - Claims: `TASKS.md` is the coordination of record — claim before coding.

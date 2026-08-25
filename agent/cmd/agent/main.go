@@ -13,6 +13,8 @@
 //	rmmway-agent status [--config] show the persisted enrollment identity
 //	rmmway-agent run [--config]    service entrypoint: enroll + authenticated
 //	                               metric/heartbeat uplink (W1-4)
+//	rmmway-agent update [--check]  W4-2: verify the server's latest release
+//	                               signature; if valid, install + re-exec
 //
 // W1-3 service entrypoint (run) and W1-4 enrollment share one config surface:
 // environment variables (set by the systemd EnvironmentFile the installer
@@ -23,6 +25,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -46,6 +49,7 @@ import (
 	"github.com/welcometotheweb/rmmway/agent/internal/exec"
 	"github.com/welcometotheweb/rmmway/agent/internal/rotate"
 	"github.com/welcometotheweb/rmmway/agent/internal/secure"
+	"github.com/welcometotheweb/rmmway/agent/internal/update"
 	"github.com/welcometotheweb/rmmway/agent/internal/uplink"
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 )
@@ -112,8 +116,10 @@ func main() {
 		statusCommand(args[1:])
 	case "run":
 		runCommand(args[1:])
+	case "update":
+		updateCommand(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "usage: rmmway-agent [--version|ping [server-url]|collect|status|run] [--config <path>]\n")
+		fmt.Fprintf(os.Stderr, "usage: rmmway-agent [--version|ping [server-url]|collect|status|run|update] [--config <path>]\n")
 		os.Exit(2)
 	}
 }
@@ -237,6 +243,21 @@ func runCommand(args []string) {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// W4-2: install an update staged by a previous pass (on Windows the
+	// in-use .exe can't be replaced in place, so it is staged as
+	// <exe>.pending). Re-verify the signature before touching the binary.
+	if exe, err := os.Executable(); err == nil {
+		if pub, perr := update.PublicKey(os.Getenv("RMMWAY_UPDATE_PUBKEY")); perr == nil {
+			if err := update.ApplyPending(exe, pub, func(msg string, a ...any) {
+				log.Info(msg, a...)
+			}); err != nil {
+				log.Warn("pending update not applied", "err", err)
+			}
+		} else {
+			log.Warn("pending update check skipped (bad RMMWAY_UPDATE_PUBKEY)", "err", perr)
+		}
+	}
 
 	// 1. Bootstrap channel: plain transport (the agent has no mTLS material
 	// yet). Used for the one-time Enroll on first boot.
@@ -362,6 +383,12 @@ func runCommand(args []string) {
 		uplink.WithCommander(commander),
 	)
 
+	// W4-2: signed auto-update. Periodically checks the server for a newer
+	// release; a validly signed one is installed + re-exec'd, a tampered or
+	// unsigned one is refused (logged, never installed). RMMWAY_AUTO_UPDATE
+	// =off disables; RMMWAY_UPDATE_INTERVAL sets the cadence (default 15m).
+	go autoUpdate(ctx, log, cfg.Server)
+
 	fmt.Printf("rmmway-agent %s: connected to %s (%s) as device %s; uplink running\n", version, target, channel, devID)
 	if err := u.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "run: uplink exited: %v\n", err)
@@ -395,5 +422,146 @@ func statusCommand(args []string) {
 	}
 	if cfg.Server != "" {
 		fmt.Printf("server:   %s\n", cfg.Server)
+	}
+}
+
+// updateCommand is the W4-2 entrypoint: fetch the server's latest release,
+// verify its signature against the agent's pinned minisign key, and — only
+// if it verifies — install the new binary and re-exec. A tampered or
+// unsigned release is refused and the running binary is left untouched.
+//
+//	update            verify + install + re-exec
+//	update --check    verify only (download + signature, no install)
+//	update --no-restart  install but don't re-exec (test / service managers)
+func updateCommand(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	checkOnly := fs.Bool("check", false, "verify the latest release but do not install it")
+	noRestart := fs.Bool("no-restart", false, "install but do not re-exec the agent")
+	serverFlag := fs.String("server", "", "server base URL (default: RMMWAY_SERVER)")
+	// --config is handled by loadConfig, not this flag set: strip it out so
+	// flag.Parse doesn't choke on an unknown flag.
+	cfgPath := configPath(args)
+	fsArgs := make([]string, 0, len(args))
+	skip := false
+	for _, a := range args {
+		if skip {
+			skip = false
+			continue
+		}
+		if a == "--config" {
+			skip = true
+			continue
+		}
+		fsArgs = append(fsArgs, a)
+	}
+	fs.Parse(fsArgs)
+
+	cfg := loadConfig(cfgPath)
+	base := *serverFlag
+	if base == "" {
+		base = cfg.Server
+	}
+	if base == "" {
+		fmt.Fprintln(os.Stderr, "update: no server (set --server or RMMWAY_SERVER)")
+		os.Exit(1)
+	}
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
+
+	pub, err := update.PublicKey(os.Getenv("RMMWAY_UPDATE_PUBKEY"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "update: pinned key: %v\n", err)
+		os.Exit(1)
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	u := update.New(update.Config{
+		BaseURL:        base,
+		CurrentVersion: version,
+		PublicKey:      pub,
+		Logger:         log,
+	})
+	res := u.Run(ctx, *checkOnly, *noRestart)
+
+	// Human-readable summary; exit 0 for applied/verified/up-to-date/
+	// no-release, 1 for refused/error (so scripts and service units can
+	// react to a bad publish).
+	switch res.Status {
+	case update.StatusApplied:
+		extra := ""
+		if res.Err != nil {
+			extra = " (" + res.Err.Error() + ")"
+		}
+		fmt.Printf("update: applied %s%s — restarting into the new binary\n", res.Version, extra)
+		return
+	case update.StatusVerified:
+		fmt.Printf("update: latest %s verifies OK (%s) — not installed (--check)\n", res.Version, res.Comment)
+		return
+	case update.StatusUpToDate:
+		fmt.Printf("update: already on %s\n", res.Version)
+		return
+	case update.StatusNoRelease:
+		fmt.Println("update: server has no release for this platform yet")
+		return
+	default:
+		fmt.Fprintf(os.Stderr, "update: %s: %v\n", res.Status, res.Err)
+		os.Exit(1)
+	}
+}
+
+// autoUpdate is the W4-2 background loop in `run`: on a cadence it checks
+// the server for a newer release and, if the signature verifies, installs
+// it and re-execs (the re-exec replaces this process, so the goroutine is
+// not reached again). Refused / transient failures are logged and retried
+// on the next tick — a bad publish never takes the agent down.
+func autoUpdate(ctx context.Context, log *slog.Logger, server string) {
+	if v := os.Getenv("RMMWAY_AUTO_UPDATE"); v == "off" || v == "0" {
+		log.Debug("auto-update disabled (RMMWAY_AUTO_UPDATE)")
+		return
+	}
+	interval := 15 * time.Minute
+	if v := os.Getenv("RMMWAY_UPDATE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			interval = d
+		} else {
+			log.Warn("bad RMMWAY_UPDATE_INTERVAL, using 15m", "value", v)
+		}
+	}
+	base := server
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
+	pub, err := update.PublicKey(os.Getenv("RMMWAY_UPDATE_PUBKEY"))
+	if err != nil {
+		log.Warn("auto-update off (bad RMMWAY_UPDATE_PUBKEY)", "err", err)
+		return
+	}
+	u := update.New(update.Config{BaseURL: base, CurrentVersion: version, PublicKey: pub, Logger: log})
+
+	log.Info("auto-update armed", "interval", interval.String(), "pinned_key", update.KeyID(pub))
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		res := u.Run(cctx, false, false)
+		cancel()
+		switch res.Status {
+		case update.StatusApplied:
+			log.Info("auto-update applied", "version", res.Version)
+			return // re-exec (or staged restart) takes over from here
+		case update.StatusRefused:
+			log.Warn("auto-update refused, kept current binary", "version", res.Version, "reason", res.Err)
+		case update.StatusError:
+			log.Warn("auto-update check failed", "err", res.Err)
+			// up-to-date / no-release: quiet by design
+		}
 	}
 }

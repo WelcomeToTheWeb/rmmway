@@ -95,6 +95,21 @@ verify-sigs: ## W3-4: verify all signed artifacts against keys/minisign.pub
 signer-test: ## Run the tools/signer unit tests (keygen/sign/verify + CLI-fixture interop)
 	go -C tools/signer test ./...
 
+## ---- Signed agent auto-update (W4-2) ---------------------------------------
+
+.PHONY: update-e2e
+update-e2e: ## W4-2 DoD: a validly signed release is applied; a tampered/unsigned build is refused (in-process server + real agent binary + real signer)
+	@cd server && go run ./cmd/e2e/update
+
+.PHONY: release-dir
+release-dir: ## W4-2: assemble a releases dir (RMMWAY_RELEASES_DIR) from agent/dist. Needs: make agent && make sign. $(DIR) [default releases-local]
+	@cd server && go run ./cmd/publish-release -dir $(or $(DIR),releases-local)
+
+.PHONY: pin-release-key
+pin-release-key: ## W4-2: re-pin the release public key into the agent (run after a minisign key rotation), then rebuild
+	@cp keys/minisign.pub agent/internal/update/minisign.pub
+	@echo "re-pinned agent/internal/update/minisign.pub — commit it and rebuild the agent"
+
 ## ---- SBOM (W4-1) -----------------------------------------------------------
 
 .PHONY: image

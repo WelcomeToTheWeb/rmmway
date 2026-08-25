@@ -29,6 +29,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
+	"github.com/welcometotheweb/rmmway/server/internal/releases"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -46,6 +47,7 @@ type Server struct {
 	baseline *store.Baseline
 	alerts   *store.AlertStore
 	heal     *heal.Engine
+	releases *releases.Server
 
 	jwtSecret     []byte
 	tokenLifetime time.Duration
@@ -95,6 +97,9 @@ type Config struct {
 	// Heal is the W5-1 self-healing playbook engine; nil disables
 	// /api/heal* and /admin/heal* (in-memory-mode deployments).
 	Heal *heal.Engine
+	// Releases (W4-2) serves signed agent release artifacts for the agent's
+	// auto-update; nil disables /agent/releases/*.
+	Releases *releases.Server
 }
 
 // New builds a Server. A nil Devices falls back to an in-memory store.
@@ -129,6 +134,7 @@ func New(cfg Config) *Server {
 		baseline:      cfg.Baseline,
 		alerts:        cfg.Alerts,
 		heal:          cfg.Heal,
+		releases:      cfg.Releases,
 		jwtSecret:     cfg.JWTSecret,
 		tokenLifetime: cfg.TokenLifetime,
 		adminUser:     cfg.AdminUser,
@@ -173,6 +179,50 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/heal/runs", s.handleHealRuns)                   // open: e2e
 	mux.HandleFunc("/admin/heal/runs/", s.handleHealRunSub)                // open: e2e
 	mux.HandleFunc("/admin/heal/pass", s.handleHealPass)                   // open: e2e
+
+	// W4-2: signed agent release distribution (open — the AGENT fetches these,
+	// not an operator). The manifest + assets are only served when a releases
+	// directory is configured; otherwise the routes 404 (agent = up-to-date).
+	if s.releases != nil {
+		mux.HandleFunc("/agent/releases/latest", s.handleReleasesLatest)
+		mux.HandleFunc("/agent/releases/latest/", s.handleReleaseAsset)
+	}
+}
+
+// ---- W4-2: signed agent release distribution --------------------------------
+
+// handleReleasesLatest serves the current release manifest. The agent
+// compares its public_key to the pinned key and verifies each asset's
+// signature before installing — the server is a carrier, not a trust anchor.
+func (s *Server) handleReleasesLatest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	m, err := s.releases.Manifest()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+// handleReleaseAsset serves one asset (binary or .minisig) by name, limited
+// to what the current manifest allows.
+func (s *Server) handleReleaseAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/agent/releases/latest/")
+	p, err := s.releases.AssetPath(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, p)
 }
 
 // ---- operator auth ----------------------------------------------------------

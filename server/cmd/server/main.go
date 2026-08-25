@@ -36,6 +36,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
+	"github.com/welcometotheweb/rmmway/server/internal/releases"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -539,6 +540,19 @@ func main() {
 
 	// W2-1: operator login + auth-gated device list + legacy /admin/*.
 	// W2-2: + /api/search (Cmd-K) and /api/devices/{id}/commands (dispatch).
+	// W4-2: signed agent release distribution. When RMMWAY_RELEASES_DIR is set
+	// to a directory holding release.json + signed binaries, the server serves
+	// them at /agent/releases/* for the agents' auto-update. Unset = the routes
+	// 404 and agents treat themselves as up-to-date.
+	var relSrv *releases.Server
+	if releasesDir := env("RMMWAY_RELEASES_DIR", ""); releasesDir != "" {
+		relSrv, err = releases.New(releasesDir)
+		if err != nil {
+			log.Fatalf("releases: %v", err)
+		}
+		log.Printf("agent releases: serving signed releases from %s", relSrv.Dir())
+	}
+
 	apiSrv := httpapi.New(httpapi.Config{
 		Devices:       devicesStore,
 		Search:        mSearch,
@@ -554,6 +568,7 @@ func main() {
 		Baseline:  baselineJob,
 		Alerts:    alertStore,
 		Heal:      healEngine,
+		Releases:  relSrv,
 	})
 	apiSrv.Register(mux)
 

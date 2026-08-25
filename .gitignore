@@ -25,6 +25,8 @@ server/bin/
 SHA256SUMS
 SHA256SUMS.minisig
 *.minisig
+# W4-2 test fixture signature is committed (the other *.minisig are build artifacts).
+!agent/internal/update/testdata/fixture.bin.minisig
 
 # W3-4 release signing — the secret key never goes in git; the public key does.
 keys/minisign.key
