@@ -56,9 +56,9 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
-- **W3/W4 Trust:**     6 / 8
+- **W3/W4 Trust:**     7 / 8
 - **W5/W6 Automation:** 2 / 5
-- **Total:** 23 / 28
+- **Total:** 24 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -434,15 +434,38 @@ parallel. Within a track, respect `Depends on` ordering.
   W1-6/W2-3/W2-4/W5-1 live tests).
 
 #### W4-4 — 🎯 MILESTONE: "provable trust" demo
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-25  ·  **Done:** —
+- **Started:** 2026-08-25  ·  **Done:** 2026-08-25 (`server/cmd/e2e/trust`, in CI on every push; evidence in [`MILESTONE-W4-4.md`](MILESTONE-W4-4.md))
 - **Depends on:** W3-1…W3-4, W4-1…W4-3
 - **Effort/Impact:** S / High
 - Verify a signed release + SBOM externally, and run a full client export.
 - **Definition of done:** a skeptic can (a) verify a release signature + read
-  the SBOM, and (b) export a client and confirm the data is theirs. **Closes
-  Block 2.**
+  the SBOM, and (b) export a client and confirm the data is theirs. ✅
+  `server/cmd/e2e/trust` (`make trust-e2e`), self-contained + self-tearing-down,
+  runs in CI (test job). **Part A — skeptic verifies a signed release + reads
+  the SBOM:** the builder side cross-builds the real agent, scans a CycloneDX
+  SBOM with the pinned syft, and signs binary+SBOM+SHA256SUMS with the real
+  `tools/signer` under a throwaway release key; the skeptic side is a fresh
+  trust domain holding ONLY the artifacts + `.minisig`s + manifest + public
+  key (secret key never enters) and, with an independent implementation
+  (`go-minisign`, interop-proven vs the reference CLI in W3-4): verifies the
+  SHA256SUMS signature + every listed checksum, verifies the binary + SBOM
+  signatures, **rejects a tampered byte** (`Invalid signature`), **rejects a
+  wrong key** (`Incompatible key identifiers`), and reads the SBOM —
+  CycloneDX 1.7, `metadata.component` sha256 == the real binary's recomputed
+  hash, agent's actual deps present. **Part B — a client owner exports a
+  client and confirms it's theirs:** one device + known samples (1 day ×
+  3 series × 30 s = 8,640) on a scratch Timescale DB, one-click export
+  through the REAL operator HTTP surface (401/404 gates), the bundle
+  verifies against its OWN manifest (W4-3), `device.json` identity matches
+  the client they own (id/hostname/os/arch/IP), the Parquet holds EXACTLY the
+  samples they fed (row count + spot value/labels + `ts ≡ timestamp_ms` under
+  an independent standard reader + exact time range), and a flipped byte in
+  `metrics.parquet` is REJECTED. Same flow cross-checked on the REAL GitHub
+  release `v0.5.0` (29 assets) with only the committed `keys/minisign.pub`:
+  12/12 sha256, 14/14 minisign (incl. server image SBOM), release pub ==
+  committed pub, 5/5 SBOMs tied to their binaries. **Closes Block 2.**
 
 ---
 
