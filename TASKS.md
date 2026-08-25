@@ -434,9 +434,9 @@ parallel. Within a track, respect `Depends on` ordering.
   W1-6/W2-3/W2-4/W5-1 live tests).
 
 #### W4-4 — 🎯 MILESTONE: "provable trust" demo
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi
+- **Started:** 2026-08-25  ·  **Done:** —
 - **Depends on:** W3-1…W3-4, W4-1…W4-3
 - **Effort/Impact:** S / High
 - Verify a signed release + SBOM externally, and run a full client export.
