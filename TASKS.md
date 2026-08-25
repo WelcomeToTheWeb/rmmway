@@ -56,9 +56,9 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
-- **W3/W4 Trust:**     4 / 8
+- **W3/W4 Trust:**     5 / 8
 - **W5/W6 Automation:** 1 / 5
-- **Total:** 20 / 28
+- **Total:** 21 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -374,14 +374,29 @@ parallel. Within a track, respect `Depends on` ordering.
   14/14 (incl. all 6 SBOMs) against the release-shipped `minisign.pub`.
 
 #### W4-2 — Agent verifies release signature
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-25  ·  **Done:** —
+- **Started:** 2026-08-25  ·  **Done:** 2026-08-25 (commit `4c293c7` on `main`)
 - **Depends on:** W3-4
 - **Effort/Impact:** M / High
 - Agent checks the server's release signature before auto-updating.
 - **Definition of done:** an update with a valid signature is applied; a
-  tampered/unsigned build is refused (test both).
+  tampered/unsigned build is refused (test both). ✅ Agent pins the W3-4
+  minisign public key in-binary (`agent/internal/update/minisign.pub`;
+  `RMMWAY_UPDATE_PUBKEY` overrides it) and self-updates from the server's
+  `/agent/releases/*` (served from `RMMWAY_RELEASES_DIR`). An update is
+  installed only if the manifest names the pinned key AND the binary's
+  `.minisig` verifies against it (sha256 + no-downgrade gates too); a
+  tampered/unsigned/wrong-key release is refused and the running binary is
+  left byte-identical. `rmmway-agent update [--check]` + background
+  auto-update in `run` (re-execs on success; Windows stages `.pending`).
+  `make release-dir` assembles a signed release dir from `agent/dist`.
+  **Proof** (`make update-e2e`, also in CI): builds two real agent binaries,
+  signs one with a fresh throwaway key via the real `tools/signer`, serves
+  it through an in-process server, runs the real `update` command — valid
+  applied (1.0.0→2.0.0), tampered refused by the **signature** gate, unsigned
+  refused; refusals leave the binary untouched. Unit tests cover the full
+  verification matrix + pinned-key==repo-key.
 
 #### W4-3 — Per-client full export
 - **Status:** ⬜ pending
