@@ -401,7 +401,7 @@ parallel. Within a track, respect `Depends on` ordering.
 #### W4-3 — Per-client full export
 - **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-25  ·  **Done:** 2026-08-25 (commit below on `main`; CI adds a Timescale service so the live-Postgres tests + export e2e now run in CI)
+- **Started:** 2026-08-25  ·  **Done:** 2026-08-25 (commit `635fa16` on `main`; CI adds a Timescale service so the live-Postgres tests + export e2e now run in CI)
 - **Depends on:** W1-6
 - **Effort/Impact:** M / High
 - One-click export of a client's inventory + metrics + config to a portable
