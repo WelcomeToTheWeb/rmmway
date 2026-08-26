@@ -1,0 +1,56 @@
+# RMMWay production edge (A-1) — the public HTTP entry point.
+#
+#   80/443  operator API + frontend. Automatic TLS: Let's Encrypt (HTTP-01)
+#           for a public domain, Caddy's internal CA for localhost.
+#
+# The mTLS gRPC agent channel is NOT proxied here: Caddy's Caddyfile has no
+# L4/TCP site addresses, so the server container publishes the mTLS port
+# directly (see docker-compose.prod.yml). The agent<->server mTLS (org CA
+# with short-lived leaf certs) runs end-to-end on its own port, completely
+# isolated from the operator API on 443.
+#
+# Env (from .env.prod via the caddy service):
+#   RMMWAY_DOMAIN      the public hostname (default: localhost)
+#   RMMWAY_ACME_EMAIL  Let's Encrypt account email (expiry notices)
+
+{
+	email {$RMMWAY_ACME_EMAIL:admin@localhost}
+	admin off
+	servers {
+		protocols h1 h2c h3
+	}
+}
+
+{$RMMWAY_DOMAIN:localhost} {
+	encode gzip zstd
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' wss:; img-src 'self' data:; frame-ancestors 'self'"
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-X-Content-Type-Options nosniff
+		-Server
+		-X-Powered-By
+	}
+
+	# Operator API: JSON + SSE event stream + signed agent release
+	# distribution (W4-2). All backend traffic, same-origin for the SPA.
+	handle /api/* {
+		reverse_proxy server:8080
+	}
+
+	handle /agent/* {
+		reverse_proxy server:8080
+	}
+
+	# Stack health (probes every backing service).
+	handle /healthz* {
+		reverse_proxy server:8080
+	}
+
+	# Everything else: the prebuilt operator SPA.
+	handle {
+		reverse_proxy frontend:8080
+	}
+}

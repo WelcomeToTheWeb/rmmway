@@ -1,0 +1,244 @@
+# RMMWay PRODUCTION stack (A-1).
+#
+# One command:  docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+# (or: make prod)
+#
+# PUBLIC SURFACE — the only host ports in this file:
+#   80     Caddy (HTTP -> HTTPS redirect, ACME HTTP-01 challenge)
+#   443    Caddy (TLS operator API + frontend, automatic Let's Encrypt
+#          for a public domain; Caddy's internal CA for localhost)
+#   50052  the mTLS gRPC agent channel, published directly by the server
+#          container (raw TCP; Caddy's Caddyfile has no L4/TCP passthrough).
+#          Nothing terminates TLS here: the agent<->server mTLS (org CA,
+#          short-lived leaf certs) is end-to-end and completely isolated
+#          from the operator API on 443.
+#
+# Everything else stays on the internal Docker network — no host ports:
+#   timescale:5432  nats:4222  redis:6379  minio:9000
+#   meilisearch:7700  loki:3100  server:8080 (HTTP) / 50051 (plain gRPC,
+#   internal bootstrap/JWT channel only)
+#
+# Hardening: pinned images, restart: unless-stopped, no-new-privileges,
+# caps dropped to the minimum, no host ports on backing services, secrets
+# only via .env.prod (never baked into images).
+
+name: rmmway-prod
+
+networks:
+  rmmway:
+    name: rmmway-prod
+
+services:
+  timescale:
+    image: timescale/timescaledb:2.29.2-pg16
+    environment:
+      POSTGRES_DB: rmmway
+      POSTGRES_USER: ${RMMWAY_PG_USER:-rmmway}
+      POSTGRES_PASSWORD: ${RMMWAY_PG_PASSWORD:?set RMMWAY_PG_PASSWORD in .env.prod}
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RMMWAY_PG_USER:-rmmway} -d rmmway"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4222"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # The image entrypoint drops root -> redis user via setpriv (needs these two).
+    cap_add: [SETUID, SETGID]
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${RMMWAY_MINIO_USER:-rmmway}
+      MINIO_ROOT_PASSWORD: ${RMMWAY_MINIO_PASSWORD:?set RMMWAY_MINIO_PASSWORD in .env.prod}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    environment:
+      MEILI_MASTER_KEY: ${RMMWAY_MEILI_MASTER_KEY:?set RMMWAY_MEILI_MASTER_KEY in .env.prod}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meili-data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  # W6-1: agent log stack. Internal-only (no host port); agents push through
+  # the server's ingest, and the operator API queries it.
+  loki:
+    image: grafana/loki:3.5.4
+    command: ["-config.file=/etc/loki/loki-local-config.yaml"]
+    volumes:
+      - ./loki:/etc/loki:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  # The RMMWay backend (distroless, nonroot, static binary).
+  # :8080 operator HTTP (only reachable via Caddy), :50051 plain gRPC
+  # (internal bootstrap/JWT channel), :50052 mTLS gRPC agent channel
+  # (the only agent port — published directly, see ports below).
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: rmmway-server:${RMMWAY_VERSION:-0.1.0}
+    environment:
+      RMMWAY_VERSION: ${RMMWAY_VERSION:-0.1.0}
+      RMMWAY_ADDR: ":8080"
+      RMMWAY_GRPC_ADDR: ":50051"
+      RMMWAY_GRPC_MTLS_ADDR: ":50052"
+      # A-1: the public hostname goes into the mTLS server cert's SANs so
+      # remote agents' hostname verification passes when they dial
+      # https://<domain>/... -> <domain>:50052.
+      RMMWAY_GRPC_MTLS_SANs: ${RMMWAY_DOMAIN:-localhost}
+      RMMWAY_PG_DSN: postgres://${RMMWAY_PG_USER:-rmmway}:${RMMWAY_PG_PASSWORD}@timescale:5432/rmmway?sslmode=disable
+      RMMWAY_NATS_URL: nats://nats:4222
+      RMMWAY_REDIS_ADDR: redis:6379
+      RMMWAY_MINIO_ENDPOINT: http://minio:9000
+      RMMWAY_MEILI_ENDPOINT: http://meilisearch:7700
+      RMMWAY_MEILI_MASTER_KEY: ${RMMWAY_MEILI_MASTER_KEY}
+      RMMWAY_JWT_SECRET: ${RMMWAY_JWT_SECRET:?set RMMWAY_JWT_SECRET in .env.prod}
+      RMMWAY_ADMIN_USER: ${RMMWAY_ADMIN_USER:-admin}
+      RMMWAY_ADMIN_PASSWORD: ${RMMWAY_ADMIN_PASSWORD:?set RMMWAY_ADMIN_PASSWORD in .env.prod}
+      # Container CWD is /src (the image copies only the binary); the SQL
+      # migrations are bind-mounted from the repo tree instead.
+      RMMWAY_MIGRATIONS_DIR: /migrations
+    ports:
+      # The mTLS gRPC agent channel (W3-1). Published directly (Caddy's
+      # Caddyfile has no L4/TCP passthrough): raw TCP on its own port,
+      # org-CA mTLS end-to-end, isolated from the operator API on 443.
+      # :50051 (plain JWT gRPC bootstrap) is intentionally NOT published.
+      - "${RMMWAY_AGENT_MTLS_PORT:-50052}:50052"
+    volumes:
+      - ./server/migrations:/migrations:ro
+    depends_on:
+      timescale:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  # The operator SPA, prebuilt and served by a minimal Caddy (nonroot).
+  # All API calls are same-origin: the edge proxy forwards /api/* to the
+  # server, so the browser only ever talks to the one TLS host.
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: rmmway-frontend:${RMMWAY_VERSION:-0.1.0}
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # The caddy binary carries the file capability cap_net_bind_service (the
+    # image's way of binding low ports); exec-ing it requires SETPCAP in the
+    # container's effective set, otherwise execve fails with EPERM.
+    cap_add: [SETPCAP, NET_BIND_SERVICE]
+
+  # Edge: the public HTTP entry point. Automatic TLS (Let's Encrypt for a
+  # public domain, internal CA for localhost) + security headers.
+  caddy:
+    image: caddy:2.11-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      RMMWAY_DOMAIN: ${RMMWAY_DOMAIN:-localhost}
+      RMMWAY_ACME_EMAIL: ${RMMWAY_ACME_EMAIL:-admin@localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      server:
+        condition: service_started
+      frontend:
+        condition: service_started
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # Same file-capability quirk as the frontend image (see there).
+    cap_add: [SETPCAP, NET_BIND_SERVICE]
+
+volumes:
+  timescale-data:
+  nats-data:
+  redis-data:
+  minio-data:
+  meili-data:
+  loki-data:
+  caddy-data:
+  caddy-config:

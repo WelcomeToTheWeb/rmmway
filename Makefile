@@ -41,6 +41,29 @@ dev: ## make dev — boot the full local stack and wait for health (idempotent)
 	$(MAKE) up
 	$(MAKE) health
 
+## ---- Production (A-1) ---------------------------------------------------
+COMPOSE_PROD = $(COMPOSE) --env-file .env.prod -f docker-compose.prod.yml
+
+.PHONY: prod
+prod: ## Build + boot the hardened production stack (Caddy TLS edge + mTLS agent port). Needs .env.prod
+	@test -f .env.prod || { echo "no .env.prod — first: cp .env.prod.example .env.prod and set the secrets"; exit 1; }
+	$(COMPOSE_PROD) up -d --build
+	@echo "==> up. see .env.prod for RMMWAY_DOMAIN + RMMWAY_AGENT_MTLS_PORT"
+	@echo "==> operator UI/API: https://<RMMWAY_DOMAIN>/  (health: .../healthz)"
+	@echo "==> agent mTLS gRPC:   <host>:<RMMWAY_AGENT_MTLS_PORT>  (default 50052)"
+
+.PHONY: prod-down
+prod-down: ## Stop the production stack (data volumes are kept)
+	$(COMPOSE_PROD) down
+
+.PHONY: prod-clean
+prod-clean: ## Stop the production stack AND remove its data volumes (destructive)
+	$(COMPOSE_PROD) down -v
+
+.PHONY: prod-logs
+prod-logs: ## Tail production stack logs
+	$(COMPOSE_PROD) logs -f --tail=100
+
 ## ---- Go ------------------------------------------------------------------
 
 .PHONY: build

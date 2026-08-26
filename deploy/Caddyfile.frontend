@@ -1,0 +1,7 @@
+# RMMWay frontend static server (A-1). Internal only — the edge Caddy
+# proxies to it. Serves the prebuilt SPA from /srv/rmmway on :8080.
+:8080 {
+	root * /srv/rmmway
+	try_files {path} /index.html
+	file_server
+}

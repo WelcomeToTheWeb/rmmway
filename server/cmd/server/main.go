@@ -47,6 +47,11 @@ import (
 // addresses: whatever hosts the server is reachable on. Agents typically
 // dial by the RMMWAY_SERVER hostname or by loopback, so we cover both the
 // host of each configured listener and the common local names.
+//
+// A-1: in production agents dial the mTLS channel by the PUBLIC hostname
+// (e.g. rmm.example.com), which a bare listen address (":50052") can't
+// express — RMMWAY_GRPC_MTLS_SANs (comma-separated DNS names / IPs) adds
+// those to the cert so hostname verification passes for remote agents.
 func mtlsSANs(listenAddrs ...string) []string {
 	seen := map[string]bool{}
 	sans := []string{}
@@ -80,6 +85,10 @@ func mtlsSANs(listenAddrs ...string) []string {
 		// ":50051" (all interfaces) is also dialable by the machine's own
 		// hostname — the caller's env is unknown here, so the "localhost"
 		// defaults above are the reliable fallback.
+	}
+	// A-1: explicitly configured public names (production domain, etc.).
+	for _, s := range strings.Split(os.Getenv("RMMWAY_GRPC_MTLS_SANs"), ",") {
+		add(s)
 	}
 	return sans
 }

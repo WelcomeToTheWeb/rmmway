@@ -78,6 +78,47 @@ curl -fsS localhost:8080/healthz | python3 -m json.tool
 
 Teardown: `make down` (volumes kept) or `make clean` (volumes deleted).
 
+## Production stack (A-1)
+
+A hardened, single-command production deployment: `docker-compose.prod.yml`
+builds the server + frontend images and boots the whole stack behind a
+Caddy edge with automatic TLS.
+
+```sh
+cp .env.prod.example .env.prod   # set RMMWAY_DOMAIN + the 5 required secrets
+make prod                         # == docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+```
+
+Public surface (the only host ports):
+
+| Port | What | Notes |
+| --- | --- | --- |
+| `80` | Caddy | HTTP → HTTPS redirect, ACME HTTP-01 challenge |
+| `443` (+udp) | Caddy | TLS operator API + frontend; Let's Encrypt for a public domain, Caddy's internal CA for `localhost` |
+| `50052` (=`RMMWAY_AGENT_MTLS_PORT`) | server, raw TCP | mTLS gRPC agent channel (W3-1), published directly — Caddy's Caddyfile has no L4/TCP passthrough. Org-CA mTLS is end-to-end; this port is completely isolated from the operator API on 443 |
+
+Everything else (Timescale 5432, NATS 4222, Redis 6379, MinIO 9000,
+Meilisearch 7700, Loki 3100, server 8080/50051) stays on the internal
+`rmmway-prod` network with no host ports — the plain gRPC bootstrap port
+(50051) is reachable only from inside.
+
+Hardening: pinned images, `restart: unless-stopped`, `no-new-privileges`,
+caps dropped to the minimum per service, secrets only via `.env.prod`
+(git-ignored; never baked into images). The mTLS server cert's SANs include
+`RMMWAY_DOMAIN` (via `RMMWAY_GRPC_MTLS_SANs`) so remote agents' hostname
+verification passes when they dial `<domain>:50052`.
+
+```sh
+# verify
+openssl s_client -connect <host>:443 </dev/null 2>/dev/null | openssl x509 -noout -issuer -subject -ext subjectAltName
+curl -fsSk https://<domain>/healthz          # all probes ok
+# agents: point at <domain>:50052 (mTLS), enroll as usual
+make prod-down        # stop (volumes kept)     make prod-clean  # stop + delete volumes
+```
+
+For a public IP without a DNS name, Caddy ≥ 2.8 can issue Let's Encrypt
+certs for the bare IP; a real hostname is still recommended.
+
 ## Agent lifecycle
 
 1. **Bootstrap** — `POST /admin/bootstrap/mint` (admin) issues a one-time

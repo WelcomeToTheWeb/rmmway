@@ -18,6 +18,7 @@ frontend/.vite/
 # Local env overrides
 .env
 .env.local
+.env.prod
 
 # Build artifacts
 agent/bin/
