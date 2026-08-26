@@ -18,10 +18,10 @@ To avoid collisions, Engineer 1 and Engineer 2 should ideally own different trac
 *Goal: Move from local dev to a hardened, deployable production environment.*
 
 ### A-1 — Production Docker Compose & Reverse Proxy
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** WelcomeToTheWeb
 - **Started:** 2026-08-26
-- **Done:** —
+- **Done:** 2026-08-26 (commit ecaf661)
 - **Depends on:** —
 - **Effort/Impact:** M / High
 **Description:** Create a hardened `docker-compose.prod.yml` encompassing Postgres, NATS, Meilisearch, and the backend. Integrate Caddy or Traefik as a reverse proxy for automatic Let's Encrypt TLS on the public operator API, completely isolating it from the mTLS gRPC agent port. 
