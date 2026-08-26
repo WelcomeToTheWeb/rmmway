@@ -69,8 +69,8 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if n != 8 {
-		t.Fatalf("expected 8 migrations applied, got %d", n)
+	if n != 9 {
+		t.Fatalf("expected 9 migrations applied, got %d", n)
 	}
 
 	mustScan := func(query string, dst ...any) {
@@ -121,6 +121,17 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	mustScan(`SELECT count(*) FROM playbooks WHERE key IN ('disk.full','service.down','wsus.stuck')`, &count)
 	if count != 3 {
 		t.Fatalf("expected 3 starter playbooks seeded, got %d", count)
+	}
+	// A-2: the first-boot setup tables (server_setup + admin_users +
+	// server_config) must be created by 0009_setup.sql, and a fresh database
+	// must report NOT-setup-done (the wizard's trigger condition).
+	mustScan(`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('server_setup','admin_users','server_config')`, &count)
+	if count != 3 {
+		t.Fatalf("expected server_setup+admin_users+server_config tables, got %d", count)
+	}
+	mustScan(`SELECT count(*) FROM server_setup WHERE id = 1 AND done`, &count)
+	if count != 0 {
+		t.Fatalf("fresh database must have setup NOT done (count=%d), got done", count)
 	}
 	// Idempotency: a second run (server restart) applies nothing.
 	if n, err := Migrate(ctx, db, "server/migrations"); err != nil || n != 0 {

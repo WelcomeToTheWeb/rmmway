@@ -23,6 +23,11 @@ type OrgStore interface {
 	// SaveRoot persists a newly generated org root. It is idempotent on a
 	// fresh server but must be a one-time event per server lifetime.
 	SaveRoot(ctx context.Context, certPEM, keyPEM []byte) error
+	// ReplaceRoot (A-2) OVERWRITES the persisted org root. Used by the
+	// first-boot setup wizard to re-issue the root under the operator's
+	// organization name before any device has enrolled (once devices exist
+	// a re-issue would orphan their leaf certs — the caller guards that).
+	ReplaceRoot(ctx context.Context, certPEM, keyPEM []byte) error
 	// SaveLeaf records a device's most recent issued leaf cert + key. This is
 	// the audit/reissue record; the device keeps its own copy on its disk.
 	SaveLeaf(ctx context.Context, deviceID string, leafCertPEM, leafKeyPEM []byte) error
@@ -48,6 +53,13 @@ func (m *MemoryOrgStore) LoadRoot(_ context.Context) ([]byte, []byte, error) {
 }
 
 func (m *MemoryOrgStore) SaveRoot(_ context.Context, certPEM, keyPEM []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.certPEM, m.keyPEM = certPEM, keyPEM
+	return nil
+}
+
+func (m *MemoryOrgStore) ReplaceRoot(_ context.Context, certPEM, keyPEM []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.certPEM, m.keyPEM = certPEM, keyPEM
@@ -107,6 +119,18 @@ func (p *PostgresOrgStore) SaveRoot(ctx context.Context, certPEM, keyPEM []byte)
 		 ON CONFLICT (id) DO NOTHING`, certPEM, keyPEM)
 	if err != nil {
 		return fmt.Errorf("save org root: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresOrgStore) ReplaceRoot(ctx context.Context, certPEM, keyPEM []byte) error {
+	_, err := p.db.Exec(ctx,
+		`INSERT INTO org_ca (id, root_cert_pem, root_key_pem) VALUES (1, $1, $2)
+		 ON CONFLICT (id) DO UPDATE SET
+		   root_cert_pem = EXCLUDED.root_cert_pem,
+		   root_key_pem  = EXCLUDED.root_key_pem`, certPEM, keyPEM)
+	if err != nil {
+		return fmt.Errorf("replace org root: %w", err)
 	}
 	return nil
 }

@@ -119,6 +119,60 @@ make prod-down        # stop (volumes kept)     make prod-clean  # stop + delete
 For a public IP without a DNS name, Caddy ≥ 2.8 can issue Let's Encrypt
 certs for the bare IP; a real hostname is still recommended.
 
+## First-boot setup wizard (A-2)
+
+A **fresh database is not yet initialized.** On first boot the operator UI
+redirects to a setup wizard instead of the login screen. The wizard runs
+exactly once per database; every subsequent boot reads the persisted state
+and goes straight to the app.
+
+It does three things, all persisted to Timescale in a single transaction
+(`0009_setup.sql` → `server_setup`, `admin_users`, `server_config`):
+
+1. **Mints the initial root admin** — a username + password (PBKDF2-hashed,
+   never stored in plaintext). This is the account you sign in with.
+2. **Defines the organization CA** — the org name you enter is stamped into
+   the org root CA (`Subject.O`) that every agent pins for mTLS. The wizard
+   re-issues the boot-time root under your org name. This only happens on a
+   truly fresh install: a deployment that already has enrolled devices (i.e.
+   predates the wizard) is treated as initialized — the UI skips the wizard
+   and the env-admin login stays the way in — because the root can't be
+   swapped out from under the agents that pinned it. A direct
+   `POST /api/setup/complete` on such a database is refused with `409`
+   ("devices already enrolled") and leaves the root untouched.
+3. **Configures the SMTP outbox** — optional. Host/port/from + optional auth,
+   with a live "send test email" (port 587 = STARTTLS, 465 = implicit TLS,
+   25 = plaintext). The test is open pre-setup and operator-gated after, so a
+   running deployment can't be used as an unauthenticated open relay.
+
+The mTLS listener's client-trust pool and the capability-token issuer pick up
+the re-issued root **in place** (no listener restart): after the wizard, a
+leaf signed by the new root passes a real handshake and one signed by the old
+boot root no longer does.
+
+```sh
+# the flow, by hand
+GET  /api/setup/status            # {available, setup:false} on a fresh db
+POST /api/setup/complete          # {admin_user, admin_password, org_name, smtp{...}}
+GET  /api/setup/status            # now {setup:true, org_name, admin_user, smtp_host}
+POST /api/login                   # sign in with the minted credentials
+```
+
+`RMMWAY_ADMIN_USER` / `RMMWAY_ADMIN_PASSWORD` remain a **fallback** login
+(dev default `admin`/`admin`) so a server with no completed wizard is still
+reachable; the wizard's minted account is the primary one. On an
+in-memory (Postgres-down) server the wizard is unavailable and only the env
+fallback works.
+
+**Proof:** `make setup-e2e` runs the whole real server in-process against a
+scratch Timescale DB — a fresh db triggers the wizard, one POST mints the
+admin + re-issues the org CA under the org name + persists the SMTP config
+(delivered to a real in-process SMTP sink), the mTLS trust pool live-swaps,
+login works with the minted creds (and the env fallback), and a **second boot
+over the same database restores the same re-issued root and bypasses the
+wizard**. The UI half is proven by `make setup-ui-smoke` (jsdom drives the
+real `<App/>` through wizard → complete → auto-sign-in → wizard-gone).
+
 ## Agent lifecycle
 
 1. **Bootstrap** — `POST /admin/bootstrap/mint` (admin) issues a one-time
@@ -194,8 +248,8 @@ Server env knobs (defaults shown):
 | `RMMWAY_MEILI_ENDPOINT` | `http://localhost:7700` |
 | `RMMWAY_MEILI_KEY` | `` (dev instance; set the master key in prod) |
 | `RMMWAY_JWT_SECRET` | random per boot (tokens rotate on restart — dev only) |
-| `RMMWAY_ADMIN_USER` | `admin` (operator UI login username) |
-| `RMMWAY_ADMIN_PASSWORD` | `admin` (operator UI login password) |
+| `RMMWAY_ADMIN_USER` | `admin` (env fallback admin; the first-boot wizard mints the real root admin — see A-2) |
+| `RMMWAY_ADMIN_PASSWORD` | `admin` (env fallback admin password; the wizard's minted account is the primary login) |
 | `RMMWAY_HTTP_ADDR` / `RMMWAY_GRPC_ADDR` | `:8080` / `:50051` |
 
 ## Operator UI (W2-1)

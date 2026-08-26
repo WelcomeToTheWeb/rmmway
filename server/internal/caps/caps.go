@@ -19,6 +19,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/x509"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -65,7 +66,13 @@ type Claims struct {
 }
 
 // Issuer mints capability tokens with the org root key.
+//
+// The root is read under a mutex: A-2's setup wizard can re-issue the org
+// root (under the operator's org name) before the first enroll, and every
+// token minted after the swap must be signed by the NEW root — the one
+// fresh agents will pin.
 type Issuer struct {
+	mu   sync.Mutex
 	root *ca.Root
 	ttl  time.Duration
 	now  func() time.Time
@@ -77,6 +84,18 @@ func NewIssuer(root *ca.Root, ttl time.Duration) *Issuer {
 		ttl = 10 * time.Minute
 	}
 	return &Issuer{root: root, ttl: ttl, now: time.Now}
+}
+
+// ReplaceRoot (A-2) swaps the signing root (called after the setup wizard
+// re-issues the org CA). Concurrent Mint calls observe either the old or
+// the new root, never a torn state.
+func (i *Issuer) ReplaceRoot(root *ca.Root) {
+	if root == nil {
+		return
+	}
+	i.mu.Lock()
+	i.root = root
+	i.mu.Unlock()
 }
 
 // WithNow injects the clock (tests).
@@ -94,6 +113,9 @@ func (i *Issuer) Mint(deviceID, capability, commandID string) (string, error) {
 	if deviceID == "" || capability == "" || commandID == "" {
 		return "", fmt.Errorf("caps: device, capability and command id are all required")
 	}
+	i.mu.Lock()
+	root := i.root
+	i.mu.Unlock()
 	now := i.now()
 	claims := Claims{
 		Cap: capability,
@@ -106,12 +128,16 @@ func (i *Issuer) Mint(deviceID, capability, commandID string) (string, error) {
 			ExpiresAt: jwt.NewNumericDate(now.Add(i.ttl)),
 		},
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodES256, claims).SignedString(i.root.Key())
+	return jwt.NewWithClaims(jwt.SigningMethodES256, claims).SignedString(root.Key())
 }
 
 // Key exposes the org root's ECDSA private key (tests / harnesses that mint
 // rogue tokens with the same authority).
-func (i *Issuer) Key() *ecdsa.PrivateKey { return i.root.Key() }
+func (i *Issuer) Key() *ecdsa.PrivateKey {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.root.Key()
+}
 
 // DecodeClaims parses a token into its claims WITHOUT verifying the
 // signature — test/harness introspection only (the e2e harness inspects

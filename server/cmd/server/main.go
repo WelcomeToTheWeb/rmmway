@@ -39,6 +39,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/releases"
+	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 	"github.com/welcometotheweb/rmmway/server/internal/webhook"
 )
@@ -277,6 +278,27 @@ type health struct {
 	Probes  []probe `json:"probes"`
 }
 
+// deviceCounter adapts store.DeviceStore (List) to setup.DeviceCounter
+// (the A-2 re-issue guard: the wizard may swap the org root only while no
+// device has enrolled).
+type deviceCounter struct{ s store.DeviceStore }
+
+func (d deviceCounter) Count(ctx context.Context) (int, error) {
+	list, err := d.s.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(list), nil
+}
+
+// yesno renders a bool for log lines.
+func yesno(b bool) string {
+	if b {
+		return "configured"
+	}
+	return "not configured"
+}
+
 func runProbes(ctx context.Context) []probe {
 	probes := make([]probe, 0, 5)
 
@@ -473,6 +495,40 @@ func main() {
 	// acting and refuses (REFUSED) anything outside the minted scope.
 	capsIssuer := caps.NewIssuer(caMgr.Root(), capTTL())
 	log.Printf("capability tokens: enabled (TTL %s; admin caps %v)", capsIssuer.TTL(), adminCaps())
+
+	// ---- first-boot setup wizard (A-2) ---------------------------------
+	// A FRESH database (no server_setup row) means the server is not yet
+	// initialized: the UI redirects to the setup wizard, and
+	// POST /api/setup/complete mints the root admin, re-issues the org CA
+	// under the operator's org name (safe pre-enroll: 0 devices), and
+	// persists the SMTP outbox config — in one shot. Every later boot reads
+	// done=true from the database and bypasses it. Postgres-backed only:
+	// in-memory mode has no durable state, so it runs on the env admin.
+	var setupSvc *setup.Service
+	if hasPG {
+		setupSvc = setup.New(setup.Config{
+			Store:   setup.NewPostgresStore(pgPool),
+			OrgCA:   caMgr,
+			Devices: deviceCounter{s: devicesStore},
+			OnReissued: func() {
+				// The capability tokens are signed by the org root key —
+				// after the wizard re-issues the root, mint with the NEW key.
+				capsIssuer.ReplaceRoot(caMgr.Root())
+			},
+		})
+		if st, err := setupSvc.Status(context.Background()); err != nil {
+			log.Printf("WARN: setup status: %v", err)
+		} else if !st.Available {
+			log.Println("setup: store unavailable (no database) — env admin login mode, wizard inactive")
+		} else if st.DevicesEnrolled && st.AdminUser == "" {
+			log.Println("setup: grandfathered (devices enrolled before the wizard existed) — wizard skipped, env admin login active")
+		} else if st.Setup {
+			log.Printf("setup: complete (org %q; admin %s; smtp %s)",
+				st.OrgName, st.AdminUser, yesno(st.SMTPConfigured))
+		} else {
+			log.Println("setup: NOT complete — first-boot wizard active (the UI redirects to it; POST /api/setup/complete finalizes)")
+		}
+	}
 
 	// ---- dynamic baselining (W2-3) + alerts (W2-4) -------------------
 	// Deterministic background job: scores every series' latest hourly
@@ -796,6 +852,7 @@ func main() {
 		Flows:     flowEngine,
 		Export:    exportSvc,
 		Webhooks:  webhookSvc,
+		Setup:     setupSvc,
 	})
 	apiSrv.Register(mux)
 

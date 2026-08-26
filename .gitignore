@@ -8,12 +8,16 @@ dist/
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/.tmp-*.mjs
 
 # Editor / OS
 .DS_Store
 .idea/
 .vscode/
 *.swp
+
+# pi agent state
+.pi/
 
 # Local env overrides
 .env

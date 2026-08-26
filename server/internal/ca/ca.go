@@ -30,6 +30,8 @@ import (
 const (
 	// orgCN is the CommonName on the org root CA.
 	orgCN = "RMMWay Org Root CA"
+	// orgDefault is the Subject Organization when no org name is given.
+	orgDefault = "RMMWay"
 	// rootTTL is how long a generated org root is valid (10y).
 	rootTTL = 10 * 365 * 24 * time.Hour
 	// leafTTL is the default lifetime of a device leaf. W3-2 makes leaves
@@ -69,8 +71,19 @@ func randomSerial() (*big.Int, error) {
 
 // ---- root lifecycle ----------------------------------------------------------
 
-// GenerateRoot mints a fresh self-signed org root CA (ECDSA P-256, 10y).
-func GenerateRoot() (*Root, error) {
+// GenerateRoot mints a fresh self-signed org root CA (ECDSA P-256, 10y)
+// under the default organization name.
+func GenerateRoot() (*Root, error) { return GenerateRootNamed(orgDefault) }
+
+// GenerateRootNamed (A-2) mints a fresh self-signed org root CA whose
+// Subject carries the organization's name: CN stays "RMMWay Org Root CA",
+// Organization becomes orgName (orgName empty -> the default "RMMWay").
+// The first-boot setup wizard uses this so the operator's org is stamped
+// into the trust anchor every agent pins.
+func GenerateRootNamed(orgName string) (*Root, error) {
+	if orgName == "" {
+		orgName = orgDefault
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("root key: %w", err)
@@ -82,7 +95,7 @@ func GenerateRoot() (*Root, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: orgCN, Organization: []string{"RMMWay"}},
+		Subject:               pkix.Name{CommonName: orgCN, Organization: []string{orgName}},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(rootTTL),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
@@ -104,6 +117,9 @@ func GenerateRoot() (*Root, error) {
 	}
 	return &Root{cert: cert, key: key, certPEM: pemEncode("CERTIFICATE", der), keyPEM: kpem}, nil
 }
+
+// OrgName returns the organization name stamped in the root's Subject
+// ("RMMWay" for pre-A-2 roots).
 
 // RootFromPEM reconstructs a Root from its persisted PEM pair.
 func RootFromPEM(certPEM, keyPEM []byte) (*Root, error) {
@@ -133,6 +149,15 @@ func RootFromPEM(certPEM, keyPEM []byte) (*Root, error) {
 // CertPEM returns the root CA certificate (PEM) — what clients pin as a trust
 // anchor.
 func (r *Root) CertPEM() []byte { return r.certPEM }
+
+// OrgName returns the organization name stamped in the root's Subject
+// (A-2: the wizard's org is carried here; "RMMWay" for pre-A-2 roots).
+func (r *Root) OrgName() string {
+	if len(r.cert.Subject.Organization) > 0 {
+		return r.cert.Subject.Organization[0]
+	}
+	return orgDefault
+}
 
 // KeyPEM returns the root signing key (PEM) — persisted, never transmitted.
 func (r *Root) KeyPEM() []byte { return r.keyPEM }

@@ -65,7 +65,35 @@ func NewManager(store OrgStore, ttl time.Duration) (*Manager, error) {
 }
 
 // Root returns the org root (never nil after a successful NewManager).
-func (m *Manager) Root() *Root { return m.root }
+// Safe for concurrent use (A-2's ReissueRoot swaps the pointer in place).
+func (m *Manager) Root() *Root {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.root
+}
+
+// ReissueRoot (A-2) generates a FRESH org root under the given organization
+// name, persists it (replacing the boot-generated default), and swaps it in
+// atomically. The rotating server cert is invalidated so the next mTLS
+// handshake re-issues it from the new root, and the trust pool used for
+// client-cert verification picks the new root up on the next handshake
+// (TLSConfig reads it dynamically). Safe only before any device has
+// enrolled — after that, a re-issue would orphan existing leaf certs; the
+// caller (the setup service) guards on the device count.
+func (m *Manager) ReissueRoot(ctx context.Context, orgName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	root, err := GenerateRootNamed(orgName)
+	if err != nil {
+		return err
+	}
+	if err := m.store.ReplaceRoot(ctx, root.CertPEM(), root.KeyPEM()); err != nil {
+		return fmt.Errorf("ca: persist reissued root: %w", err)
+	}
+	m.root = root
+	m.currentServer.Store(nil)
+	return nil
+}
 
 // RootCertPEM returns the org root CA certificate (PEM) — the trust anchor a
 // fresh agent pins so it can verify the server on the mTLS channel.
@@ -88,7 +116,10 @@ func (m *Manager) LeafTTL() time.Duration {
 // It returns the leaf cert + key (PEM) plus the org root (PEM) so the enroll
 // response can hand the agent its full mTLS identity in one round-trip.
 func (m *Manager) IssueDevice(ctx context.Context, deviceID, hostname string) (leafCert, leafKey, rootCA []byte, err error) {
-	leafCert, leafKey, err = m.root.IssueLeaf(deviceID, hostname, m.ttl)
+	m.mu.Lock()
+	root, ttl := m.root, m.ttl
+	m.mu.Unlock()
+	leafCert, leafKey, err = root.IssueLeaf(deviceID, hostname, ttl)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -107,9 +138,9 @@ func (m *Manager) IssueDevice(ctx context.Context, deviceID, hostname string) (l
 // The org root is NOT returned (the agent already pins it from enroll).
 func (m *Manager) RefreshLeaf(ctx context.Context, deviceID, hostname string) (leafCert, leafKey []byte, expiresAt time.Time, err error) {
 	m.mu.Lock()
-	ttl := m.ttl
+	root, ttl := m.root, m.ttl
 	m.mu.Unlock()
-	leafCert, leafKey, err = m.root.IssueLeaf(deviceID, hostname, ttl)
+	leafCert, leafKey, err = root.IssueLeaf(deviceID, hostname, ttl)
 	if err != nil {
 		return nil, nil, time.Time{}, err
 	}
@@ -203,13 +234,23 @@ func rotateThreshold(ttl time.Duration) time.Duration {
 // TLSConfig builds the tls.Config for the mTLS gRPC listener: it serves the
 // (rotating, via GetCertificate) server cert and requires a client cert
 // signed by the org root.
+//
+// The client-cert trust pool is read via GetConfigForClient (A-2): the setup
+// wizard can re-issue the org root (ReissueRoot) and the next handshake
+// verifies against the NEW root without a listener restart or a stale pool.
+// Go's handshake REPLACES the config with GetConfigForClient's return value
+// (no field merging), so we reconstruct it field-by-field — a tls.Config
+// contains a mutex and must not be struct-copied (go vet copylocks). We
+// inherit the base's certificate hook + ALPN (h2, set by gRPC/http2 at setup)
+// and swap in the CURRENT root's client-CA pool per handshake.
 func (m *Manager) TLSConfig(names []string) (*tls.Config, error) {
 	// Mint the first server cert so the hook never returns a nil cert.
 	if _, err := m.ServerCertNow(names); err != nil {
 		return nil, err
 	}
-	return &tls.Config{
+	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
+		ClientAuth: tls.RequireAndVerifyClientCert,
 		// Every handshake goes through ServerCertNow, which re-issues the
 		// server cert in place once it enters its rotation window (W3-2:
 		// no listener restart, in-flight handshakes undisturbed). The check
@@ -217,7 +258,20 @@ func (m *Manager) TLSConfig(names []string) (*tls.Config, error) {
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return m.ServerCertNow(names)
 		},
-		ClientCAs:  m.root.CertPool(),
-		ClientAuth: tls.RequireAndVerifyClientCert,
-	}, nil
+	}
+	cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		c := &tls.Config{
+			MinVersion:               cfg.MinVersion,
+			MaxVersion:               cfg.MaxVersion,
+			CipherSuites:             cfg.CipherSuites,
+			PreferServerCipherSuites: cfg.PreferServerCipherSuites,
+			SessionTicketsDisabled:   cfg.SessionTicketsDisabled,
+			GetCertificate:           cfg.GetCertificate,
+			NextProtos:               cfg.NextProtos,
+			ClientAuth:               tls.RequireAndVerifyClientCert,
+			ClientCAs:                m.Root().CertPool(),
+		}
+		return c, nil
+	}
+	return cfg, nil
 }

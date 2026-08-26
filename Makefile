@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 COMPOSE ?= docker compose
 # Go + buf + node live in these dirs on the dev box; put them on PATH once.
-PATH := /root/go/bin:/root/.nvm/versions/node/v24.19.0/bin:$(PATH)
+PATH := /root/go/bin:/usr/local/go/bin:/root/.nvm/versions/node/v24.19.0/bin:$(PATH)
 export PATH
 
 .PHONY: help
@@ -161,6 +161,12 @@ webhook-e2e: ## W6-2 DoD: a user-defined endpoint receives signed (HMAC) alert/i
 automation-e2e: ## W6-3 DoD (closes Block 3 = Phase 1 MVP): ONE condition (disk 95%) drives alert -> self-heal confirm -> ticket -> webhook, all audited, on a real NATS bus. Needs Timescale PG (CREATEDB user) + NATS (JetStream)
 	@cd server && go run ./cmd/e2e/automation
 
+## ---- First-boot setup wizard (A-2) ------------------------------------------
+
+.PHONY: setup-e2e
+setup-e2e: ## A-2 DoD: a fresh database triggers the first-boot wizard (mint root admin, define the org CA, configure + verify the SMTP outbox) and every subsequent boot bypasses it. Needs Timescale PG (CREATEDB user)
+	@cd server && go run ./cmd/e2e/setup
+
 ## ---- SBOM (W4-1) -----------------------------------------------------------
 
 .PHONY: image
@@ -191,6 +197,10 @@ proto-lint: ## Lint the protos (add --against <ref> for breaking checks vs a bas
 .PHONY: frontend-deps
 frontend-deps: ## Install frontend npm dependencies
 	cd frontend && npm install
+
+.PHONY: setup-ui-smoke
+setup-ui-smoke: ## A-2 UI DoD: the real <App/> redirects a fresh database to the setup wizard, completes + auto-signs-in, and skips the wizard afterwards (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/setup-wizard.smoke.sh
 
 .PHONY: frontend
 frontend: ## Run the frontend dev server (http://localhost:5173)

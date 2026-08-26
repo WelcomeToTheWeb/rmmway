@@ -36,6 +36,22 @@ async function request(path, { method = "GET", body, token } = {}) {
 }
 
 export const api = {
+  // ---- A-2: first-boot setup wizard --------------------------------------
+  // GET /api/setup/status -> { available, setup, org_name?, admin_user?,
+  // smtp_host?, smtp_configured }. available=false (in-memory server) or
+  // setup=true -> the UI shows the normal login; setup=false -> the wizard.
+  setupStatus: () => request("/api/setup/status"),
+
+  // POST /api/setup/complete — one-time: mints the root admin, re-issues the
+  // org CA under org_name, and persists the SMTP outbox. 409 = already done.
+  completeSetup: (body) =>
+    request("/api/setup/complete", { method: "POST", body }),
+
+  // POST /api/setup/smtp/test — send the outbox verification mail.
+  // body: { smtp: {host, port, from, username, password}, to? }.
+  testSmtp: (body) =>
+    request("/api/setup/smtp/test", { method: "POST", body }),
+
   // POST /api/login -> { token, expiry }
   login: (username, password) =>
     request("/api/login", { method: "POST", body: { username, password } }),

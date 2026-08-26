@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { AuthProvider, useAuth } from "./auth.jsx";
 import { api } from "./api.js";
 import Login from "./Login.jsx";
+import Setup from "./Setup.jsx";
 import Devices from "./Devices.jsx";
 import Alerts from "./Alerts.jsx";
 import Flows from "./Flows.jsx";
@@ -88,6 +89,17 @@ function Shell() {
   const [focusFilter, setFocusFilter] = useState(null);
   const [route, setRoute] = useState(parseRoute);
   const [openCount, setOpenCount] = useState(0);
+  // A-2: first-boot state. null = still checking the server; when the DB is
+  // fresh (available && !setup) the UI is the setup wizard, full stop.
+  const [setupState, setSetupState] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .setupStatus()
+      .then((s) => alive && setSetupState(s))
+      .catch(() => alive && setSetupState({ available: false, setup: true }));
+    return () => { alive = false; };
+  }, []);
 
   // Route follows the location hash (back/forward + nav links).
   useEffect(() => {
@@ -138,6 +150,16 @@ function Shell() {
     setFocusKey((k) => k + 1);
   }, []);
 
+  if (setupState === null) {
+    return (
+      <div className="login-wrap">
+        <div className="card muted">Checking server state…</div>
+      </div>
+    );
+  }
+  if (setupState.available && !setupState.setup) {
+    return <Setup onDone={() => setSetupState((s) => ({ ...s, setup: true }))} />;
+  }
   if (!token) return <Login />;
   return (
     <div className="shell">

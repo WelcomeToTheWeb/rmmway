@@ -34,6 +34,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/releases"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
+	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/webhook"
 )
 
@@ -79,6 +80,9 @@ type Server struct {
 	// webhooks (W6-2) is the webhook + event-stream framework; nil disables
 	// /{api|admin}/webhooks* and /{api|admin}/events/stream (in-memory mode).
 	webhooks *webhook.Service
+	// setup (A-2) is the first-boot wizard backend; nil = in-memory mode
+	// (the wizard is unavailable, the env admin login is the only one).
+	setup *setup.Service
 }
 
 // Config wires a Server. AdminPassword is hashed with a fresh per-boot salt
@@ -125,6 +129,9 @@ type Config struct {
 	// Webhooks (W6-2) is the webhook + event-stream framework; nil disables
 	// /{api|admin}/webhooks* and /{api|admin}/events/stream (in-memory mode).
 	Webhooks *webhook.Service
+	// Setup (A-2) is the first-boot setup wizard backend; nil disables
+	// /api/setup* (in-memory mode: the UI skips the wizard, env admin only).
+	Setup *setup.Service
 }
 
 // New builds a Server. A nil Devices falls back to an in-memory store.
@@ -173,6 +180,7 @@ func New(cfg Config) *Server {
 		export:        cfg.Export,
 		logEvents:     cfg.LogEvents,
 		webhooks:      cfg.Webhooks,
+		setup:         cfg.Setup,
 	}
 }
 
@@ -213,6 +221,13 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/webhooks", s.handleWebhooks)
 	mux.HandleFunc("/admin/webhooks/", s.handleWebhookSub)
 	mux.HandleFunc("/admin/events/stream", s.handleEventStream)
+	// A-2: first-boot setup wizard. /api/setup/status is always open (the UI
+	// needs it to decide between wizard and login, pre-auth); the POST routes
+	// are open only while the server is uninitialized, then operator-gated.
+	mux.HandleFunc("/api/setup/status", s.handleSetupStatus)
+	mux.HandleFunc("/api/setup", s.handleSetup)
+	mux.HandleFunc("/api/setup/complete", s.setupGate(s.handleSetupComplete))
+	mux.HandleFunc("/api/setup/smtp/test", s.setupGate(s.handleSetupSMTPTest))
 	mux.HandleFunc("/admin/bootstrap", s.handleBootstrap)
 	mux.HandleFunc("/admin/devices", s.deviceList) // open: installer / e2e / README
 	mux.HandleFunc("/admin/search", s.handleSearch)
@@ -285,6 +300,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var in loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// A-2: the wizard-minted root admin (database-backed, survives restarts)
+	// is checked FIRST; the RMMWAY_ADMIN_USER/PASSWORD env pair remains a
+	// fallback (dev mode, and the pre-setup window on a fresh server).
+	if s.setup != nil && s.setup.CheckCredentials(r.Context(), in.Username, in.Password) {
+		tok, err := ingest.MintOperatorJWT(s.jwtSecret, s.tokenLifetime, s.adminCaps)
+		if err != nil {
+			http.Error(w, "mint token: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"token":        tok,
+			"expiry":       time.Now().Add(s.tokenLifetime).UTC().Format(time.RFC3339),
+			"capabilities": s.adminCaps,
+		})
 		return
 	}
 	// Always compute the candidate hash (even on a wrong username) so
