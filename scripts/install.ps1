@@ -105,8 +105,12 @@ try {
     $facr = [System.AccessControl.FileSystemAccessRule]
     $acl = Get-Acl $cfg
     $acl.SetAccessRuleProtection($true, $false)
-    $acl.AddAccessRule(New-Object $facr "$env:USERDOMAIN\$env:USERNAME", "FullControl", "Allow")
-    $acl.AddAccessRule(New-Object $facr "Administrators", "FullControl", "Allow")
+    # NB: a bare command (New-Object) is NOT valid as a direct argument inside a
+    # .NET method call ( ... ). Build each rule into a variable first, then add it.
+    $userRule  = New-Object $facr "$env:USERDOMAIN\$env:USERNAME", "FullControl", "Allow"
+    $adminRule = New-Object $facr "Administrators", "FullControl", "Allow"
+    $acl.AddAccessRule($userRule)
+    $acl.AddAccessRule($adminRule)
     Set-Acl -Path $cfg -AclObject $acl
     Log "config -> $cfg (ACL restricted)"
 } catch {
