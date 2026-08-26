@@ -123,7 +123,7 @@ function StatusPill({ online, lastSeen }) {
 // INSTALL_BASE (e.g. a self-hosted mirror) to point the one-liner elsewhere.
 const INSTALL_BASE =
   (typeof window !== "undefined" && window.__RMMWAY_INSTALL_BASE__) ||
-  "https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts";
+  "https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts";
 const INSTALL_SH = `${INSTALL_BASE}/install.sh`;
 const INSTALL_PS1 = `${INSTALL_BASE}/install.ps1`;
 

@@ -296,13 +296,13 @@ device appears in the list the moment the agent connects.
 
 ```sh
 # Linux / macOS (what the modal generates for a server at https://rmm.example.com)
-curl -fsSL https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.sh \
   | bash -s -- --server https://rmm.example.com --bootstrap <TOKEN>
 ```
 
 ```powershell
 # Windows (PowerShell)
-iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.ps1 -OutFile install.ps1
+iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.ps1 -OutFile install.ps1
 powershell -ExecutionPolicy Bypass -File install.ps1 -Server https://rmm.example.com -Bootstrap <TOKEN>
 ```
 

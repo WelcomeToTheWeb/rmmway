@@ -1,9 +1,9 @@
-# RMMWay one-line bootstrap installer (W1-3) — Windows.
+# RMMWay one-line bootstrap installer (W1-3) - Windows.
 #
-#   iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.ps1 | iex
+#   iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.ps1 | iex
 #
 # With arguments (recommended):
-#   iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.ps1 -OutFile install.ps1
+#   iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.ps1 -OutFile install.ps1
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Server https://rmm.example.com -Bootstrap <TOKEN>
 #
 # What it does: detect arch (amd64), download the static agent from the GitHub
@@ -13,7 +13,7 @@
 #
 # Only -Server and -Bootstrap are required. The agent enrolls over the
 # server's HTTPS origin (POST {server}/agent/enroll), then streams over the
-# mTLS gRPC port (default 50052 on the server host) — so from the device you
+# mTLS gRPC port (default 50052 on the server host) - so from the device you
 # only need the server host + that port reachable (the plain gRPC bootstrap
 # port, 50051, stays internal).
 
@@ -55,7 +55,7 @@ if ($isAdmin) {
 } else {
     $installDir = "$env:LOCALAPPDATA\RmmWay"
     $bin        = "$installDir\rmmway-agent.exe"
-    Log "not elevated — installing to $installDir"
+    Log "not elevated - installing to $installDir"
 }
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
@@ -108,7 +108,7 @@ Log "config -> $cfg (ACL restricted)"
 $svc = "RmmWayAgent"
 $exe = "`"$bin`" run --config `"$cfg`""
 if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
-    Log "service $svc already exists — restarting"
+    Log "service $svc already exists - restarting"
     Restart-Service $svc -ErrorAction SilentlyContinue
 } else {
     $scArgs = "create $svc binPath= $exe start= auto"
