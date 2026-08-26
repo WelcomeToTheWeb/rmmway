@@ -28,14 +28,16 @@ To avoid collisions, Engineer 1 and Engineer 2 should ideally own different trac
 **Definition of done:** `docker compose -f docker-compose.prod.yml up` boots a secure stack with valid TLS on the frontend/API, ready for a public IP.
 
 ### A-2 — First-Boot Setup Wizard
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** WelcomeToTheWeb
 - **Started:** 2026-08-26
-- **Done:** —
+- **Done:** 2026-08-26 (commit 5ba91a1)
 - **Depends on:** A-1
 - **Effort/Impact:** S / Medium
 **Description:** Build an initialization state for the server. On first boot, the UI redirects to a setup wizard to mint the initial root admin credentials, define the organizational CA structure, and configure the SMTP outbox.
 **Definition of done:** A fresh database triggers the setup flow; subsequent boots bypass it.
+
+_Proof: `make setup-e2e` (real server vs scratch Timescale — fresh DB triggers the wizard, one POST mints the root admin + re-issues the org CA under the org name + persists/verifies the SMTP outbox, the mTLS trust pool live-swaps, and a second boot over the same DB restores the re-issued root and bypasses the wizard; an already-enrolled deployment is grandfathered and the root is never swapped under leaves) + `make setup-ui-smoke` (jsdom drives the real <App/>: fresh DB -> wizard -> complete -> auto-sign-in -> wizard gone). Verified on the prod stack: an upgraded deployment boots `setup: grandfathered`._
 
 ### A-3 — Automated State Backup & Restore CLI
 - **Status:** ⬜ pending
