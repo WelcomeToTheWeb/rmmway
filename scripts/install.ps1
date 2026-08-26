@@ -9,7 +9,13 @@
 # What it does: detect arch (amd64), download the static agent from the GitHub
 # release, install to %ProgramFiles%\RMMWay\ (or %LOCALAPPDATA%\RmmWay when not
 # elevated), write a 0600-style ACL'd config, and register a Windows Service
-# via sc.exe. Enrollment + transport land in W1-4.
+# via sc.exe.
+#
+# Only -Server and -Bootstrap are required. The agent enrolls over the
+# server's HTTPS origin (POST {server}/agent/enroll), then streams over the
+# mTLS gRPC port (default 50052 on the server host) — so from the device you
+# only need the server host + that port reachable (the plain gRPC bootstrap
+# port, 50051, stays internal).
 
 [CmdletBinding()]
 param(
@@ -120,5 +126,6 @@ Log "done. agent $verOut installed."
 Log "  binary : $bin"
 Log "  config : $cfg"
 Log "  service: $svc"
-Log "note: enrollment + the connect/run loop land in W1-4; the binary and"
-Log "      service are in place now."
+Log "note: the agent enrolls over the server's HTTPS origin, then streams over"
+Log "      the mTLS gRPC port (default 50052 on the server host). Only that"
+Log "      host + port need to be reachable from this machine."

@@ -837,6 +837,7 @@ func main() {
 		AdminUser:     adminUser,
 		AdminPassword: adminPassword,
 		MintBootstrap: svc.MintBootstrapToken,
+		Enroll:        svc.Enroll,
 		Dispatch:      svc.Dispatcher().Dispatch,
 		CommandState: func(deviceID string) ([]*agentv1.Command, []*agentv1.CommandResult) {
 			return svc.Dispatcher().PendingFor(deviceID), svc.Dispatcher().ResultsFor(deviceID)

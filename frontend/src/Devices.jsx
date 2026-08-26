@@ -119,6 +119,138 @@ function StatusPill({ online, lastSeen }) {
   );
 }
 
+// The install scripts are fetched from the public repo. Override
+// INSTALL_BASE (e.g. a self-hosted mirror) to point the one-liner elsewhere.
+const INSTALL_BASE =
+  (typeof window !== "undefined" && window.__RMMWAY_INSTALL_BASE__) ||
+  "https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts";
+const INSTALL_SH = `${INSTALL_BASE}/install.sh`;
+const INSTALL_PS1 = `${INSTALL_BASE}/install.ps1`;
+
+// Build the copy-paste install one-liners for a minted token + server URL.
+// (server + token carry no shell metacharacters in the standard case.)
+function linuxInstallCmd(server, token) {
+  return `curl -fsSL ${INSTALL_SH} | bash -s -- --server ${server} --bootstrap ${token}`;
+}
+function windowsInstallCmd(server, token) {
+  return `iwr -useb ${INSTALL_PS1} -OutFile install.ps1; powershell -ExecutionPolicy Bypass -File install.ps1 -Server ${server} -Bootstrap ${token}`;
+}
+
+// AddDeviceModal is the operator's "Add a device" action. It mints a one-time
+// enrollment token (POST /api/bootstrap) and hands the operator a single
+// copy-paste command per OS, with the server URL pre-filled from the current
+// origin (editable). The device appears in the list the moment the agent
+// connects — no raw curl to /admin/bootstrap, no copying a token by hand.
+function AddDeviceModal({ token, onUnauthorized, onClose }) {
+  const [mint, setMint] = useState(null); // {bootstrap_token, device_id}
+  const [error, setError] = useState(null);
+  const [server, setServer] = useState(window.location.origin);
+  const [copied, setCopied] = useState(null); // which block was last copied
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .bootstrap(token)
+      .then((m) => alive && setMint(m))
+      .catch((e) => {
+        if (!alive) return;
+        if (e.unauthorized) onUnauthorized();
+        else setError(e.message);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [token, onUnauthorized]);
+
+  async function copy(text, which) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(which);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      /* clipboard unavailable — the text is still selectable */
+    }
+  }
+
+  const linux = mint ? linuxInstallCmd(server, mint.bootstrap_token) : "";
+  const win = mint ? windowsInstallCmd(server, mint.bootstrap_token) : "";
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal adddev" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Add a device">
+        <div className="modal-head">
+          <h3>Add a device</h3>
+          <button className="btn ghost" onClick={onClose} title="Close">
+            ✕
+          </button>
+        </div>
+        <p className="muted">
+          Run this on the machine you want to monitor. It installs the RMMWay
+          agent and enrolls it — the device appears in the list the moment it
+          connects.
+        </p>
+        <label className="field">
+          <span>Server URL</span>
+          <input
+            className="search adddev-server"
+            value={server}
+            onChange={(e) => setServer(e.target.value)}
+            title="The operator's public URL. The host + mTLS gRPC port (default 50052) must be reachable from the device."
+          />
+        </label>
+        {error && <div className="banner err">{error}</div>}
+        {mint === null && !error && (
+          <div className="empty">Minting a one-time enrollment token…</div>
+        )}
+        {mint && (
+          <>
+            <div className="adddev-facts mono">
+              <div>
+                <span className="muted">Device ID</span> {mint.device_id}
+              </div>
+              <div>
+                <span className="muted">Token</span> {mint.bootstrap_token} <span className="muted">(one-time, ~30 min)</span>
+              </div>
+            </div>
+            <div className="adddev-block">
+              <div className="adddev-block-head">
+                <span>Linux / macOS</span>
+                <button className="btn" onClick={() => copy(linux, "linux")}>
+                  {copied === "linux" ? "copied ✓" : "copy"}
+                </button>
+              </div>
+              <pre className="mono adddev-cmd">{linux}</pre>
+            </div>
+            <div className="adddev-block">
+              <div className="adddev-block-head">
+                <span>Windows (PowerShell)</span>
+                <button className="btn" onClick={() => copy(win, "win")}>
+                  {copied === "win" ? "copied ✓" : "copy"}
+                </button>
+              </div>
+              <pre className="mono adddev-cmd">{win}</pre>
+            </div>
+            <p className="muted adddev-note">
+              Only the server host + the mTLS gRPC port (default 50052) need to
+              be reachable from the device — the plain gRPC bootstrap port stays
+              internal. Enrollment runs over the server's HTTPS origin.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DeviceRow({ d, open, onToggle }) {
   return (
     <tr
@@ -157,6 +289,8 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey }
   const [tick, setTick] = useState(0);
   // W6-1: the expanded device (recent indexed events panel below its row).
   const [open, setOpen] = useState(null);
+  // The "Add a device" modal (mint a one-time token -> copy-paste installer).
+  const [addOpen, setAddOpen] = useState(false);
 
   // When the palette triggers "go to device", the parent bumps focusKey and
   // sets focusFilter to the hostname; we sync the local filter here.
@@ -214,6 +348,13 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey }
           </p>
         </div>
         <div className="view-actions">
+          <button
+            className="btn primary"
+            onClick={() => setAddOpen(true)}
+            title="Mint a one-time token and get a copy-paste install command"
+          >
+            + Add device
+          </button>
           <input
             className="search"
             type="search"
@@ -234,15 +375,16 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey }
       ) : filtered.length === 0 ? (
         <div className="empty">
           {total === 0 ? (
-            <>
+            <div className="empty empty-adddev">
               <p>No devices yet.</p>
               <p className="muted">
-                Mint a bootstrap token and enroll an agent, or run the e2e:
-                <pre className="mono">
-                  curl -fsS -X POST http://localhost:8080/admin/bootstrap
-                </pre>
+                Add your first device — the modal mints a one-time token and
+                gives you a single copy-paste command to run on the machine.
               </p>
-            </>
+              <button className="btn primary" onClick={() => setAddOpen(true)}>
+                + Add a device
+              </button>
+            </div>
           ) : (
             <p>No devices match <em>{q}</em>.</p>
           )}
@@ -280,6 +422,14 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey }
             </tbody>
           </table>
         </div>
+      )}
+
+      {addOpen && (
+        <AddDeviceModal
+          token={token}
+          onUnauthorized={onUnauthorized}
+          onClose={() => setAddOpen(false)}
+        />
       )}
     </section>
   );

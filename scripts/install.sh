@@ -18,6 +18,13 @@
 #   4. Write config (server URL + one-time bootstrap token) to /etc/rmmway.
 #   5. Install + start the agent as a system service (systemd / launchd).
 #
+# Only --server and --bootstrap are required. The agent enrolls over the
+# server's HTTPS origin (POST {server}/agent/enroll), then streams over the
+# mTLS gRPC port (default 50052 on the server host). So from the device you
+# only need the server host + the mTLS gRPC port reachable — the plain gRPC
+# bootstrap port (50051) stays internal. --grpc-addr / --grpc-mtls-addr are
+# only needed for split-port deployments.
+#
 # The bootstrap token is consumed by the agent at first enroll (W1-4); it is
 # written to a root-only file, never echoed back.
 #
@@ -197,5 +204,6 @@ log "  binary : ${BIN}"
 log "  config : ${CFG}"
 [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1 \
   && systemctl is-active rmmway-agent.service 2>/dev/null | sed 's/^/  status : /'
-log "note: enrollment + the connect/run loop land in W1-4; the binary and"
-log "      service are in place now."
+log "note: the agent enrolls over the server's HTTPS origin, then streams over"
+log "      the mTLS gRPC port (default 50052 on the server host). Only that"
+log "      host + port need to be reachable from this machine."

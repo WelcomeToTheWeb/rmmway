@@ -2,6 +2,7 @@ package enroll
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -22,6 +23,13 @@ type Agent struct {
 	facts     Facts
 	bootstrap string
 	logf      func(string, ...any)
+	// httpEnroll, when set, is tried FIRST: the bootstrap enroll over the
+	// operator's HTTPS origin (POST {server}/agent/enroll). This is the path
+	// remote agents use — only the operator origin + the mTLS gRPC port need
+	// to be open, not the internal-only plain gRPC bootstrap port. On a
+	// transient failure (connection error / 5xx) the agent falls back to the
+	// plain gRPC enroller (local dev / split deployments).
+	httpEnroll *HTTPEnroller
 }
 
 // Option customizes an Agent.
@@ -29,6 +37,10 @@ type Option func(*Agent)
 
 // WithLogf sets a logger (default: no-op).
 func WithLogf(f func(string, ...any)) Option { return func(a *Agent) { a.logf = f } }
+
+// WithHTTPEenroller enables the operator-origin bootstrap enroll (tried
+// first, with a plain-gRPC fallback on transient failure). See Agent.httpEnroll.
+func WithHTTPEenroller(h *HTTPEnroller) Option { return func(a *Agent) { a.httpEnroll = h } }
 
 // New builds an Agent. client is the connected AgentService client; store
 // persists the identity; facts are the host facts; bootstrap is the one-time
@@ -82,9 +94,35 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*Result, error) {
 		AgentVersion:   a.facts.AgentVersion,
 		Interfaces:     a.facts.Interfaces,
 	}
-	resp, err := a.enroller.Enroll(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("enroll: %w", err)
+
+	// Prefer the operator-origin HTTP enroll (a remote agent needs only the
+	// operator origin + the mTLS gRPC port open). Fall back to the plain
+	// gRPC channel ONLY on a transient failure (connection error / 5xx) — a
+	// definitive 4xx means the server answered (bad/unknown token) and the
+	// gRPC channel would just repeat the refusal after the token is gone.
+	var (
+		resp *agentv1.EnrollResponse
+		err  error
+		via  = "plain gRPC"
+	)
+	if a.httpEnroll != nil {
+		resp, err = a.httpEnroll.Enroll(ctx, req)
+		if err != nil {
+			var he *httpEnrollError
+			if !errors.As(err, &he) || !he.transient {
+				return nil, fmt.Errorf("enroll: %w", err)
+			}
+			a.logf("http enroll failed (%v) — falling back to plain gRPC", err)
+			resp, via = nil, "plain gRPC"
+		} else {
+			via = "the operator origin (HTTP)"
+		}
+	}
+	if resp == nil {
+		resp, err = a.enroller.Enroll(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("enroll: %w", err)
+		}
 	}
 	if resp.GetDeviceId() == "" || resp.GetJwt() == "" {
 		return nil, fmt.Errorf("enroll returned an incomplete identity (device=%q jwt=%q)",
@@ -115,7 +153,7 @@ func (a *Agent) EnsureEnrolled(ctx context.Context) (*Result, error) {
 		a.logf("WARNING: enrolled (device=%s) but failed to persist identity: %v", id.DeviceID, err)
 		return &Result{Identity: id, Enrolled: true}, fmt.Errorf("enroll ok but persist failed: %w", err)
 	}
-	a.logf("enrolled device=%s; identity persisted to %s", id.DeviceID, a.store.Path())
+	a.logf("enrolled device=%s via %s; identity persisted to %s", id.DeviceID, via, a.store.Path())
 	return &Result{Identity: id, Enrolled: true}, nil
 }
 

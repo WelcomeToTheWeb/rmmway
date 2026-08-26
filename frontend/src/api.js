@@ -60,6 +60,13 @@ export const api = {
   // agent_version, interfaces[], tags[], online, first_seen, last_seen)
   devices: (token) => request("/api/devices", { token }),
 
+  // POST /api/bootstrap -> { bootstrap_token, device_id } ("Add a device",
+  // auth-gated). Mints a one-time enroll token bound to a pre-allocated
+  // device id; the UI turns it into a copy-paste install command. 401 = not
+  // signed in.
+  bootstrap: (token) =>
+    request("/api/bootstrap", { method: "POST", token, body: {} }),
+
   // GET /api/search?q=... -> Meilisearch payload { hits[], estimatedTotalHits }.
   // Each hit is a device doc (id, hostname, ip[], tags[], os, arch, ...).
   // Backing for the Cmd-K palette.

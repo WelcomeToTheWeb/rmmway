@@ -294,7 +294,13 @@ func runCommand(args []string) {
 	agent := enroll.New(plainClient, store, enroll.Gather(version), cfg.BootstrapToken,
 		enroll.WithLogf(func(format string, a ...any) {
 			log.Info(fmt.Sprintf(format, a...))
-		}))
+		}),
+		// First contact goes over the operator's HTTPS origin (POST
+		// /agent/enroll) so a remote agent needs only that origin + the mTLS
+		// gRPC port open — not the internal-only plain gRPC bootstrap port.
+		// The plain gRPC enroller above stays as the fallback (dev / split
+		// deployments) on a transient HTTP failure.
+		enroll.WithHTTPEenroller(&enroll.HTTPEnroller{BaseURL: cfg.Server}))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

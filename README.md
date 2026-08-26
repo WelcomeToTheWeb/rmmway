@@ -264,14 +264,64 @@ real `<App/>` through wizard → complete → auto-sign-in → wizard-gone).
 
 ## Agent lifecycle
 
-1. **Bootstrap** — `POST /admin/bootstrap/mint` (admin) issues a one-time
-   token → pre-paired `device_id` + short-TTL JWT (30 min, single use).
-2. **Enroll** — `Enroll` RPC over gRPC, idempotent; server returns the
-   long-lived agent JWT + per-device schedule.
-3. **Uplink** — authenticated stream; server validates the JWT *and* that
-   the device_id is already enrolled (enroll is the identity root).
+1. **Add / bootstrap** — the operator clicks **Add a device** in the UI (or
+   `POST /api/bootstrap`, auth-gated; `POST /admin/bootstrap` stays open for
+   machine callers). This mints a one-time token bound to a pre-allocated
+   `device_id` and the UI hands back a copy-paste install command (see below).
+2. **Install + enroll** — the operator runs that one-liner on the target. The
+   installer drops the static agent + a service, and the agent **enrolls over
+   the operator's HTTPS origin** (`POST {server}/agent/enroll`) — a fresh agent
+   has no mTLS material yet, so it proves the one-time token here. The server
+   returns the long-lived agent JWT **+ the org-root mTLS leaf** (leaf cert +
+   key + org root CA) in the same round-trip.
+3. **Uplink** — the agent persists its identity and streams over the **mTLS
+   gRPC port** (default `50052`); the server validates the JWT *and* the client
+   leaf, and that the device_id is enrolled (enroll is the identity root).
    Heartbeats/commands/metric batches flow over it; `StreamMetrics` batches
    up to 500 samples / 5s before flushing to the sink.
+
+Because enrollment runs over the operator origin, a remote machine needs only
+**the server host + the mTLS gRPC port (50052) reachable** — the plain gRPC
+bootstrap port (`50051`) stays internal to the deployment. (For local dev /
+split-port layouts the agent falls back to the plain gRPC `Enroll` RPC if the
+HTTP enroll is unreachable, and `--grpc-addr` / `--grpc-mtls-addr` still
+override either endpoint.)
+
+### Add a device (one-click)
+
+In the operator UI: **Devices → + Add a device**. The modal mints a one-time
+token and shows a single copy-paste command per OS, with the server URL
+pre-filled from the current origin (editable) and the token embedded. The
+device appears in the list the moment the agent connects.
+
+```sh
+# Linux / macOS (what the modal generates for a server at https://rmm.example.com)
+curl -fsSL https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.sh \
+  | bash -s -- --server https://rmm.example.com --bootstrap <TOKEN>
+```
+
+```powershell
+# Windows (PowerShell)
+iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File install.ps1 -Server https://rmm.example.com -Bootstrap <TOKEN>
+```
+
+Only `--server` / `-Server` and `--bootstrap` / `-Bootstrap` are required — the
+mTLS port is derived from the server host (default `50052`). The token is
+one-time and short-TTL (~30 min); re-running the installer on an already
+enrolled device reuses its persisted identity (it never re-enrolls).
+
+The two endpoints backing this (both also curl-able without the UI):
+
+```sh
+# operator mints a one-time enroll token (auth-gated)
+curl -fsS -X POST -H "Authorization: Bearer <OPERATOR_JWT>" \
+  https://rmm.example.com/api/bootstrap          # -> {"bootstrap_token":"bt-…","device_id":"dev-…"}
+# a fresh agent proves it over the operator origin (open, machine caller)
+curl -fsS -X POST -H 'Content-Type: application/json' \
+  -d '{"bootstrap_token":"bt-…","hostname":"…","os":"linux","arch":"amd64"}' \
+  https://rmm.example.com/agent/enroll           # -> {"device_id","jwt","leaf_cert_pem","leaf_key_pem","org_root_ca_pem",…}
+```
 
 ### Verify the data landed in TimescaleDB
 

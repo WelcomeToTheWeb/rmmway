@@ -193,6 +193,12 @@ automation-e2e: ## W6-3 DoD (closes Block 3 = Phase 1 MVP): ONE condition (disk 
 setup-e2e: ## A-2 DoD: a fresh database triggers the first-boot wizard (mint root admin, define the org CA, configure + verify the SMTP outbox) and every subsequent boot bypasses it. Needs Timescale PG (CREATEDB user)
 	@cd server && go run ./cmd/e2e/setup
 
+## ---- Simplified "Add a device" (agent install) --------------------------------
+
+.PHONY: adddevice-e2e
+adddevice-e2e: ## Add-device DoD: the operator mints a token (auth-gated UI action), a fresh agent enrolls over the operator's HTTPS origin (leaf signed by the pinned org root, token one-time), and the REAL agent — with the plain gRPC bootstrap port DEAD — still enrolls (via HTTP) and comes online over the mTLS port. Self-contained (no backing services)
+	@cd server && go run ./cmd/e2e/adddevice
+
 ## ---- SBOM (W4-1) -----------------------------------------------------------
 
 .PHONY: image
@@ -227,6 +233,10 @@ frontend-deps: ## Install frontend npm dependencies
 .PHONY: setup-ui-smoke
 setup-ui-smoke: ## A-2 UI DoD: the real <App/> redirects a fresh database to the setup wizard, completes + auto-signs-in, and skips the wizard afterwards (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/setup-wizard.smoke.sh
+
+.PHONY: adddevice-ui-smoke
+adddevice-ui-smoke: ## Add-device UI DoD: the real <App/> — sign in -> Devices -> "Add a device" mints a one-time token (POST /api/bootstrap) and renders copy-paste install commands with the origin + token + device id (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/adddevice.smoke.sh
 
 .PHONY: frontend
 frontend: ## Run the frontend dev server (http://localhost:5173)
