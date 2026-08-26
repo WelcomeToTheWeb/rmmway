@@ -132,6 +132,12 @@ trust-e2e: ## W4-4 DoD (closes Block 2): a skeptic (a) verifies a signed release
 webhook-e2e: ## W6-2 DoD: a user-defined endpoint receives signed (HMAC) alert/inventory/automation events, with retries + replay, and the bus is exposed as SSE. Needs Timescale PG (CREATEDB user) + NATS (JetStream)
 	@cd server && go run ./cmd/e2e/webhook
 
+## ---- Full automation E2E (W6-3 MILESTONE) ---------------------------------
+
+.PHONY: automation-e2e
+automation-e2e: ## W6-3 DoD (closes Block 3 = Phase 1 MVP): ONE condition (disk 95%) drives alert -> self-heal confirm -> ticket -> webhook, all audited, on a real NATS bus. Needs Timescale PG (CREATEDB user) + NATS (JetStream)
+	@cd server && go run ./cmd/e2e/automation
+
 ## ---- SBOM (W4-1) -----------------------------------------------------------
 
 .PHONY: image

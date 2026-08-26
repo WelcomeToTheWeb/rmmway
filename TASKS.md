@@ -56,9 +56,9 @@ Status/Claimed-by/Done, and the task that is furthest along wins.**
 - **W0 Scaffolding:** 3 / 3
 - **W1 The Agent:**    7 / 7
 - **W2 Monitoring+UX:** 5 / 5
-- **W3/W4 Trust:**     7 / 8
-- **W5/W6 Automation:** 3 / 5
-- **Total:** 25 / 28
+- **W3/W4 Trust:**     8 / 8
+- **W5/W6 Automation:** 5 / 5
+- **Total:** 28 / 28
 
 > *Update the counts above as tasks close (one line each, low-conflict).*
 
@@ -599,15 +599,48 @@ parallel. Within a track, respect `Depends on` ordering.
   CI runs it as a step (NATS service added).
 
 #### W6-3 — 🎯 MILESTONE: full automation E2E
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** @pi
-- **Started:** 2026-08-26  ·  **Done:** —
+- **Started:** 2026-08-26  ·  **Done:** 2026-08-26 (commit below on `main`)
 - **Depends on:** W5-1, W5-2, W6-1, W6-2
 - **Effort/Impact:** S / High
 - End-to-end: alert fires → self-heal runs + confirms → ticket opened →
   webhook fires.
 - **Definition of done:** one triggered condition drives all four, audited.
-  **Closes Block 3 = Phase 1 MVP.**
+  **Closes Block 3 = Phase 1 MVP.** ✅ `server/cmd/e2e/automation`
+  (`make automation-e2e`), self-contained + self-tearing-down, runs in CI
+  (test job, on the real NATS service). A SINGLE condition — one device
+  (`fileserver-01`) whose disk is 95% full (> 90 threshold) — drives all four
+  subsystems exactly as the production server wires them, on a REAL
+  NATS/JetStream bus (stream `RMMWAY_EVENTS`; two durable consumers, one for
+  the flow engine and one for the webhook framework, so each sees every event):
+  1. **ALERT FIRES** (W2-4) — the baseline anomaly for `disk.used_percent`
+  is folded into the deduped inbox by the real reconciler: one open `alerts`
+  row (audited) + a `rmmway.events.alert` event on the bus;
+  2. **SELF-HEAL RUNS + CONFIRMS** (W5-1) — the seeded `disk.full` playbook
+  detects the 95%, dispatches its real "free space" RunScript (the W3-3
+  capability token is verified by the fake agent against the pinned org root),
+  and the CONFIRM stage RE-measures: the agent's post-remediation 62% sample
+  satisfies `< 90` so the run RESOLVES — audited as the full `heal_events`
+  chain `detected→verifying→remediating→confirming→resolved` on the
+  `heal_runs` row, and the terminal outcome is published to the bus (the same
+  emitter-to-bus wiring `main.go` uses for heal escalations);
+  3. **TICKET OPENED** (W5-2) — an automation flow `disk-full-ticket`
+  (trigger disk>90 → open-ticket script → notify) is triggered by the SAME
+  condition and runs OVER the bus: the open-ticket script is dispatched +
+  executed (SUCCEEDED) and the notify node fires — that
+  `rmmway.events.flow.notify` event is the opened ticket, audited as the
+  `flow_runs` hop trail `t→open_ticket→notify` (run `succeeded`);
+  4. **WEBHOOK FIRES** (W6-2) — the webhook framework journals every event
+  with a monotonic seq and delivers HMAC-signed webhooks to a user-defined
+  endpoint (a local httptest receiver): the endpoint received the alert
+  event, the self-heal event, and the ticket event, and EVERY delivery
+  verifies its HMAC-SHA256 signature with the shared secret (a wrong secret is
+  rejected). The audit section then reads back all four Postgres trails
+  (`alerts`, `heal_runs`+`heal_events`, `flow_runs`+`flow_events`, and the
+  `webhook_events` journal) and prints a single summary showing the one
+  95%-disk condition produced all four, each independently audited. **Closes
+  Block 3 = Phase 1 MVP.**
 
 ---
 

@@ -162,6 +162,22 @@ jobs:
           RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
           RMMWAY_NATS_URL: nats://localhost:4222
         run: go run ./cmd/e2e/webhook
+      - name: "automation e2e (W6-3 MILESTONE: one condition -> alert -> self-heal confirm -> ticket -> webhook, all audited)"
+        # Closes Block 3 = Phase 1 MVP. A SINGLE condition (one device whose
+        # disk is 95% full) drives all four subsystems the production server
+        # wires them, on a REAL NATS/JetStream bus: the alert reconciler fires
+        # an alert, the seeded disk.full self-heal playbook remediates + the
+        # CONFIRM stage re-measures (95 -> 62) to RESOLVE, an automation flow
+        # (disk>90 -> open-ticket script -> notify) opens a ticket over the
+        # bus, and the webhook framework delivers every resulting event to a
+        # user endpoint HMAC-signed. The harness reads back all four Postgres
+        # trails (alerts, heal_runs+heal_events, flow_runs+flow_events,
+        # webhook_events journal) and ties them to the one condition.
+        working-directory: server
+        env:
+          RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
+          RMMWAY_NATS_URL: nats://localhost:4222
+        run: go run ./cmd/e2e/automation
 
   build:
     name: Build
