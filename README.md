@@ -86,7 +86,7 @@ Caddy edge with automatic TLS.
 
 ```sh
 cp .env.prod.example .env.prod   # set RMMWAY_DOMAIN + the 5 required secrets
-make prod                         # == docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+make prod                         # == docker compose --env-file .env.prod --profile edge -f docker-compose.prod.yml up -d --build
 ```
 
 Public surface (the only host ports):
@@ -118,6 +118,84 @@ make prod-down        # stop (volumes kept)     make prod-clean  # stop + delete
 
 For a public IP without a DNS name, Caddy ≥ 2.8 can issue Let's Encrypt
 certs for the bare IP; a real hostname is still recommended.
+
+### Bring your own reverse proxy (self-hosting)
+
+The bundled Caddy edge is optional. If you'd rather terminate TLS with your
+own proxy (Nginx, Traefik, HAProxy, or your own Caddy) — e.g. it already
+fronts other services or you manage certs centrally — bring it up **without**
+the bundled Caddy and point your proxy at the stack:
+
+```sh
+make prod-byoproxy
+# == docker compose --env-file .env.prod \
+#      -f docker-compose.prod.yml -f docker-compose.byoproxy.yml up -d --build
+```
+
+`prod-byoproxy` leaves the bundled Caddy **off** (its `edge` profile is not
+selected, so host ports 80/443 are free) and publishes the operator HTTP
+two host ports for your proxy to forward to (override in `.env.prod`):
+
+| Host port | Env | Forwards to | What |
+| --- | --- | --- | --- |
+| `8080` | `RMMWAY_HTTP_PORT` | `server:8080` | operator API: `/api/*`, `/agent/*`, `/healthz*` |
+| `8081` | `RMMWAY_FRONTEND_PORT` | `frontend:8080` | the prebuilt operator SPA |
+
+The mTLS gRPC agent channel (`RMMWAY_AGENT_MTLS_PORT`, default 50052) is
+published directly by the server either way and is **unchanged** — agents
+dial `<domain>:50052` as usual, and `RMMWAY_DOMAIN` still has to be the
+public hostname (it's stamped into the mTLS cert SANs).
+
+**Nginx (host-level, Let's Encrypt via certbot):**
+
+```nginx
+server {
+    listen 443 ssl; http2 on;
+    server_name rmm.example.com;
+    ssl_certificate     /etc/letsencrypt/live/rmm.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/rmm.example.com/privkey.pem;
+
+    # Operator API (JSON + SSE) + signed agent releases + health.
+    location ~ ^/(api|agent|healthz)(/|$) {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_buffering off;          # SSE: stream, don't buffer
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+    # Everything else: the operator SPA (the frontend container does the
+    # /index.html fallback itself).
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+**Caddy on the host** (automatic Let's Encrypt; SSE works out of the box):
+
+```caddyfile
+rmm.example.com {
+    handle /api/*     { reverse_proxy 127.0.0.1:8080 }
+    handle /agent/*   { reverse_proxy 127.0.0.1:8080 }
+    handle /healthz*  { reverse_proxy 127.0.0.1:8080 }
+    handle            { reverse_proxy 127.0.0.1:8081 }
+}
+```
+
+**Containerized proxy instead of host ports:** if your proxy runs as a Docker
+container, attach it to the shared `rmmway-prod` network and proxy
+`server:8080` / `frontend:8080` directly — then you don't need the
+`docker-compose.byoproxy.yml` host-port publishing at all (just run the base
+file without the `edge` profile).
+
+Manage the BYO stack with `make prod-byoproxy-down` / `prod-byoproxy-clean` /
+`prod-byoproxy-logs`.
 
 ## First-boot setup wizard (A-2)
 

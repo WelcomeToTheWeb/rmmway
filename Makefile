@@ -42,7 +42,11 @@ dev: ## make dev — boot the full local stack and wait for health (idempotent)
 	$(MAKE) health
 
 ## ---- Production (A-1) ---------------------------------------------------
-COMPOSE_PROD = $(COMPOSE) --env-file .env.prod -f docker-compose.prod.yml
+# Default stack includes the bundled Caddy TLS edge (the "edge" profile).
+COMPOSE_PROD = $(COMPOSE) --env-file .env.prod --profile edge -f docker-compose.prod.yml
+# BYO-reverse-proxy stack: bundled Caddy stays off (no "edge" profile) and the
+# operator API + SPA are published on the host for your own proxy to front.
+COMPOSE_PROD_BYO = $(COMPOSE) --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.byoproxy.yml
 
 .PHONY: prod
 prod: ## Build + boot the hardened production stack (Caddy TLS edge + mTLS agent port). Needs .env.prod
@@ -63,6 +67,28 @@ prod-clean: ## Stop the production stack AND remove its data volumes (destructiv
 .PHONY: prod-logs
 prod-logs: ## Tail production stack logs
 	$(COMPOSE_PROD) logs -f --tail=100
+
+## ---- Production, bring-your-own reverse proxy (A-1) ----------------------
+.PHONY: prod-byoproxy
+prod-byoproxy: ## Boot the stack WITHOUT the bundled Caddy, publishing the API (RMMWAY_HTTP_PORT, def 8080) + SPA (RMMWAY_FRONTEND_PORT, def 8081) for your own proxy
+	@test -f .env.prod || { echo "no .env.prod — first: cp .env.prod.example .env.prod and set the secrets"; exit 1; }
+	$(COMPOSE_PROD_BYO) up -d --build
+	@echo "==> up WITHOUT the bundled Caddy (edge profile off)."
+	@echo "==> operator API (HTTP): http://<host>:8080 (RMMWAY_HTTP_PORT)   <- your proxy forwards /api,/agent,/healthz here"
+	@echo "==> operator SPA (HTTP): http://<host>:8081 (RMMWAY_FRONTEND_PORT)   <- your proxy forwards the rest here"
+	@echo "==> agent mTLS gRPC:   <host>:<RMMWAY_AGENT_MTLS_PORT>  (default 50052, unchanged)"
+
+.PHONY: prod-byoproxy-down
+prod-byoproxy-down: ## Stop the BYO-proxy production stack (data volumes are kept)
+	$(COMPOSE_PROD_BYO) down
+
+.PHONY: prod-byoproxy-clean
+prod-byoproxy-clean: ## Stop the BYO-proxy production stack AND remove its data volumes (destructive)
+	$(COMPOSE_PROD_BYO) down -v
+
+.PHONY: prod-byoproxy-logs
+prod-byoproxy-logs: ## Tail BYO-proxy production stack logs
+	$(COMPOSE_PROD_BYO) logs -f --tail=100
 
 ## ---- Go ------------------------------------------------------------------
 

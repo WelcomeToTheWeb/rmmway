@@ -214,8 +214,14 @@ services:
 
   # Edge: the public HTTP entry point. Automatic TLS (Let's Encrypt for a
   # public domain, internal CA for localhost) + security headers.
+  #
+  # Lives behind the opt-in "edge" profile so a self-hoster can drop it and
+  # run their own reverse proxy instead (see docker-compose.byoproxy.yml and
+  # `make prod-byoproxy`). The default `make prod` passes --profile edge, so
+  # Caddy still comes up unless you explicitly opt out.
   caddy:
     image: caddy:2.11-alpine
+    profiles: ["edge"]
     ports:
       - "80:80"
       - "443:443"
