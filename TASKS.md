@@ -599,9 +599,9 @@ parallel. Within a track, respect `Depends on` ordering.
   CI runs it as a step (NATS service added).
 
 #### W6-3 — 🎯 MILESTONE: full automation E2E
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —  ·  **Done:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** @pi
+- **Started:** 2026-08-26  ·  **Done:** —
 - **Depends on:** W5-1, W5-2, W6-1, W6-2
 - **Effort/Impact:** S / High
 - End-to-end: alert fires → self-heal runs + confirms → ticket opened →
