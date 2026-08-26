@@ -28,9 +28,9 @@ To avoid collisions, Engineer 1 and Engineer 2 should ideally own different trac
 **Definition of done:** `docker compose -f docker-compose.prod.yml up` boots a secure stack with valid TLS on the frontend/API, ready for a public IP.
 
 ### A-2 — First-Boot Setup Wizard
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** WelcomeToTheWeb
+- **Started:** 2026-08-26
 - **Done:** —
 - **Depends on:** A-1
 - **Effort/Impact:** S / Medium
