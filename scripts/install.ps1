@@ -95,14 +95,23 @@ $lines = @(
 )
 Set-Content -Path $cfg -Value $lines -Encoding ascii
 # Restrict the config to the current user + Administrators (the token lives here).
-$acl = Get-Acl $cfg
-$acl.SetAccessRuleProtection($true, $false)
-$rule = New-Object System.AccessControl.FileSystemAccessRule("$env:USERDOMAIN\$env:USERNAME", "FullControl", "Allow")
-$admins = New-Object System.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "Allow")
-$acl.SetAccessRule($rule)
-$acl.SetAccessRule($admins)
-Set-Acl -Path $cfg -AclObject $acl
-Log "config -> $cfg (ACL restricted)"
+# Best-effort hardening: a failure here (e.g. the AccessControl assembly is not
+# loaded on this PowerShell build) must not abort the install - the config is
+# already written and readable by the service.
+try {
+    # Resolve the type in a cast context first so PowerShell loads the containing
+    # assembly (System.AccessControl on .NET/PS7, System on .NET FW/PS5.1). New-Object
+    # with the bare string name does not always trigger that load.
+    $facr = [System.AccessControl.FileSystemAccessRule]
+    $acl = Get-Acl $cfg
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.AddAccessRule(New-Object $facr "$env:USERDOMAIN\$env:USERNAME", "FullControl", "Allow")
+    $acl.AddAccessRule(New-Object $facr "Administrators", "FullControl", "Allow")
+    Set-Acl -Path $cfg -AclObject $acl
+    Log "config -> $cfg (ACL restricted)"
+} catch {
+    Log "config -> $cfg (written; ACL restriction skipped: $($_.Exception.Message))"
+}
 
 # --- register + start the Windows service -----------------------------------
 $svc = "RmmWayAgent"
