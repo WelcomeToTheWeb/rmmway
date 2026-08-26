@@ -18,9 +18,9 @@ To avoid collisions, Engineer 1 and Engineer 2 should ideally own different trac
 *Goal: Move from local dev to a hardened, deployable production environment.*
 
 ### A-1 — Production Docker Compose & Reverse Proxy
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** WelcomeToTheWeb
+- **Started:** 2026-08-26
 - **Done:** —
 - **Depends on:** —
 - **Effort/Impact:** M / High
