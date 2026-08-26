@@ -76,8 +76,14 @@ services:
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     cap_drop: [ALL]
-    # The image entrypoint drops root -> redis user via setpriv (needs these two).
-    cap_add: [SETUID, SETGID]
+    # The image entrypoint drops root -> redis user via setpriv (needs
+    # SETUID/SETGID). DAC_OVERRIDE is also required: the entrypoint runs a
+    # root-phase `find` over the AOF dir (owned redis:999, mode 700) BEFORE
+    # dropping privileges; with CAP_DAC_OVERRIDE dropped, even root is
+    # permission-checked and gets EACCES, so redis crash-loops on every start
+    # after the first (fresh volume). It is harmless for a data-volume-only
+    # service and keeps the rest of the cap set at the minimum.
+    cap_add: [SETUID, SETGID, DAC_OVERRIDE]
 
   minio:
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
