@@ -1,7 +1,30 @@
-# RMMWay frontend static server (A-1). Internal only — the edge Caddy
-# proxies to it. Serves the prebuilt SPA from /srv/rmmway on :8080.
+# RMMWay frontend (A-1 + A-1 BYO). Serves the prebuilt SPA from /srv/rmmway.
+#
+# It ALSO reverse-proxies the operator API (/api, /agent, /healthz) to the Go
+# server. In the bundled Caddy edge this is redundant (the edge sends /api/*
+# straight to the server and never reaches here), but it makes
+# bring-your-own-reverse-proxy mode robust: a self-hoster can point their
+# WHOLE proxy at this one port and the SPA's same-origin /api/* calls still
+# reach the backend (otherwise they'd hit the SPA's index.html fallback and
+# the app would fall back to the login screen instead of e.g. the first-boot
+# wizard). SSE streams fine through reverse_proxy (Caddy flushes event-stream).
 :8080 {
-	root * /srv/rmmway
-	try_files {path} /index.html
-	file_server
+	# Operator API (JSON + SSE) + signed agent releases + stack health.
+	handle /api/* {
+		reverse_proxy server:8080
+	}
+	handle /agent/* {
+		reverse_proxy server:8080
+	}
+	handle /healthz* {
+		reverse_proxy server:8080
+	}
+
+	# Everything else: the prebuilt operator SPA (with the /index.html
+	# fallback for client-side routes).
+	handle {
+		root * /srv/rmmway
+		try_files {path} /index.html
+		file_server
+	}
 }

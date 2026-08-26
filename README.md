@@ -133,20 +133,22 @@ make prod-byoproxy
 ```
 
 `prod-byoproxy` leaves the bundled Caddy **off** (its `edge` profile is not
-selected, so host ports 80/443 are free) and publishes the operator HTTP
-two host ports for your proxy to forward to (override in `.env.prod`):
+selected, so host ports 80/443 are free) and publishes host ports for your
+proxy to forward to (override in `.env.prod`):
 
-| Host port | Env | Forwards to | What |
+| Host port | Env | Reaches | What |
 | --- | --- | --- | --- |
-| `8080` | `RMMWAY_HTTP_PORT` | `server:8080` | operator API: `/api/*`, `/agent/*`, `/healthz*` |
-| `8081` | `RMMWAY_FRONTEND_PORT` | `frontend:8080` | the prebuilt operator SPA |
+| `8081` | `RMMWAY_FRONTEND_PORT` | `frontend:8080` | the operator SPA **plus** `/api/*`, `/agent/*`, `/healthz*` (the frontend proxies those to the backend) |
+| `8080` | `RMMWAY_HTTP_PORT` | `server:8080` | the operator API directly (optional — only if you'd rather route `/api/*` straight to the backend) |
 
-The mTLS gRPC agent channel (`RMMWAY_AGENT_MTLS_PORT`, default 50052) is
-published directly by the server either way and is **unchanged** — agents
-dial `<domain>:50052` as usual, and `RMMWAY_DOMAIN` still has to be the
-public hostname (it's stamped into the mTLS cert SANs).
+**Simplest setup (recommended): point your whole proxy at the SPA port.**
+The frontend container serves the SPA *and* reverse-proxies `/api/*`,
+`/agent/*` and `/healthz*` to the backend, so the SPA's same-origin API calls
+work through a single upstream — no route splitting required. (This is what
+makes first-boot setup, login, and the live SSE stream all work from one
+origin.)
 
-**Nginx (host-level, Let's Encrypt via certbot):**
+**Nginx (host-level, Let's Encrypt via certbot) — single upstream:**
 
 ```nginx
 server {
@@ -155,9 +157,10 @@ server {
     ssl_certificate     /etc/letsencrypt/live/rmm.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/rmm.example.com/privkey.pem;
 
-    # Operator API (JSON + SSE) + signed agent releases + health.
-    location ~ ^/(api|agent|healthz)(/|$) {
-        proxy_pass http://127.0.0.1:8080;
+    # Everything (SPA + /api + /agent + /healthz + SSE) goes to the frontend,
+    # which proxies the API to the backend itself.
+    location / {
+        proxy_pass http://127.0.0.1:8081;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -166,18 +169,20 @@ server {
         proxy_cache off;
         proxy_read_timeout 3600s;
     }
-    # Everything else: the operator SPA (the frontend container does the
-    # /index.html fallback itself).
-    location / {
-        proxy_pass http://127.0.0.1:8081;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
 }
 ```
 
-**Caddy on the host** (automatic Let's Encrypt; SSE works out of the box):
+**Caddy on the host — single upstream** (automatic Let's Encrypt; SSE works
+out of the box):
+
+```caddyfile
+rmm.example.com {
+    reverse_proxy 127.0.0.1:8081
+}
+```
+
+**Alternative — route `/api/*` directly to the backend** (skips the frontend
+hop; use `RMMWAY_HTTP_PORT` for the API, `RMMWAY_FRONTEND_PORT` for the SPA):
 
 ```caddyfile
 rmm.example.com {
@@ -188,11 +193,17 @@ rmm.example.com {
 }
 ```
 
+The mTLS gRPC agent channel (`RMMWAY_AGENT_MTLS_PORT`, default 50052) is
+published directly by the server either way and is **unchanged** — agents
+dial `<domain>:50052` as usual, and `RMMWAY_DOMAIN` still has to be the
+public hostname (it's stamped into the mTLS cert SANs).
+
 **Containerized proxy instead of host ports:** if your proxy runs as a Docker
 container, attach it to the shared `rmmway-prod` network and proxy
-`server:8080` / `frontend:8080` directly — then you don't need the
-`docker-compose.byoproxy.yml` host-port publishing at all (just run the base
-file without the `edge` profile).
+`frontend:8080` directly (single upstream — it proxies the API itself; or use
+`server:8080` for `/api/*` + `frontend:8080` for the SPA). Then you don't need
+the `docker-compose.byoproxy.yml` host-port publishing at all (just run the
+base file without the `edge` profile).
 
 Manage the BYO stack with `make prod-byoproxy-down` / `prod-byoproxy-clean` /
 `prod-byoproxy-logs`.

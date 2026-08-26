@@ -15,10 +15,15 @@
 #   # == docker compose --env-file .env.prod \
 #   #      -f docker-compose.prod.yml -f docker-compose.byoproxy.yml up -d --build
 #
-# Your proxy then terminates TLS and forwards (see README "Bring your own
-# reverse proxy" for full Nginx + Caddy examples):
-#   /api/*  /agent/*  /healthz*  ->  localhost:${RMMWAY_HTTP_PORT:-8080}
-#   everything else (the SPA)     ->  localhost:${RMMWAY_FRONTEND_PORT:-8081}
+# Your proxy then terminates TLS and forwards. SIMPLEST (recommended): point
+# the WHOLE proxy at the SPA port — the frontend container serves the SPA and
+# also proxies /api, /agent and /healthz to the backend, so everything works
+# from one origin:
+#   everything                       ->  localhost:${RMMWAY_FRONTEND_PORT:-8081}
+# ALTERNATIVE (route /api straight to the backend):
+#   /api/*  /agent/*  /healthz*      ->  localhost:${RMMWAY_HTTP_PORT:-8080}
+#   everything else (the SPA)        ->  localhost:${RMMWAY_FRONTEND_PORT:-8081}
+# (See README "Bring your own reverse proxy" for full Nginx + Caddy examples.)
 #
 # The mTLS gRPC agent channel (RMMWAY_AGENT_MTLS_PORT, default 50052) is
 # published directly by the server either way and is unchanged.
