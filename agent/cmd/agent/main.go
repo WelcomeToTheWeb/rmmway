@@ -227,29 +227,13 @@ func mtlsHost(target string) string {
 	return h
 }
 
-// runCommand is the W1-3/W1-4/W3-1/W3-2 service entrypoint: connect (plain,
-// for the bootstrap Enroll), enroll on first boot (reusing the persisted
-// identity thereafter), then — once the identity carries mTLS material —
-// switch to the mTLS channel and run the authenticated heartbeat/metric
-// uplink over it until signalled.
-//
-// W3-2: with the mTLS channel the agent also runs a background rotator that
-// refreshes its leaf (~1h certs) via the RefreshLeaf RPC while the current
-// leaf is still valid — the uplink never drops for a renewal.
-func runCommand(args []string) {
-	cfg := loadConfig(configPath(args))
-	if cfg.Server == "" {
-		fmt.Fprintln(os.Stderr, "run: no RMMWAY_SERVER configured (set it in the config or environment)")
-		os.Exit(1)
-	}
-
+// setupLogging builds the agent's logger: always stderr, and (W6-1) TEE'd into
+// a JSON-lines file when one can be opened. RMMWAY_LOG_FILE overrides the path;
+// the default is agent.jsonl next to the persisted identity. Returns the logger,
+// the JSONL handler (nil when the file couldn't be opened — shipping disabled),
+// and the resolved log path.
+func setupLogging(cfg agentConfig) (*slog.Logger, *logship.JSONLHandler, string) {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	// W6-1: TEE the agent's structured events into a JSON-lines log file —
-	// the tail source for log shipping (Loki + the indexed per-device copy
-	// in the RMM). RMMWAY_LOG_FILE overrides the path (default: agent.jsonl
-	// next to the persisted identity). If the file can't be opened the
-	// agent runs log-only on stderr (shipping disabled, nothing else breaks).
 	logFile := os.Getenv("RMMWAY_LOG_FILE")
 	if logFile == "" {
 		logFile = filepath.Join(filepath.Dir(cfg.IdentityPath), "agent.jsonl")
@@ -264,7 +248,48 @@ func runCommand(args []string) {
 			jsonl,
 		))
 	}
+	return log, jsonl, logFile
+}
 
+// runCommand is the W1-3/W1-4/W3-1/W3-2 service entrypoint. It loads config,
+// sets up logging, then runs the agent either as a proper Windows service
+// (when launched by the Service Control Manager — the install.ps1 `sc create`
+// path) or in the foreground (a terminal / manual `run`).
+func runCommand(args []string) {
+	cfg := loadConfig(configPath(args))
+	if cfg.Server == "" {
+		fmt.Fprintln(os.Stderr, "run: no RMMWAY_SERVER configured (set it in the config or environment)")
+		os.Exit(1)
+	}
+	log, jsonl, logFile := setupLogging(cfg)
+
+	if isWindowsService() {
+		// Launched by the SCM: block until told to stop. This reports the
+		// SERVICE_RUNNING handshake to the SCM — a plain console loop never
+		// does, which is why `net start` used to time out with
+		// ERROR_SERVICE_TIMEOUT (1053).
+		if err := runWindowsService(cfg, log, jsonl, logFile); err != nil {
+			log.Error("service stopped", "err", err)
+		}
+		return
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := runAgent(ctx, log, cfg, jsonl, logFile); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	log.Info("agent stopped")
+}
+
+// runAgent performs one full agent pass: apply any staged update, enroll (or
+// reuse the persisted identity), pick the channel, and run the authenticated
+// metric/heartbeat uplink until ctx is done. It returns nil on a clean stop
+// (ctx canceled) and a non-nil error when the pass must be reported or retried
+// (enroll, dial, or uplink failure). Both the foreground path and the Windows
+// service loop call it.
+func runAgent(ctx context.Context, log *slog.Logger, cfg agentConfig, jsonl *logship.JSONLHandler, logFile string) error {
 	// W4-2: install an update staged by a previous pass (on Windows the
 	// in-use .exe can't be replaced in place, so it is staged as
 	// <exe>.pending). Re-verify the signature before touching the binary.
@@ -285,8 +310,7 @@ func runCommand(args []string) {
 	plainTarget := grpcTarget(cfg.Server, cfg.GRPCAddr, defaultGRPCPort)
 	plainConn, err := grpc.NewClient(plainTarget, grpc.WithTransportCredentials(secure.Insecure()))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "run: dial %s: %v\n", plainTarget, err)
-		os.Exit(1)
+		return fmt.Errorf("run: dial %s: %w", plainTarget, err)
 	}
 	plainClient := agentv1.NewAgentServiceClient(plainConn)
 
@@ -302,14 +326,10 @@ func runCommand(args []string) {
 		// deployments) on a transient HTTP failure.
 		enroll.WithHTTPEenroller(&enroll.HTTPEnroller{BaseURL: cfg.Server}))
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
 	res, err := agent.EnsureEnrolled(ctx)
 	if err != nil {
 		plainConn.Close()
-		fmt.Fprintf(os.Stderr, "run: enroll: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("run: enroll: %w", err)
 	}
 	devID, jwt := res.BearerMetadata()
 	log.Info("agent ready", "device", devID, "reused_persisted", !res.Enrolled)
@@ -322,13 +342,12 @@ func runCommand(args []string) {
 	channel := "plain"
 	if res.Identity.TLS != nil && res.Identity.TLS.Valid() {
 		mtlsTarget := grpcTarget(cfg.Server, cfg.GRPCMTLSAddr, defaultGRPCMTLSPort)
-		creds, err := secure.New(res.Identity.TLS).TransportCredentials(mtlsHost(mtlsTarget))
-		if err != nil {
+		creds, cerr := secure.New(res.Identity.TLS).TransportCredentials(mtlsHost(mtlsTarget))
+		if cerr != nil {
 			plainConn.Close()
-			fmt.Fprintf(os.Stderr, "run: mTLS credentials: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("run: mTLS credentials: %w", cerr)
 		}
-		mtlsConn, err := grpc.NewClient(mtlsTarget,
+		mtlsConn, merr := grpc.NewClient(mtlsTarget,
 			grpc.WithTransportCredentials(creds),
 			// Every unary RPC on the mTLS channel (RefreshLeaf, and any
 			// future device RPC) must carry the device JWT — the server's
@@ -342,10 +361,9 @@ func runCommand(args []string) {
 				return invoker(ctx, method, req, reply, cc, opts...)
 			}),
 		)
-		if err != nil {
+		if merr != nil {
 			plainConn.Close()
-			fmt.Fprintf(os.Stderr, "run: dial mTLS %s: %v\n", mtlsTarget, err)
-			os.Exit(1)
+			return fmt.Errorf("run: dial mTLS %s: %w", mtlsTarget, merr)
 		}
 		client = agentv1.NewAgentServiceClient(mtlsConn)
 		target, channel = mtlsTarget, "mTLS"
@@ -371,8 +389,8 @@ func runCommand(args []string) {
 				rotCfg,
 				rotate.WithPersist(func() error { return store.Save(res.Identity) }),
 			)
-			if err := rot.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Warn("rotator stopped", "err", err)
+			if rerr := rot.Run(ctx); rerr != nil && !errors.Is(rerr, context.Canceled) {
+				log.Warn("rotator stopped", "err", rerr)
 			}
 		}()
 	} else {
@@ -393,8 +411,8 @@ func runCommand(args []string) {
 	// channel) the agent keeps the pre-W3-3 log-only behavior.
 	var commander *uplink.Commander
 	if id := res.Identity; id.TLS != nil && id.TLS.Valid() {
-		if v, err := caps.FromRootPEM([]byte(id.TLS.OrgRootPEM), devID); err != nil {
-			log.Warn("capability verification disabled (no valid org root)", "err", err)
+		if v, verr := caps.FromRootPEM([]byte(id.TLS.OrgRootPEM), devID); verr != nil {
+			log.Warn("capability verification disabled (no valid org root)", "err", verr)
 		} else {
 			commander = &uplink.Commander{DevID: devID, Verifier: v, Exec: exec.Default(), Logger: log}
 			log.Info("command execution enabled", "note", "capability tokens verified against the pinned org root")
@@ -410,8 +428,8 @@ func runCommand(args []string) {
 		uplink.WithCommander(commander),
 	)
 
-	// W6-1: ship the structured log events (the tail of the JSON-lines
-	// file above) two ways: to Loki over its HTTP push API (RMMWAY_LOKI_URL,
+	// W6-1: ship the structured log events (the tail of the JSON-lines file
+	// above) two ways: to Loki over its HTTP push API (RMMWAY_LOKI_URL,
 	// e.g. http://localhost:3100) and to the server over the uplink (where
 	// they are indexed per device in Timescale for the RMM). Delivery is
 	// at-least-once; both sinks dedup by entry id.
@@ -443,15 +461,15 @@ func runCommand(args []string) {
 		if lokiURL != "" && lokiURL != "off" {
 			sc.Loki = logship.NewLokiClient(lokiURL, devID, nil)
 		}
-		ship, err := logship.New(sc)
-		if err != nil {
-			log.Warn("logship: start", "err", err)
+		ship, serr := logship.New(sc)
+		if serr != nil {
+			log.Warn("logship: start", "err", serr)
 		} else {
 			log.Info("log shipping enabled",
 				"file", logFile, "loki", lokiURL, "uplink_indexed", true)
 			go func() {
-				if err := ship.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					log.Warn("logship stopped", "err", err)
+				if rerr := ship.Run(ctx); rerr != nil && !errors.Is(rerr, context.Canceled) {
+					log.Warn("logship stopped", "err", rerr)
 				}
 				_ = ship.Close()
 			}()
@@ -466,10 +484,9 @@ func runCommand(args []string) {
 
 	fmt.Printf("rmmway-agent %s: connected to %s (%s) as device %s; uplink running\n", version, target, channel, devID)
 	if err := u.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Fprintf(os.Stderr, "run: uplink exited: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("run: uplink exited: %w", err)
 	}
-	log.Info("agent stopped")
+	return nil
 }
 
 // statusCommand reports the persisted enrollment identity (W1-4) without

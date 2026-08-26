@@ -118,11 +118,13 @@ try {
 }
 
 # --- register + start the Windows service -----------------------------------
+# The agent is a real Windows service (it reports the SCM handshake on start),
+# so Start-Service succeeds even before the agent has enrolled/connected.
 $svc = "RmmWayAgent"
 $exe = "`"$bin`" run --config `"$cfg`""
 if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
     Log "service $svc already exists - restarting"
-    Restart-Service $svc -ErrorAction SilentlyContinue
+    try { Restart-Service $svc -ErrorAction Stop } catch { Log "WARNING: restart failed: $($_.Exception.Message)" }
 } else {
     $scArgs = "create $svc binPath= $exe start= auto"
     & sc.exe $scArgs | Out-Null
@@ -130,8 +132,18 @@ if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
         Die "sc.exe create failed (re-run as Administrator)"
     }
     Log "service $svc registered"
+    try {
+        Start-Service $svc -ErrorAction Stop
+    } catch {
+        Log "WARNING: service did not start: $($_.Exception.Message)"
+        Log "  run the agent in the foreground to see the real error:"
+        Log "    & `"$bin`" run --config `"$cfg`""
+        Log "  and check the Application log (eventvwr.msc)."
+    }
 }
-Start-Service $svc -ErrorAction SilentlyContinue
+# If the agent process ever crashes, auto-restart it (retry in 30s, reset the
+# failure counter after a day). Best-effort hardening.
+& sc.exe failure $svc reset= 86400 actions= restart/30000 | Out-Null
 $st = Get-Service -Name $svc -ErrorAction SilentlyContinue
 if ($st) { Log "service status: $($st.Status)" }
 

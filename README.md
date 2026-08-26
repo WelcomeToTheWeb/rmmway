@@ -323,6 +323,27 @@ curl -fsS -X POST -H 'Content-Type: application/json' \
   https://rmm.example.com/agent/enroll           # -> {"device_id","jwt","leaf_cert_pem","leaf_key_pem","org_root_ca_pem",…}
 ```
 
+### Managing the Windows agent (service)
+
+On Windows the agent runs as a real Windows service named `RmmWayAgent`
+(registered by the installer). It reports its status to the Service Control
+Manager on start and auto-restarts if the process ever crashes. Useful
+commands (elevated PowerShell):
+
+```powershell
+Get-Service RmmWayAgent            # status
+Restart-Service RmmWayAgent        # restart
+Stop-Service RmmWayAgent           # stop (leaves the registration in place)
+sc.exe query RmmWayAgent           # raw SCM state + exit code
+# run in the foreground to see live logs / the real error:
+& "C:\Program Files\RMMWay\rmmway-agent.exe" run --config "C:\Program Files\RMMWay\agent.env"
+```
+
+If the service won't start, run the last command above — the agent prints the
+underlying reason (a bad server URL, an expired/used bootstrap token, or the
+mTLS port not being reachable) to the console, and the same goes to the
+Application event log.
+
 ### Verify the data landed in TimescaleDB
 
 ```bash
