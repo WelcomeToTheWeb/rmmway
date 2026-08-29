@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -132,6 +133,7 @@ type agentConfig struct {
 	GRPCAddr       string // plain (bootstrap) channel
 	GRPCMTLSAddr   string // W3-1: the mTLS channel (post-enroll)
 	IdentityPath   string
+	ConfigPath     string // the --config file, if one was given (L3 strip)
 }
 
 // loadConfig merges environment (primary — the systemd EnvironmentFile the
@@ -203,6 +205,10 @@ func configPath(args []string) string {
 
 // grpcTarget resolves a channel's gRPC endpoint: an explicit override wins;
 // otherwise derive the host from the server URL and use defaultPort.
+//
+// M6: the server URL's port is the operator's HTTP(S) origin, NOT a gRPC
+// port — reusing it (e.g. https://rmm.example.com:8443) dialed the wrong
+// port. Only an explicit override carries a meaningful port of its own.
 func grpcTarget(server, explicit, defaultPort string) string {
 	if explicit != "" {
 		return explicit
@@ -211,11 +217,7 @@ func grpcTarget(server, explicit, defaultPort string) string {
 	if err != nil || u.Host == "" {
 		return server // already a bare host:port
 	}
-	port := u.Port()
-	if port == "" {
-		port = defaultPort
-	}
-	return net.JoinHostPort(u.Hostname(), port)
+	return net.JoinHostPort(u.Hostname(), defaultPort)
 }
 
 // mtlsHost strips host:port down to the host (for the cert's ServerName).
@@ -225,6 +227,46 @@ func mtlsHost(target string) string {
 		return target
 	}
 	return h
+}
+
+// stripBootstrapTokenFromConfig removes the spent RMMWAY_BOOTSTRAP_TOKEN
+// line from the agent's --config file after a successful enrollment (L3).
+// A used one-time credential sitting on every endpoint is a habit, not a
+// feature. The token may legitimately be carried by environment instead
+// (systemd EnvironmentFile / installer-managed env block), so an unchanged
+// file is fine when it holds no token line. Failure is non-fatal — the
+// identity file, not the config, is what authorizes reconnection.
+func stripBootstrapTokenFromConfig(cfgPath string, log *slog.Logger) {
+	if cfgPath == "" {
+		return
+	}
+	b, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return // loadConfig already failed the run on an unreadable file
+	}
+	orig := string(b)
+	kept := make([]string, 0, 8)
+	stripped := false
+	for _, line := range strings.Split(orig, "\n") {
+		k, _, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if ok && k == "RMMWAY_BOOTSTRAP_TOKEN" {
+			stripped = true
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if !stripped {
+		return
+	}
+	out := strings.Join(kept, "\n")
+	if strings.HasSuffix(orig, "\n") {
+		out += "\n"
+	}
+	if werr := os.WriteFile(cfgPath, []byte(out), 0o600); werr != nil {
+		log.Warn("strip bootstrap token from config", "file", cfgPath, "err", werr)
+		return
+	}
+	log.Info("bootstrap token removed from config (one-time token consumed)", "file", cfgPath)
 }
 
 // setupLogging builds the agent's logger: always stderr, and (W6-1) TEE'd into
@@ -256,7 +298,9 @@ func setupLogging(cfg agentConfig) (*slog.Logger, *logship.JSONLHandler, string)
 // (when launched by the Service Control Manager — the install.ps1 `sc create`
 // path) or in the foreground (a terminal / manual `run`).
 func runCommand(args []string) {
-	cfg := loadConfig(configPath(args))
+	cfgPath := configPath(args)
+	cfg := loadConfig(cfgPath)
+	cfg.ConfigPath = cfgPath
 	if cfg.Server == "" {
 		fmt.Fprintln(os.Stderr, "run: no RMMWAY_SERVER configured (set it in the config or environment)")
 		os.Exit(1)
@@ -332,6 +376,47 @@ func runAgent(ctx context.Context, log *slog.Logger, cfg agentConfig, jsonl *log
 		return fmt.Errorf("run: enroll: %w", err)
 	}
 	devID, jwt := res.BearerMetadata()
+
+	// H3: the device JWT (720h lifetime) is renewed by the server
+	// piggybacked on a heartbeat ack once less than a quarter of it
+	// remains. The uplink's WithJWTChangeHook fires with the fresh token,
+	// and the mTLS unary interceptor below must see it too — so the live
+	// token lives in one mutex-guarded cell shared by both. Every rotation
+	// is persisted into the identity file (the H2 mirror: a restart mid-
+	// window reuses the renewed token, not the stale one from enroll).
+	var jwtMu sync.Mutex
+	liveJWT := jwt
+	getJWT := func() string {
+		jwtMu.Lock()
+		defer jwtMu.Unlock()
+		return liveJWT
+	}
+	setJWT := func(tok string) {
+		if tok == "" {
+			return
+		}
+		jwtMu.Lock()
+		changed := liveJWT != tok
+		if changed {
+			liveJWT = tok
+			// Identity is shared with the rotator's persist callback;
+			// serialize the JWT field behind the same mutex it holds.
+			res.Identity.JWT = tok
+		}
+		jwtMu.Unlock()
+		if !changed {
+			return
+		}
+		log.Info("device JWT renewed", "note", "persisting + shared with mTLS unary interceptor")
+		if serr := store.Save(res.Identity); serr != nil {
+			log.Warn("persist renewed JWT", "err", serr)
+		}
+	}
+
+	// L3: the bootstrap token is spent now; strip it from the --config
+	// file so a used one-time credential doesn't sit on the endpoint.
+	stripBootstrapTokenFromConfig(cfg.ConfigPath, log)
+
 	log.Info("agent ready", "device", devID, "reused_persisted", !res.Enrolled)
 
 	// 2. Channel selection. With a persisted mTLS identity, the long-lived
@@ -356,7 +441,7 @@ func runAgent(ctx context.Context, log *slog.Logger, cfg agentConfig, jsonl *log
 			// context, so this only ever FILLS an unset header.
 			grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 				if md, _ := metadata.FromOutgoingContext(ctx); len(md.Get("authorization")) == 0 {
-					ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+jwt)
+					ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+getJWT())
 				}
 				return invoker(ctx, method, req, reply, cc, opts...)
 			}),
@@ -387,7 +472,13 @@ func runAgent(ctx context.Context, log *slog.Logger, cfg agentConfig, jsonl *log
 			}
 			rot := rotate.New(client, res.Identity.TLS, devID, res.Identity.Hostname,
 				rotCfg,
-				rotate.WithPersist(func() error { return store.Save(res.Identity) }),
+				// Take jwtMu: Save marshals the whole Identity, whose JWT
+				// field the uplink's renewal hook also writes (H3).
+				rotate.WithPersist(func() error {
+					jwtMu.Lock()
+					defer jwtMu.Unlock()
+					return store.Save(res.Identity)
+				}),
 			)
 			if rerr := rot.Run(ctx); rerr != nil && !errors.Is(rerr, context.Canceled) {
 				log.Warn("rotator stopped", "err", rerr)
@@ -426,6 +517,7 @@ func runAgent(ctx context.Context, log *slog.Logger, cfg agentConfig, jsonl *log
 	},
 		uplink.WithCollector(coll.Collect),
 		uplink.WithCommander(commander),
+		uplink.WithJWTChangeHook(setJWT),
 	)
 
 	// W6-1: ship the structured log events (the tail of the JSON-lines file

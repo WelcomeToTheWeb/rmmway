@@ -4,9 +4,17 @@
 //
 // Auth model: a human operator logs in with a username + password
 // (single admin account, configured via env) and receives a short-lived
-// operator JWT (subject "operator", issuer "rmmway"). /api/* routes are
-// gated on that token; /admin/* stays open for machine callers (the
-// curl|sh installer, the e2e harness, the search CLI in the README).
+// operator JWT (subject "operator", issuer "rmmway"). BOTH /api/* and
+// /admin/* routes are gated on that token (C1: /admin/* was open for
+// machine callers, but the one caller that mattered — minting enroll
+// tokens — is an operator action the UI does via /api/bootstrap; leaving
+// the join gate + inventory unauthenticated let anyone on the network
+// enroll arbitrary devices). The only open routes are the machine
+// endpoints the AGENT itself calls with no operator session:
+//
+//	/agent/enroll      (the bootstrap enroll, guarded by the one-time token)
+//	/agent/releases/*  (signed release distribution; signatures, not auth)
+//	/api/login, /api/setup/status (+ the setup POST routes pre-initialization)
 package httpapi
 
 import (
@@ -21,6 +29,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/pbkdf2"
@@ -66,6 +75,9 @@ type Server struct {
 	adminUser string
 	adminSalt []byte
 	adminHash []byte
+
+	// loginLimiter (L8) caps failed /api/login attempts per client IP.
+	loginLimiter *loginLimiter
 
 	mintBootstrap func() (token, deviceID string)
 	// enroll ("Add a device" over the operator's HTTPS origin) performs the
@@ -143,6 +155,10 @@ type Config struct {
 	// Setup (A-2) is the first-boot setup wizard backend; nil disables
 	// /api/setup* (in-memory mode: the UI skips the wizard, env admin only).
 	Setup *setup.Service
+	// LoginRateLimit (L8) enables the per-IP failed-login limiter on
+	// /api/login. Defaults to true; tests that hammer the login route set
+	// it false.
+	LoginRateLimit *bool
 }
 
 // New builds a Server. A nil Devices falls back to an in-memory store.
@@ -166,12 +182,18 @@ func New(cfg Config) *Server {
 	if devices == nil {
 		devices = store.NewMemoryDeviceStore()
 	}
+	// L8: the login limiter is on unless explicitly disabled (tests).
+	var limiter *loginLimiter
+	if cfg.LoginRateLimit == nil || *cfg.LoginRateLimit {
+		limiter = newLoginLimiter()
+	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		// crypto/rand.Read fails only on a broken /dev/urandom — fatal.
 		panic("httpapi: generate salt: " + err.Error())
 	}
 	return &Server{
+		loginLimiter:  limiter,
 		devices:       devices,
 		search:        cfg.Search,
 		baseline:      cfg.Baseline,
@@ -203,8 +225,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// W2-2: fuzzy device search (Cmd-K backing) + command dispatch, both auth-gated.
 	mux.HandleFunc("/api/search", s.requireOperator(s.handleSearch))
 	mux.HandleFunc("/api/devices/", s.requireOperator(s.deviceSub))
-	// W3-3: the device's dispatched commands + results, open for e2e/ops.
-	mux.HandleFunc("/admin/devices/", s.deviceSub)
+	// W3-3: the device's dispatched commands + results (C1: auth-gated).
+	mux.HandleFunc("/admin/devices/", s.requireOperator(s.deviceSub))
 	// W2-3: dynamic baselining — anomaly feed (auth-gated) + manual pass.
 	mux.HandleFunc("/api/baseline/anomalies", s.requireOperator(s.handleBaselineAnomalies))
 	mux.HandleFunc("/api/baseline/run", s.requireOperator(s.handleBaselineRun))
@@ -212,27 +234,28 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/alerts", s.requireOperator(s.handleAlerts))
 	mux.HandleFunc("/api/alerts/", s.requireOperator(s.handleAlertSub))
 	// W5-1: self-healing playbook engine — playbooks, runs (+ stage log),
-	// and a manual pass trigger. Open mirrors below for e2e/ops.
+	// and a manual pass trigger. /admin mirrors below for e2e/ops (C1:
+	// auth-gated).
 	mux.HandleFunc("/api/heal/playbooks", s.requireOperator(s.handleHealPlaybooks))
 	mux.HandleFunc("/api/heal/runs", s.requireOperator(s.handleHealRuns))
 	mux.HandleFunc("/api/heal/runs/", s.requireOperator(s.handleHealRunSub))
 	mux.HandleFunc("/api/heal/pass", s.requireOperator(s.handleHealPass))
 	// W5-2: event-driven automation chains — compose (DAG CRUD), trigger
-	// (synthetic), runs (+ node log), and a manual sweep. Open mirrors
-	// below for e2e/ops.
+	// (synthetic), runs (+ node log), and a manual sweep. /admin mirrors
+	// below for e2e/ops (C1: auth-gated).
 	mux.HandleFunc("/api/flows", s.requireOperator(s.handleFlows))
 	mux.HandleFunc("/api/flows/", s.requireOperator(s.handleFlowSub))
-	mux.HandleFunc("/admin/flows", s.handleFlows)
-	mux.HandleFunc("/admin/flows/", s.handleFlowSub)
+	mux.HandleFunc("/admin/flows", s.requireOperator(s.handleFlows))
+	mux.HandleFunc("/admin/flows/", s.requireOperator(s.handleFlowSub))
 	// W6-2: signed webhooks + live event stream. Endpoints are user-defined
 	// (HMAC secret + categories); /events/stream is the SSE subscription.
-	// Open mirrors below for e2e/ops.
+	// /admin mirrors below for e2e/ops (C1: auth-gated).
 	mux.HandleFunc("/api/webhooks", s.requireOperator(s.handleWebhooks))
 	mux.HandleFunc("/api/webhooks/", s.requireOperator(s.handleWebhookSub))
 	mux.HandleFunc("/api/events/stream", s.requireOperator(s.handleEventStream))
-	mux.HandleFunc("/admin/webhooks", s.handleWebhooks)
-	mux.HandleFunc("/admin/webhooks/", s.handleWebhookSub)
-	mux.HandleFunc("/admin/events/stream", s.handleEventStream)
+	mux.HandleFunc("/admin/webhooks", s.requireOperator(s.handleWebhooks))
+	mux.HandleFunc("/admin/webhooks/", s.requireOperator(s.handleWebhookSub))
+	mux.HandleFunc("/admin/events/stream", s.requireOperator(s.handleEventStream))
 	// A-2: first-boot setup wizard. /api/setup/status is always open (the UI
 	// needs it to decide between wizard and login, pre-auth); the POST routes
 	// are open only while the server is uninitialized, then operator-gated.
@@ -240,22 +263,26 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/setup", s.handleSetup)
 	mux.HandleFunc("/api/setup/complete", s.setupGate(s.handleSetupComplete))
 	mux.HandleFunc("/api/setup/smtp/test", s.setupGate(s.handleSetupSMTPTest))
-	mux.HandleFunc("/admin/bootstrap", s.handleBootstrap)
+	// C1: /admin/* is the operator surface — every route is auth-gated.
+	// (It used to be open "for machine callers", but the only machine
+	// endpoints the agent needs are /agent/enroll + /agent/releases/*;
+	// minting an enroll token is an operator decision.)
+	mux.HandleFunc("/admin/bootstrap", s.requireOperator(s.handleBootstrap))
 	// "Add a device": the auth-gated mint (the UI mints a token to hand to an
 	// installer) and the OPEN bootstrap enroll a remote agent calls over the
 	// operator's HTTPS origin (machine caller, like /agent/releases).
 	mux.HandleFunc("/api/bootstrap", s.requireOperator(s.handleBootstrapMint))
 	mux.HandleFunc("/agent/enroll", s.handleAgentEnroll)
-	mux.HandleFunc("/admin/devices", s.deviceList) // open: installer / e2e / README
-	mux.HandleFunc("/admin/search", s.handleSearch)
-	mux.HandleFunc("/admin/baseline/anomalies", s.handleBaselineAnomalies) // open: e2e
-	mux.HandleFunc("/admin/baseline/run", s.handleBaselineRun)             // open: e2e
-	mux.HandleFunc("/admin/alerts", s.handleAlerts)                        // open: e2e
-	mux.HandleFunc("/admin/alerts/", s.handleAlertSub)                     // open: e2e
-	mux.HandleFunc("/admin/heal/playbooks", s.handleHealPlaybooks)         // open: e2e
-	mux.HandleFunc("/admin/heal/runs", s.handleHealRuns)                   // open: e2e
-	mux.HandleFunc("/admin/heal/runs/", s.handleHealRunSub)                // open: e2e
-	mux.HandleFunc("/admin/heal/pass", s.handleHealPass)                   // open: e2e
+	mux.HandleFunc("/admin/devices", s.requireOperator(s.deviceList)) // C1: was open
+	mux.HandleFunc("/admin/search", s.requireOperator(s.handleSearch))
+	mux.HandleFunc("/admin/baseline/anomalies", s.requireOperator(s.handleBaselineAnomalies))
+	mux.HandleFunc("/admin/baseline/run", s.requireOperator(s.handleBaselineRun))
+	mux.HandleFunc("/admin/alerts", s.requireOperator(s.handleAlerts))
+	mux.HandleFunc("/admin/alerts/", s.requireOperator(s.handleAlertSub))
+	mux.HandleFunc("/admin/heal/playbooks", s.requireOperator(s.handleHealPlaybooks))
+	mux.HandleFunc("/admin/heal/runs", s.requireOperator(s.handleHealRuns))
+	mux.HandleFunc("/admin/heal/runs/", s.requireOperator(s.handleHealRunSub))
+	mux.HandleFunc("/admin/heal/pass", s.requireOperator(s.handleHealPass))
 
 	// W4-2: signed agent release distribution (open — the AGENT fetches these,
 	// not an operator). The manifest + assets are only served when a releases
@@ -319,6 +346,30 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// L8: per-IP failure budget BEFORE the PBKDF2 work (brute-force +
+	// work-amplification DoS).
+	ip := ""
+	if s.loginLimiter != nil {
+		ip = clientIP(r)
+		if until, ok := s.loginLimiter.allow(ip); !ok {
+			secs := int64(time.Until(until).Seconds()) + 1
+			w.Header().Set("Retry-After", strconv.FormatInt(secs, 10))
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{
+				"error": "too many failed login attempts; try again later",
+			})
+			return
+		}
+	}
+	limitFail := func() {
+		if s.loginLimiter != nil {
+			s.loginLimiter.recordFail(ip)
+		}
+	}
+	limitOK := func() {
+		if s.loginLimiter != nil {
+			s.loginLimiter.recordOK(ip)
+		}
+	}
 	// A-2: the wizard-minted root admin (database-backed, survives restarts)
 	// is checked FIRST; the RMMWAY_ADMIN_USER/PASSWORD env pair remains a
 	// fallback (dev mode, and the pre-setup window on a fresh server).
@@ -328,6 +379,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "mint token: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		limitOK()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"token":        tok,
 			"expiry":       time.Now().Add(s.tokenLifetime).UTC().Format(time.RFC3339),
@@ -341,6 +393,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	userOK := subtle.ConstantTimeCompare([]byte(in.Username), []byte(s.adminUser)) == 1
 	passOK := subtle.ConstantTimeCompare(candidate, s.adminHash) == 1
 	if !userOK || !passOK {
+		limitFail()
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
 		return
 	}
@@ -349,6 +402,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "mint token: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	limitOK()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token":        tok,
 		"expiry":       time.Now().Add(s.tokenLifetime).UTC().Format(time.RFC3339),
@@ -400,6 +454,120 @@ func bearerToken(h string) (string, bool) {
 		return "", false
 	}
 	return t, true
+}
+
+// ---- L8: login rate limiting -------------------------------------------------
+//
+// /api/login is open (it's how you get a token) and each attempt does a
+// 100k-iteration PBKDF2 — an unbounded brute force is both an offline
+// dictionary race and a work-amplification DoS. This is a small per-IP
+// limiter: up to loginMaxFails failures per loginWindow per IP, then a
+// loginLockout lockout. A success clears the IP's failure count. In-memory
+// (per process) — good enough for a single-server RMM; a fronted deployment
+// should still rate-limit at the edge.
+
+const (
+	loginWindow    = 5 * time.Minute
+	loginMaxFails  = 10
+	loginLockout   = 15 * time.Minute
+	loginPurgeAgo  = loginWindow + loginLockout
+)
+
+type loginIPState struct {
+	fails       int
+	windowStart time.Time
+	lockedUntil time.Time
+}
+
+type loginLimiter struct {
+	mu    sync.Mutex
+	perIP map[string]*loginIPState
+	now   func() time.Time // injectable for tests
+}
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{perIP: make(map[string]*loginIPState), now: time.Now}
+}
+
+// allow reports whether ip may attempt a login right now; if not, it
+// returns when the lockout ends.
+func (l *loginLimiter) allow(ip string) (time.Time, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	if st := l.perIP[ip]; st != nil {
+		if !st.lockedUntil.IsZero() {
+			if now.Before(st.lockedUntil) {
+				return st.lockedUntil, false
+			}
+			st.lockedUntil = time.Time{}
+		}
+	}
+	return now, true
+}
+
+// recordFail counts a failed attempt and locks the IP out when the budget
+// is spent.
+func (l *loginLimiter) recordFail(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.now()
+	l.purgeLocked(now)
+	st := l.perIP[ip]
+	if st == nil {
+		st = &loginIPState{}
+		l.perIP[ip] = st
+	}
+	if now.Sub(st.windowStart) > loginWindow || st.fails == 0 {
+		st.windowStart = now
+		st.fails = 0
+	}
+	st.fails++
+	if st.fails >= loginMaxFails {
+		st.lockedUntil = now.Add(loginLockout)
+		st.fails = 0
+	}
+}
+
+// recordOK clears the failure count for a successful login.
+func (l *loginLimiter) recordOK(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.perIP[ip] = nil
+}
+
+// purgeLocked drops stale entries (callers hold the lock).
+func (l *loginLimiter) purgeLocked(now time.Time) {
+	for ip, st := range l.perIP {
+		if st == nil { // recordOK clears an IP by nil-ing its entry
+			delete(l.perIP, ip)
+			continue
+		}
+		if !st.lockedUntil.IsZero() {
+			if now.After(st.lockedUntil) {
+				delete(l.perIP, ip)
+			}
+			continue
+		}
+		if now.Sub(st.windowStart) > loginPurgeAgo {
+			delete(l.perIP, ip)
+		}
+	}
+}
+
+// clientIP best-effort extraction: the first X-Forwarded-For hop (behind a
+// proxy) or the TCP peer.
+func clientIP(r *http.Request) string {
+	if ff := r.Header.Get("X-Forwarded-For"); ff != "" {
+		if ip := strings.TrimSpace(strings.Split(ff, ",")[0]); ip != "" {
+			return ip
+		}
+	}
+	host := r.RemoteAddr // "ip:port"
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		return host[:i]
+	}
+	return host
 }
 
 // ---- handlers ---------------------------------------------------------------

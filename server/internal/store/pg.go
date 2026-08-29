@@ -26,34 +26,60 @@ func NewPostgresMetricsSink(db *pgxpool.Pool) *PostgresMetricsSink {
 	return &PostgresMetricsSink{db: db}
 }
 
+// tsSkewWindow (L5) bounds how far an agent-reported timestamp_ms may stray
+// from the server clock before it is clamped to ingest time. A skewed agent
+// clock (or a spoofed token) must not write rows days/months away — that
+// wrecks the rolling-baseline windows. The clamped value is used for BOTH
+// timestamp_ms and ts so the row's PK and its hypertable partition line up.
+const tsSkewWindow = 24 * time.Hour
+
 func (s *PostgresMetricsSink) Write(deviceID string, batch *agentv1.MetricBatch) error {
-	if len(batch.GetSamples()) == 0 {
+	n := len(batch.GetSamples())
+	if n == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
+	// M9: one INSERT per batch (array-unnest), not one round-trip per
+	// sample — a busy device used to be n round-trips every push.
+	names := make([]string, 0, n)
+	sources := make([]string, 0, n)
+	values := make([]float64, 0, n)
+	labels := make([]string, 0, n)
+	tss := make([]int64, 0, n)
+	now := time.Now()
 	for _, m := range batch.GetSamples() {
-		// ts is derived from timestamp_ms so it always matches the row's
-		// PK. DO NOTHING makes replay idempotent (a re-sent sample with the
-		// same (device, name, source, timestamp_ms) is a no-op — IDEA.md §1).
-		_, err = tx.Exec(ctx, `
-			INSERT INTO metrics (device_id, name, source, value, labels, timestamp_ms, ts)
-			VALUES ($1, $2, $3, $4, $5, $6::bigint, to_timestamp(($6::bigint) / 1000.0))
-			ON CONFLICT DO NOTHING`,
-			deviceID, m.GetName(), m.GetSource(), m.GetValue(),
-			labelsJSON(m.GetLabels()), m.GetTimestampMs())
-		if err != nil {
-			return fmt.Errorf("insert metric %s: %w", m.GetName(), err)
+		ts := m.GetTimestampMs()
+		// L5: clamp a wildly skewed agent clock to ingest time.
+		if tsMs := ts; tsMs < now.Add(-tsSkewWindow).UnixMilli() || tsMs > now.Add(tsSkewWindow).UnixMilli() {
+			ts = now.UnixMilli()
 		}
+		names = append(names, m.GetName())
+		sources = append(sources, m.GetSource())
+		values = append(values, m.GetValue())
+		labels = append(labels, labelsJSON(m.GetLabels()))
+		tss = append(tss, ts)
 	}
-	return tx.Commit(ctx)
+
+	// ts is derived from timestamp_ms so it always matches the row's PK.
+	// DO NOTHING makes replay idempotent (a re-sent sample with the same
+	// (device, name, source, timestamp_ms) is a no-op — IDEA.md §1).
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO metrics (device_id, name, source, value, labels, timestamp_ms, ts)
+		SELECT $1,
+		       unnest($2::text[]),
+		       unnest($3::text[]),
+		       unnest($4::double precision[]),
+		       unnest($5::text[])::jsonb,
+		       unnest($6::bigint[]),
+		       to_timestamp(unnest($6::bigint[]) / 1000.0)
+		ON CONFLICT DO NOTHING`,
+		deviceID, names, sources, values, labels, tss)
+	if err != nil {
+		return fmt.Errorf("insert %d metrics for %s: %w", n, deviceID, err)
+	}
+	return nil
 }
 
 func labelsJSON(m map[string]string) string {
@@ -128,6 +154,31 @@ func (d *PostgresDevices) Get(ctx context.Context, id string) (*Device, error) {
 func (d *PostgresDevices) Touch(ctx context.Context, id string) error {
 	_, err := d.db.Exec(ctx, `UPDATE devices SET online=true, last_seen=now() WHERE id=$1`, id)
 	return err
+}
+
+// SweepOffline (M4) flips every online device whose last_seen has gone stale
+// (older than 3× its heartbeat interval, minimum 90s) to offline, returning
+// the ids it flipped so the caller can re-sync their search documents.
+func (d *PostgresDevices) SweepOffline(ctx context.Context) ([]string, error) {
+	rows, err := d.db.Query(ctx, `
+		UPDATE devices
+		SET online = false
+		WHERE online
+		  AND last_seen < now() - make_interval(secs => GREATEST(heartbeat_interval_s * 3, 90))
+		RETURNING id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // List returns all devices (W2-1 device list / W1-7 indexing source).

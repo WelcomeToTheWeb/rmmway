@@ -20,3 +20,10 @@ func setupProcessGroup(cmd *exec.Cmd) {
 func killProcessGroup(p *os.Process) {
 	_ = syscall.Kill(-p.Pid, syscall.SIGKILL)
 }
+
+// joinProcessGroup: unix needs nothing after Start — Setpgid (set in
+// setupProcessGroup) already puts the interpreter in its own group.
+func joinProcessGroup(cmd *exec.Cmd) error { return nil }
+
+// cleanupProcessGroup: unix has no job handles to close.
+func cleanupProcessGroup(p *os.Process) {}

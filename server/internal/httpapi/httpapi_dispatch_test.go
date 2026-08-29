@@ -173,17 +173,26 @@ func TestDeviceCommandsEndpoint(t *testing.T) {
 	if code := doAuthed(t, s, http.MethodGet, "/api/devices/dev-abc/commands", ""); code != http.StatusUnauthorized {
 		t.Fatalf("no token: got %d, want 401", code)
 	}
-	// /admin is open: 200 with the wired state.
-	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/commands", ""); code != http.StatusOK {
+	// C1: /admin is operator-gated too.
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/commands", ""); code != http.StatusUnauthorized {
+		t.Fatalf("admin commands, no token: got %d, want 401", code)
+	}
+	// Authed /admin: 200 with the wired state.
+	_, body := login(t, s, "admin", "s3cret")
+	tok, _ := body["token"].(string)
+	if tok == "" {
+		t.Fatal("no token from login")
+	}
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/commands", tok); code != http.StatusOK {
 		t.Fatalf("admin commands: got %d, want 200", code)
 	}
 	// Unknown device -> 404.
-	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-nope/commands", ""); code != http.StatusNotFound {
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-nope/commands", tok); code != http.StatusNotFound {
 		t.Fatalf("unknown device: got %d, want 404", code)
 	}
 	// Not wired -> 503.
 	s2 := New(Config{Devices: devs, JWTSecret: []byte("test-secret"), AdminUser: "admin", AdminPassword: "s3cret"})
-	if code := doAuthed(t, s2, http.MethodGet, "/admin/devices/dev-abc/commands", ""); code != http.StatusServiceUnavailable {
+	if code := doAuthed(t, s2, http.MethodGet, "/admin/devices/dev-abc/commands", tok); code != http.StatusServiceUnavailable {
 		t.Fatalf("nil commandState: got %d, want 503", code)
 	}
 }

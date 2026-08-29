@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -265,6 +266,48 @@ func (n busHealNotifier) Escalate(run *heal.Run, reason string) {
 	})
 }
 
+// retryMeiliSync (M7) retries the boot FullSync every 30s until Meilisearch
+// answers, so a Meili that starts after the server recovers device search
+// without a restart (pre-M7 a failed boot FullSync disabled search for the
+// whole process lifetime).
+func retryMeiliSync(m *store.Meili, devices store.DeviceStore) {
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	for range tick.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := m.FullSync(ctx, devices)
+		cancel()
+		if err == nil {
+			log.Println("meilisearch: full sync ok (background recovery)")
+			return
+		}
+		log.Printf("meilisearch FullSync retry: %v", err)
+	}
+}
+
+// healthCache (L7) caches /healthz probe results for a few seconds — each
+// pass opens a FRESH connection to every backend, so an unthrottled health
+// endpoint is a connection storm under load balancer probes.
+var healthCache = struct {
+	sync.Mutex
+	at     time.Time
+	probes []probe
+}{}
+
+const healthCacheTTL = 5 * time.Second
+
+func runProbesCached(ctx context.Context) []probe {
+	healthCache.Lock()
+	defer healthCache.Unlock()
+	if time.Since(healthCache.at) < healthCacheTTL {
+		return healthCache.probes
+	}
+	p := runProbes(ctx)
+	healthCache.at = time.Now()
+	healthCache.probes = p
+	return p
+}
+
 type probe struct {
 	Service string `json:"service"`
 	OK      bool   `json:"ok"`
@@ -420,6 +463,45 @@ func main() {
 	adminUser := env("RMMWAY_ADMIN_USER", "admin")
 	adminPassword := env("RMMWAY_ADMIN_PASSWORD", "admin")
 
+	// C2: the built-in insecure defaults (dev JWT secret, admin/admin, dev
+	// Meili master key) must not run silently in production — an operator
+	// JWT is full /api/* access and a forged agent JWT (any device id is
+	// guessable) is stream access. RMMWAY_ENV=dev (the default) warns;
+	// anything else refuses to boot while a default is in use.
+	rmmwayEnv := strings.ToLower(strings.TrimSpace(os.Getenv("RMMWAY_ENV")))
+	if rmmwayEnv == "" {
+		rmmwayEnv = "dev"
+	}
+	var insecureDefaults []string
+	if os.Getenv("RMMWAY_JWT_SECRET") == "" {
+		insecureDefaults = append(insecureDefaults,
+			"RMMWAY_JWT_SECRET is unset — using the built-in dev secret (anyone who reads the source can forge agent AND operator JWTs)")
+	}
+	if os.Getenv("RMMWAY_ADMIN_USER") == "" && os.Getenv("RMMWAY_ADMIN_PASSWORD") == "" {
+		insecureDefaults = append(insecureDefaults,
+			"operator login is the built-in admin/admin (set RMMWAY_ADMIN_USER/RMMWAY_ADMIN_PASSWORD)")
+	}
+	if os.Getenv("RMMWAY_MEILI_MASTER_KEY") == "" {
+		insecureDefaults = append(insecureDefaults,
+			"Meilisearch master key is unset — using the built-in dev key (set RMMWAY_MEILI_MASTER_KEY)")
+	}
+	switch {
+	case rmmwayEnv != "dev" && len(insecureDefaults) > 0:
+		var b strings.Builder
+		fmt.Fprintf(&b, "refusing to boot (RMMWAY_ENV=%s) with insecure built-in defaults:\n", rmmwayEnv)
+		for _, s := range insecureDefaults {
+			fmt.Fprintf(&b, "  - %s\n", s)
+		}
+		b.WriteString("set the variables above, or RMMWAY_ENV=dev to allow the dev defaults\n")
+		log.Fatal(b.String())
+	case rmmwayEnv != "dev":
+		log.Printf("RMMWAY_ENV=%s: no built-in dev defaults in use", rmmwayEnv)
+	default:
+		for _, s := range insecureDefaults {
+			log.Printf("WARN: RMMWAY_ENV=dev — %s", s)
+		}
+	}
+
 	// ---- data layer (W1-6) ---------------------------------------------
 	dsn := env("RMMWAY_PG_DSN", "postgres://rmmway:rmmway@localhost:5432/rmmway?sslmode=disable")
 	pgPool, err := pgxpool.New(context.Background(), dsn)
@@ -430,12 +512,21 @@ func main() {
 	var metricsSink store.MetricsSink
 	hasPG := false
 	migrationsDir := env("RMMWAY_MIGRATIONS_DIR", "migrations")
-	ctxBg, cancelBg := context.WithTimeout(context.Background(), 5*time.Second)
+	// L6: first-boot migrations (CREATE EXTENSION timescaledb, hypertables)
+	// can take longer than a few seconds on cold storage — 60s budget.
+	ctxBg, cancelBg := context.WithTimeout(context.Background(), 60*time.Second)
 	if n, err := store.Migrate(ctxBg, pgPool, migrationsDir); err != nil {
 		if *migrateOnly {
 			log.Fatalf("migrations failed: %v", err)
 		}
-		log.Printf("WARN: migrations failed (%v) — running with in-memory stores (Postgres down?)", err)
+		// H6: silently falling back to in-memory stores after a PG failure
+		// turns a transient blip into a full data loss (every enrollment +
+		// metric vanishes at the next restart) — refuse to boot unless the
+		// operator opts into data-loss mode.
+		if os.Getenv("RMMWAY_ALLOW_MEMORY_FALLBACK") != "1" {
+			log.Fatalf("migrations failed (%v) — refusing to boot on in-memory stores (data-loss mode); set RMMWAY_ALLOW_MEMORY_FALLBACK=1 to allow", err)
+		}
+		log.Printf("WARN: migrations failed (%v) — running with in-memory stores (RMMWAY_ALLOW_MEMORY_FALLBACK=1; data will NOT survive a restart)", err)
 		devicesStore = store.NewMemoryDeviceStore()
 		metricsSink = store.NewMemoryMetricsSink(100000)
 	} else {
@@ -569,18 +660,46 @@ func main() {
 	meiliEndpoint := env("RMMWAY_MEILI_ENDPOINT", "http://localhost:7700")
 	if meiliEndpoint != "" && meiliEndpoint != "off" {
 		m := store.NewMeili(meiliEndpoint, env("RMMWAY_MEILI_MASTER_KEY", "rmmway-dev-master-key"))
+		// M7: construct the indexer even when the boot FullSync fails —
+		// Meilisearch coming up a few seconds AFTER the server used to
+		// disable device search for the whole process lifetime (no retry,
+		// /admin/search 503, no index updates). A background retry recovers
+		// without a restart; each FullSync re-heals drift as well.
+		indexer = store.NewIndexerHook(m, devicesStore)
+		mSearch = m
 		fctx, fcancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := m.FullSync(fctx, devicesStore); err != nil {
-			log.Printf("WARN: meilisearch FullSync failed (%v) — device search disabled until next boot", err)
+		syncErr := m.FullSync(fctx, devicesStore)
+		fcancel()
+		if syncErr != nil {
+			log.Printf("WARN: meilisearch FullSync failed (%v) — retrying in the background", syncErr)
+			go retryMeiliSync(m, devicesStore)
 		} else {
-			indexer = store.NewIndexerHook(m, devicesStore)
-			mSearch = m
 			log.Printf("meilisearch: full sync ok (endpoint=%s)", meiliEndpoint)
 		}
-		fcancel()
 	} else {
 		log.Println("meilisearch: disabled (RMMWAY_MEILI_ENDPOINT empty/off)")
 	}
+
+	// ---- offline sweeper (M4) ---------------------------------------------
+	// A device that stops heartbeating must stop showing as online: flip
+	// online->false once last_seen goes stale (3× its heartbeat interval,
+	// minimum 90s) and re-sync its search document.
+	go func() {
+		tick := time.NewTicker(30 * time.Second)
+		for range tick.C {
+			sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			flipped, err := devicesStore.SweepOffline(sctx)
+			cancel()
+			if err != nil {
+				log.Printf("offline sweep: %v", err)
+				continue
+			}
+			for _, id := range flipped {
+				log.Printf("device %s marked offline (stale last_seen)", id)
+				indexer.Touch(id)
+			}
+		}
+	}()
 
 	// ---- event bus (W5-2) -------------------------------------------------
 	// The NATS/JetStream stream that carries every flow hop. Flows are
@@ -780,7 +899,9 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		probes := runProbes(r.Context())
+		// L7: cached probe results (a full pass opens fresh connections to
+		// every backend on each call).
+		probes := runProbesCached(r.Context())
 		ok := true
 		for _, p := range probes {
 			if !p.OK {

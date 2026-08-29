@@ -119,7 +119,8 @@ CFG="${CONFIG_DIR}/agent.env"
 {
   printf 'RMMWAY_SERVER=%s\n'      "${SERVER:-https://rmm.local}"
   printf 'RMMWAY_BOOTSTRAP_TOKEN=%s\n' "${BOOTSTRAP:-}"
-  printf 'RMMWAY_DEVICE_ID=%s\n'    "$(hostname)"
+  # NB: the device id is minted at enroll — the agent does not read an
+  # RMMWAY_DEVICE_ID key, so writing one here only invites drift.
   # Optional explicit gRPC endpoint. When set, the agent connects here
   # directly instead of deriving host:port from RMMWAY_SERVER (needed for
   # split-port deployments where HTTP and gRPC listen on different ports).
@@ -146,6 +147,23 @@ log "config -> ${CFG} (0600)"
 
 # --- install the service ----------------------------------------------------
 run_cmd="${BIN} run --config ${CFG}"
+
+# launchd (unlike systemd) has no EnvironmentFile: the env must be inlined
+# into the plist as an EnvironmentVariables dict. Escape XML special chars
+# so a token/value containing & < > " ' can't break the plist.
+xml_escape() {
+  local s="$1" q="'"
+  # NB: the REPLACEMENT side of ${var//pat/repl} is also word-split when
+  # unquoted — a bare & would be eaten by job control. Quote every pattern
+  # and replacement; the quote character can only reach the pattern via a
+  # variable (you can't type a literal ' inside a quoted expansion).
+  s="${s//&/'&amp;'}"
+  s="${s//</'&lt;'}"
+  s="${s//>/'&gt;'}"
+  s="${s//\"/'&quot;'}"
+  s="${s//"$q"/'&apos;'}"
+  printf '%s' "$s"
+}
 
 if [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
   UNIT="/etc/systemd/system/rmmway-agent.service"
@@ -178,14 +196,31 @@ EOF
 elif [ "$OS" = "darwin" ] && [ -d /Library/LaunchDaemons ]; then
   PLIST="/Library/LaunchDaemons/io.rmmway.agent.plist"
   log "installing launchd plist -> ${PLIST}"
+  # ProgramArguments must be SEPARATE <string> elements — launchd execs the
+  # first element and passes the rest as argv (a single joined string would
+  # make launchd try to exec a file named "$BIN run --config ...").
+  env_xml=""
+  while IFS= read -r _line; do
+    case "$_line" in ''|\#*) continue ;; esac
+    _k="${_line%%=*}"; _v="${_line#*=}"
+    [ -n "$_k" ] || continue
+    env_xml="${env_xml}    <key>$(xml_escape "$_k")</key><string>$(xml_escape "$_v")</string>"$'\n'
+  done < "$CFG"
   cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>io.rmmway.agent</string>
   <key>ProgramArguments</key>
-  <array><string>${run_cmd}</string></array>
-  <key>EnvironmentFile</key><string>${CFG}</string>
+  <array>
+    <string>${BIN}</string>
+    <string>run</string>
+    <string>--config</string>
+    <string>${CFG}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+$(printf '%s' "$env_xml")  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
 </dict></plist>

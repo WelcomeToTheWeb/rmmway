@@ -146,12 +146,20 @@ func defaultRunScript(ctx context.Context, lang string, script []byte, args []st
 	if err := cmd.Start(); err != nil {
 		return 0, nil, nil, fmt.Errorf("start %s: %w", interp, err)
 	}
+	// Windows: attach the interpreter to a Job Object right after Start
+	// (unix: no-op). Without it, a script's children survive the
+	// interpreter's Kill and hold the output pipes open, so Wait blocks
+	// until they exit on their own. Best-effort: an interpreter already
+	// in another job can't be re-attached; the script still runs, and
+	// the timeout just kills the interpreter (pre-fix behavior).
+	_ = joinProcessGroup(cmd)
 	waitErr := make(chan error, 1)
 	go func() { waitErr <- cmd.Wait() }()
 
 	var ee *exec.ExitError
 	select {
 	case err := <-waitErr:
+		cleanupProcessGroup(cmd.Process)
 		switch {
 		case errors.As(err, &ee):
 			// A clean non-zero exit is a FAILED result, not an error:
@@ -163,13 +171,14 @@ func defaultRunScript(ctx context.Context, lang string, script []byte, args []st
 			return 0, out.Bytes(), errBuf.Bytes(), nil
 		}
 	case <-ctx.Done():
-		// Hard timeout: kill the process group (unix) / the interpreter
-		// (windows), then reap. The deadline surfaces as
+		// Hard timeout: kill the process group (unix) / the whole process
+		// tree via its job (windows), then reap. The deadline surfaces as
 		// context.DeadlineExceeded (mapped to TIMED_OUT by the caller).
 		if cmd.Process != nil {
 			killProcessGroup(cmd.Process)
 		}
 		<-waitErr
+		cleanupProcessGroup(cmd.Process)
 		return 0, out.Bytes(), errBuf.Bytes(), ctx.Err()
 	}
 }

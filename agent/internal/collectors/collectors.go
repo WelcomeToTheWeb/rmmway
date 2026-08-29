@@ -4,8 +4,9 @@
 //	Family                     source
 //	cpu.utilization_percent    ""  (host-wide, 0–100)
 //	memory.used_percent        ""  (0–100, excluding cached/buffered)
-//	disk.used_percent          <device> (per mounted volume, 0–100)
-//	net.bytes_total            <iface> (total rx+tx bytes since boot)
+//	disk.used_percent          <device>@<mountpoint> (per mounted volume, 0–100)
+//	net.bytes_total            <iface> (total rx+tx bytes since boot, per
+//	                           interface — loopback excluded)
 //	system.uptime_seconds      ""
 //
 // Implementation: gopsutil/v4 (pure-Go on Linux — reads /proc directly, so
@@ -16,6 +17,7 @@ package collectors
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -86,7 +88,10 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 		add("memory.used_percent", "", vm.UsedPercent)
 	}
 
-	// 3. Disk — per mounted volume, keyed by the device name.
+	// 3. Disk — per mounted volume. L9: source is device@mountpoint — the
+	// same block device mounted at several mountpoints (bind mounts, btrfs
+	// subvolumes) otherwise collides on (name, source, timestamp_ms) and
+	// the server's ON CONFLICT DO NOTHING keeps only the first silently.
 	parts, err := disk.PartitionsWithContext(ctx, false)
 	if err != nil {
 		errs = append(errs, "disk.partitions: "+err.Error())
@@ -96,16 +101,19 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 		if err != nil || usage == nil {
 			continue // permission-denied on odd mounts is expected noise
 		}
-		add("disk.used_percent", p.Device, usage.UsedPercent)
+		add("disk.used_percent", p.Device+"@"+p.Mountpoint, usage.UsedPercent)
 	}
 
-	// 4. Network — total bytes (rx+tx) per non-loopback interface.
-	counters, err := net.IOCountersWithContext(ctx, false)
+	// 4. Network — total bytes (rx+tx) per non-loopback interface. M1:
+	// pernic=true — the pernic=false aggregate is a single pseudo-interface
+	// named "all" (verified on Linux), which collapsed every real interface
+	// and made the loopback skip dead code.
+	counters, err := net.IOCountersWithContext(ctx, true)
 	if err != nil {
 		errs = append(errs, "net: "+err.Error())
 	}
 	for _, nc := range counters {
-		if nc.Name == "lo" {
+		if isLoopback(nc.Name) {
 			continue
 		}
 		add("net.bytes_total", nc.Name, float64(nc.BytesSent+nc.BytesRecv))
@@ -123,6 +131,17 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 		return batch, &partialError{errs: errs}
 	}
 	return batch, nil
+}
+
+// isLoopback reports whether a NIC name is the host's loopback interface:
+// "lo" (Linux) / "lo0" (macOS, BSD) by exact name, the Windows
+// "Loopback Pseudo-Interface 1" adapter by substring (its display name
+// varies across Windows versions).
+func isLoopback(name string) bool {
+	if name == "lo" || name == "lo0" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(name), "loopback")
 }
 
 // partialError reports per-family failures; the batch still carries the

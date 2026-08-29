@@ -80,7 +80,7 @@ Log "verified: $verOut"
 Copy-Item $tmp $bin -Force
 Remove-Item $tmp
 Log "installed -> $bin"
-if (-not $isAdmin -and -not (Test-Path "env:PATH") -and ($env:PATH -notmatch [regex]::Escape($installDir))) {
+if (-not $isAdmin -and ($env:PATH -notmatch [regex]::Escape($installDir))) {
     $env:PATH = "$installDir;$env:PATH"
     [Environment]::SetEnvironmentVariable("PATH", "$installDir;$env:PATH", "User")
     Log "added $installDir to the user PATH"
@@ -88,10 +88,11 @@ if (-not $isAdmin -and -not (Test-Path "env:PATH") -and ($env:PATH -notmatch [re
 
 # --- write config (restricted ACL) ------------------------------------------
 $cfg  = Join-Path $installDir "agent.env"
+# NB: the device id is minted at enroll - the agent does not read an
+# RMMWAY_DEVICE_ID key, so writing one here only invites drift.
 $lines = @(
     "RMMWAY_SERVER={0}"          -f $(if ($Server) { $Server } else { "https://rmm.local" })
     "RMMWAY_BOOTSTRAP_TOKEN={0}" -f $Bootstrap
-    "RMMWAY_DEVICE_ID={0}"       -f $env:COMPUTERNAME
 )
 Set-Content -Path $cfg -Value $lines -Encoding ascii
 # Restrict the config to the current user + Administrators (the token lives here).
@@ -121,13 +122,23 @@ try {
 # The agent is a real Windows service (it reports the SCM handshake on start),
 # so Start-Service succeeds even before the agent has enrolled/connected.
 $svc = "RmmWayAgent"
-$exe = "`"$bin`" run --config `"$cfg`""
+# sc.exe parses the binPath value itself: quote the two paths, leave the
+# arguments unquoted -> "`"$bin`" run --config `"$cfg`"". The command is then
+# passed as an ARRAY below: each element becomes a separate argv entry
+# (a single joined string would fail with an invalid parameter).
+$binPath = "`"$bin`" run --config `"$cfg`""
 if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
-    Log "service $svc already exists - restarting"
+    # Re-run with a new binary/config path: update binPath, not just restart,
+    # or the change never takes effect.
+    & sc.exe config $svc binPath= $binPath | Out-Null
+    if ($LASTEXITCODE -ne 0) { Log "WARNING: sc.exe config failed: binPath unchanged" }
+    Log "service $svc already exists - updating binPath + restarting"
     try { Restart-Service $svc -ErrorAction Stop } catch { Log "WARNING: restart failed: $($_.Exception.Message)" }
 } else {
-    $scArgs = "create $svc binPath= $exe start= auto"
-    & sc.exe $scArgs | Out-Null
+    # & with an array splats each element as its own argument; passing the
+    # whole command as one string makes sc.exe fail with an invalid parameter.
+    $scArgs = @("create", $svc, "binPath=", $binPath, "start=", "auto")
+    & sc.exe @scArgs | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Die "sc.exe create failed (re-run as Administrator)"
     }

@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -61,13 +62,21 @@ func (c *Config) withDefaults() {
 
 // Uplink owns one authenticated Stream for a device.
 type Uplink struct {
-	client    Streamer
-	devID     string
-	jwt       string
-	cfg       Config
-	collect   func(ctx context.Context) (*agentv1.MetricBatch, error) // W1-2 collector
-	commander *Commander                                              // W3-3 (nil = legacy log-only)
+	client  Streamer
+	devID   string
+	jwtMu   sync.RWMutex // H3: guards jwt (it rotates in place via ack renewals)
+	jwt     string
+	jwtHook func(string) // H3: fired once per renewal (persist + share)
+	cfg     Config
+	collect func(ctx context.Context) (*agentv1.MetricBatch, error) // W1-2 collector
+	commander *Commander                                            // W3-3 (nil = legacy log-only)
 	rng       *rand.Rand
+
+	// acked (M3) is set once the current session has received a heartbeat
+	// ack — i.e. it was actually healthy. Run() uses it to reset the
+	// reconnect backoff instead of compounding it after a healthy session
+	// that merely got disconnected.
+	acked atomic.Bool
 
 	// cur is the live stream of the current session (nil between
 	// sessions). W6-1: PushLogs (the log shipper) sends LogBatch frames
@@ -115,6 +124,15 @@ func WithCommander(c *Commander) Option {
 // WithRand injects the jitter RNG (tests).
 func WithRand(r *rand.Rand) Option { return func(u *Uplink) { u.rng = r } }
 
+// WithJWTChangeHook (H3) is fired once per JWT renewal — when the server
+// hands back a fresh agent token in a HeartbeatAck. The caller typically
+// persists the new token (so the next boot reconnects with it) and shares
+// it with any other consumer of the current JWT (e.g. the mTLS unary
+// interceptor for RefreshLeaf).
+func WithJWTChangeHook(fn func(string)) Option {
+	return func(u *Uplink) { u.jwtHook = fn }
+}
+
 // New builds an Uplink for an already-enrolled device (devID + jwt come from
 // the enroll.Store identity).
 func New(client Streamer, devID, jwt string, cfg Config, opts ...Option) *Uplink {
@@ -135,6 +153,31 @@ func New(client Streamer, devID, jwt string, cfg Config, opts ...Option) *Uplink
 
 // DeviceID returns the uplink's device id.
 func (u *Uplink) DeviceID() string { return u.devID }
+
+// JWT returns the current agent token (H3: it rotates in place when the
+// server renews it via a HeartbeatAck).
+func (u *Uplink) JWT() string {
+	u.jwtMu.RLock()
+	defer u.jwtMu.RUnlock()
+	return u.jwt
+}
+
+// applyRenewedJWT (H3) adopts a fresh agent token from a HeartbeatAck. It
+// fires the change hook (persist + share) only when the token actually
+// changed. The current session keeps using the token it opened with — the
+// new one takes effect from the next reconnect.
+func (u *Uplink) applyRenewedJWT(tok string) {
+	if tok == "" {
+		return
+	}
+	u.jwtMu.Lock()
+	changed := tok != u.jwt
+	u.jwt = tok
+	u.jwtMu.Unlock()
+	if changed && u.jwtHook != nil {
+		u.jwtHook(tok)
+	}
+}
 
 // setCur publishes the live stream of the current session (nil on exit).
 func (u *Uplink) setCur(st agentv1.AgentService_StreamClient) {
@@ -178,6 +221,15 @@ func (u *Uplink) Run(ctx context.Context) error {
 			u.cfg.Logger.Warn("uplink stream ended; reconnecting",
 				"device", u.devID, "err", err, "backoff", backoff)
 		}
+		// M3: decide the reconnect wait from whether the session that JUST
+		// ended was healthy. A session that received at least one heartbeat
+		// ack was HEALTHY — its drop is a routine disconnect (network blip,
+		// server deploy), so start the backoff over instead of compounding
+		// it toward the 30s cap. A session that died before a single ack
+		// (Unauthenticated, connection refused) doubles.
+		if u.acked.Load() {
+			backoff = u.cfg.MinBackoff
+		}
 		// sleep with jitter, but stay responsive to ctx cancellation
 		jitter := time.Duration(u.rng.Int63n(int64(backoff/2) + 1))
 		wait := backoff + jitter
@@ -186,17 +238,22 @@ func (u *Uplink) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(wait):
 		}
-		// double backoff, capped
-		backoff *= 2
-		if backoff > u.cfg.MaxBackoff {
-			backoff = u.cfg.MaxBackoff
+		if !u.acked.Load() {
+			backoff *= 2
+			if backoff > u.cfg.MaxBackoff {
+				backoff = u.cfg.MaxBackoff
+			}
 		}
 	}
 }
 
 // streamSession opens one stream and runs the heartbeat loop until it drops.
 func (u *Uplink) streamSession(ctx context.Context) error {
-	md := metadata.Pairs("authorization", "Bearer "+u.jwt)
+	// M3: this session is not healthy until it has received an ack.
+	u.acked.Store(false)
+	// H3: authenticate with the CURRENT token (a prior session's renewal,
+	// if any, is already in place — the point of the rotation).
+	md := metadata.Pairs("authorization", "Bearer "+u.JWT())
 	ctx = metadata.NewOutgoingContext(ctx, md)
 	stream, err := u.client.Stream(ctx)
 	if err != nil {
@@ -230,6 +287,15 @@ func (u *Uplink) streamSession(ctx context.Context) error {
 					return
 				}
 			case *agentv1.StreamResponse_HeartbeatAck:
+				// M3: the server accepted a beat — this session is healthy.
+				u.acked.Store(true)
+				// H3: adopt a renewed agent JWT when the server hands one
+				// back (it renews once the stream's token is into its last
+				// quarter of life, so a live device never hits the 720h
+				// expiry wall). Takes effect from the next reconnect.
+				if j := p.HeartbeatAck.GetJwt(); j != "" {
+					u.applyRenewedJWT(j)
+				}
 				// cadence steering is a future hook; keep current for now.
 			}
 		}
@@ -272,8 +338,20 @@ func (u *Uplink) sendHeartbeat(ctx context.Context, stream agentv1.AgentService_
 	}
 	if u.collect != nil {
 		batch, err := u.collect(ctx)
-		if err == nil && batch != nil {
+		switch {
+		case batch != nil && len(batch.GetSamples()) > 0:
+			if err != nil {
+				// M2: a PARTIAL collection failure already returned the
+				// families that worked — send them. An RMM that goes blind
+				// on every family because one probe failed is worse than
+				// one that is blind on just one.
+				u.cfg.Logger.Warn("partial metric collection; sending what was collected", "err", err)
+			}
 			hb.Metrics = batch
+		case err != nil:
+			// Nothing collected — still send the bare heartbeat so the
+			// device stays "online" (presence outranks data).
+			u.cfg.Logger.Warn("metric collection failed; heartbeat without metrics", "err", err)
 		}
 	}
 	return stream.Send(&agentv1.StreamRequest{

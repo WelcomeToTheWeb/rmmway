@@ -22,13 +22,15 @@ func newTestServer(t *testing.T) (*Server, *store.MemoryDeviceStore) {
 		"dev-abc", "fileserver-01", "linux", "amd64", "0.1.0", []string{"10.0.0.9"}, 30, 30); err != nil {
 		t.Fatalf("register: %v", err)
 	}
+	rateLimit := false // L8 limiter tested separately (TestLoginRateLimit)
 	s := New(Config{
-		Devices:       devs,
-		JWTSecret:     []byte("test-secret"),
-		TokenLifetime: time.Hour,
-		AdminUser:     "admin",
-		AdminPassword: "s3cret",
-		MintBootstrap: func() (string, string) { return "bt-test", "dev-xyz" },
+		Devices:        devs,
+		JWTSecret:      []byte("test-secret"),
+		TokenLifetime:  time.Hour,
+		AdminUser:      "admin",
+		AdminPassword:  "s3cret",
+		MintBootstrap:  func() (string, string) { return "bt-test", "dev-xyz" },
+		LoginRateLimit: &rateLimit,
 	})
 	return s, devs
 }
@@ -175,22 +177,39 @@ func TestAgentTokenRejectedOnOperatorRoute(t *testing.T) {
 	}
 }
 
-// TestAdminDevicesOpen ensures the legacy /admin/devices stays open (no auth)
-// so the installer / e2e / README workflows keep working.
-func TestAdminDevicesOpen(t *testing.T) {
+// TestAdminDevicesAuthGate (C1) ensures /admin/* is operator-gated like
+// /api/* — the legacy "open admin surface" is gone.
+func TestAdminDevicesAuthGate(t *testing.T) {
 	s, _ := newTestServer(t)
-	code := doAuthed(t, s, http.MethodGet, "/admin/devices", "")
-	if code != http.StatusOK {
-		t.Fatalf("open admin devices: got %d, want 200", code)
+	// No token -> 401.
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices", ""); code != http.StatusUnauthorized {
+		t.Fatalf("admin devices, no token: got %d, want 401", code)
+	}
+	// Valid operator token -> 200 with the seeded device.
+	_, body := login(t, s, "admin", "s3cret")
+	tok, _ := body["token"].(string)
+	if tok == "" {
+		t.Fatal("no token from login")
+	}
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices", tok); code != http.StatusOK {
+		t.Fatalf("admin devices, authed: got %d, want 200", code)
 	}
 }
 
-// TestAdminBootstrapStillWorks ensures /admin/bootstrap still mints.
+// TestAdminBootstrapStillWorks (C1) ensures /admin/bootstrap still mints —
+// now behind the operator token, like every other /admin route.
 func TestAdminBootstrapStillWorks(t *testing.T) {
 	s, _ := newTestServer(t)
+	// No token -> 401.
+	if code := doAuthed(t, s, http.MethodPost, "/admin/bootstrap", ""); code != http.StatusUnauthorized {
+		t.Fatalf("bootstrap, no token: got %d, want 401", code)
+	}
+	_, body := login(t, s, "admin", "s3cret")
+	tok, _ := body["token"].(string)
 	mux := http.NewServeMux()
 	s.Register(mux)
 	req := httptest.NewRequest(http.MethodPost, "/admin/bootstrap", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -201,6 +220,54 @@ func TestAdminBootstrapStillWorks(t *testing.T) {
 	_ = json.NewDecoder(rec.Body).Decode(&out)
 	if out["bootstrap_token"] != "bt-test" || out["device_id"] != "dev-xyz" {
 		t.Fatalf("bootstrap output: %v", out)
+	}
+}
+
+// TestLoginRateLimit (L8) proves the per-IP failure budget: loginMaxFails
+// failures lock the IP out (429 + Retry-After, even for CORRECT credentials
+// while locked), and a different IP is unaffected.
+func TestLoginRateLimit(t *testing.T) {
+	devs := store.NewMemoryDeviceStore()
+	rateLimit := true
+	s := New(Config{
+		Devices:        devs,
+		JWTSecret:      []byte("test-secret"),
+		TokenLifetime:  time.Hour,
+		AdminUser:      "admin",
+		AdminPassword:  "s3cret",
+		LoginRateLimit: &rateLimit,
+	})
+
+	// Burn the failure budget from one IP.
+	doLogin := func(ip string, user, pass string) (int, http.Header) {
+		mux := http.NewServeMux()
+		s.Register(mux)
+		body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
+		req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if ip != "" {
+			req.Header.Set("X-Forwarded-For", ip)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code, rec.Header()
+	}
+	for i := 0; i < loginMaxFails; i++ {
+		if code, _ := doLogin("10.1.1.1", "admin", "wrong"); code != http.StatusUnauthorized {
+			t.Fatalf("fail #%d: got %d, want 401", i+1, code)
+		}
+	}
+	// Locked: even correct credentials are rejected with 429 + Retry-After.
+	code, hdr := doLogin("10.1.1.1", "admin", "s3cret")
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("locked login: got %d, want 429", code)
+	}
+	if ra := hdr.Get("Retry-After"); ra == "" {
+		t.Fatal("locked login: missing Retry-After header")
+	}
+	// A different IP is unaffected.
+	if code, _ := doLogin("10.1.1.2", "admin", "s3cret"); code != http.StatusOK {
+		t.Fatalf("other IP: got %d, want 200", code)
 	}
 }
 
@@ -227,10 +294,20 @@ func TestDeviceEventsEndpoint(t *testing.T) {
 	if code := doAuthed(t, s, http.MethodGet, "/api/devices/dev-abc/events", ""); code != http.StatusUnauthorized {
 		t.Fatalf("no token: got %d, want 401", code)
 	}
-	// /admin is open: 200 with newest-first events.
+	// C1: /admin is operator-gated too.
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/events", ""); code != http.StatusUnauthorized {
+		t.Fatalf("admin events, no token: got %d, want 401", code)
+	}
+	_, body := login(t, s, "admin", "s3cret")
+	tok, _ := body["token"].(string)
+	if tok == "" {
+		t.Fatal("no token from login")
+	}
+	// Authed /admin: 200 with newest-first events.
 	mux := http.NewServeMux()
 	s.Register(mux)
 	req := httptest.NewRequest(http.MethodGet, "/admin/devices/dev-abc/events", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -248,6 +325,7 @@ func TestDeviceEventsEndpoint(t *testing.T) {
 	}
 	// Level filter.
 	req = httptest.NewRequest(http.MethodGet, "/admin/devices/dev-abc/events?level=warn", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	out = struct {
@@ -261,19 +339,19 @@ func TestDeviceEventsEndpoint(t *testing.T) {
 		t.Fatalf("warn filter = %+v, want exactly e2", out.Events)
 	}
 	// Bad level -> 400; bad limit -> 400.
-	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/events?level=verbose", ""); code != http.StatusBadRequest {
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/events?level=verbose", tok); code != http.StatusBadRequest {
 		t.Fatalf("bad level: got %d, want 400", code)
 	}
-	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/events?limit=abc", ""); code != http.StatusBadRequest {
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-abc/events?limit=abc", tok); code != http.StatusBadRequest {
 		t.Fatalf("bad limit: got %d, want 400", code)
 	}
 	// Unknown device -> 404.
-	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-nope/events", ""); code != http.StatusNotFound {
+	if code := doAuthed(t, s, http.MethodGet, "/admin/devices/dev-nope/events", tok); code != http.StatusNotFound {
 		t.Fatalf("unknown device: got %d, want 404", code)
 	}
 	// Not wired -> 503.
 	s2 := New(Config{Devices: devs, JWTSecret: []byte("test-secret"), AdminUser: "admin", AdminPassword: "s3cret"})
-	if code := doAuthed(t, s2, http.MethodGet, "/admin/devices/dev-abc/events", ""); code != http.StatusServiceUnavailable {
+	if code := doAuthed(t, s2, http.MethodGet, "/admin/devices/dev-abc/events", tok); code != http.StatusServiceUnavailable {
 		t.Fatalf("nil logEvents: got %d, want 503", code)
 	}
 }

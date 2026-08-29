@@ -90,9 +90,26 @@ type Service struct {
 	// the mint endpoint; for W1-5, MintBootstrapToken is the API).
 	mu              sync.Mutex
 	bootstrapTokens map[string]string
+	// consumedTokens (H2): bootstrap tokens consumed within the last
+	// BootstrapGraceWindow, with the device they map to. Enroll consumes a
+	// token only AFTER the device row is persisted, and a short grace window
+	// lets a retry with the same token (agent identity persist failed, or the
+	// agent's HTTP->gRPC enroll fallback re-sending after a transient error)
+	// complete the SAME enroll instead of minting a second identity.
+	consumedTokens map[string]consumedToken
 	// streamW: live agent downlink writers, device_id -> writer.
 	streamW map[string]*streamWriter
 }
+
+// consumedToken records where a recently-spent bootstrap token pointed.
+type consumedToken struct {
+	devID string
+	at    time.Time
+}
+
+// BootstrapGraceWindow is how long a consumed bootstrap token keeps mapping
+// back to its device for retries (H2). Var so tests can shorten it.
+var BootstrapGraceWindow = 15 * time.Minute
 
 // streamWriter couples a device's response channel to its gRPC server stream
 // so command dispatch can push to a live agent. ctx/cancel let a NEWER stream
@@ -118,6 +135,7 @@ func NewService(cfg Config, metrics store.MetricsSink, devices store.DeviceStore
 		devices:         devices,
 		metrics:         metrics,
 		bootstrapTokens: make(map[string]string),
+		consumedTokens:  make(map[string]consumedToken),
 		streamW:         make(map[string]*streamWriter),
 	}
 	s.dispatch = NewDispatcher(s, cfg.Caps)
@@ -201,6 +219,20 @@ func (s *Service) verifyJWT(tok string) (string, error) {
 	return claims.DeviceID, nil
 }
 
+// jwtRemaining (H3) reports how much validity is left on an agent token
+// (0 when it can't be determined). Used by the heartbeat path to decide
+// whether the ack should carry a renewal.
+func (s *Service) jwtRemaining(tok string) time.Duration {
+	claims := &JWTClaims{}
+	_, err := jwt.ParseWithClaims(tok, claims, func(t *jwt.Token) (any, error) {
+		return s.cfg.JWTSecret, nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
+	if err != nil || claims.ExpiresAt == nil {
+		return 0
+	}
+	return time.Until(claims.ExpiresAt.Time)
+}
+
 // bearerFromMD extracts `Authorization: Bearer <tok>`.
 func bearerFromMD(ctx context.Context) (string, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -233,7 +265,12 @@ func (s *Service) JWTInterceptor(ctx context.Context, req any, info *grpc.UnaryS
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "invalid agent token: "+err.Error())
 	}
-	if ok, _ := s.devices.Contains(ctx, devID); !ok {
+	// L4: a store error is NOT "unknown device" — a PG blip must not read as
+	// "the token is valid but the device isn't enrolled" (a transient 401
+	// can wedge an agent's reconnect loop on a stale identity check).
+	if ok, err := s.devices.Contains(ctx, devID); err != nil {
+		return nil, status.Error(codes.Unavailable, "device lookup: "+err.Error())
+	} else if !ok {
 		return nil, status.Error(codes.Unauthenticated, "unknown device")
 	}
 	// Bind the authenticated device to the context for the handler.
@@ -318,6 +355,17 @@ func ParseOperatorJWT(secret []byte, tok string) (capList []string, ok bool) {
 
 // ---- AgentService implementation -------------------------------------------
 
+// pruneConsumedLocked drops grace-window entries that have lapsed (the
+// caller holds s.mu).
+func (s *Service) pruneConsumedLocked() {
+	now := time.Now()
+	for t, ct := range s.consumedTokens {
+		if now.Sub(ct.at) > BootstrapGraceWindow {
+			delete(s.consumedTokens, t)
+		}
+	}
+}
+
 // emitDevice fires the W6-2 inventory-event hook (no-op when unset).
 func (s *Service) emitDevice(action string, payload map[string]any) {
 	if s.cfg.OnDeviceEvent != nil {
@@ -326,22 +374,40 @@ func (s *Service) emitDevice(action string, payload map[string]any) {
 }
 
 // Enroll exchanges a one-time bootstrap token for the device's persistent
-// identity (device_id + agent JWT). Re-enroll is refused: a device that
-// already exists keeps its identity (restart must not re-enroll).
+// identity (device_id + agent JWT). A device that already exists keeps its
+// identity (restart must not re-enroll): the same bootstrap token maps back
+// to the same device during a short grace window (H2) so a retry after a
+// failed identity persist — or the agent's HTTP->gRPC fallback re-send —
+// completes the SAME enroll instead of minting a second identity. A token
+// whose grace window has lapsed is refused.
 func (s *Service) Enroll(ctx context.Context, req *agentv1.EnrollRequest) (*agentv1.EnrollResponse, error) {
 	if req.GetBootstrapToken() == "" {
 		return nil, status.Error(codes.InvalidArgument, "bootstrap_token is required")
 	}
+	btok := req.GetBootstrapToken()
 	s.mu.Lock()
-	devID, ok := s.bootstrapTokens[req.GetBootstrapToken()]
-	if ok {
-		delete(s.bootstrapTokens, req.GetBootstrapToken()) // one-time
+	var (
+		devID string
+		found bool
+	)
+	if id, fresh := s.bootstrapTokens[btok]; fresh {
+		// Claim it (so a concurrent enroll with the same code can't double
+		// issue) and record it as consumed — the enroll below must still
+		// persist the device, and the grace window keeps the mapping alive
+		// for a retry (H2: the token is not "lost" if Register fails).
+		delete(s.bootstrapTokens, btok)
+		s.consumedTokens[btok] = consumedToken{devID: id, at: time.Now()}
+		s.pruneConsumedLocked()
+		devID, found = id, true
+	} else if ct, ok := s.consumedTokens[btok]; ok {
+		if time.Since(ct.at) <= BootstrapGraceWindow {
+			devID, found = ct.devID, true
+		} else {
+			delete(s.consumedTokens, btok) // window lapsed: token is dead
+		}
 	}
 	s.mu.Unlock()
-	if !ok {
-		// If this token was already consumed, it maps to a known device:
-		// refuse silent re-enroll (a cloned agent with a stolen token
-		// should not mint a second identity).
+	if !found {
 		return nil, status.Error(codes.PermissionDenied, "unknown or already-used bootstrap token")
 	}
 
@@ -405,7 +471,10 @@ func (s *Service) RefreshLeaf(ctx context.Context, req *agentv1.RefreshLeafReque
 	if !ok || devID == "" {
 		return nil, status.Error(codes.Unauthenticated, "no device id in context")
 	}
-	if ok, _ := s.devices.Contains(ctx, devID); !ok {
+	// L4: a store error is NOT "unknown device" (see JWTInterceptor).
+	if ok, err := s.devices.Contains(ctx, devID); err != nil {
+		return nil, status.Error(codes.Unavailable, "device lookup: "+err.Error())
+	} else if !ok {
 		return nil, status.Error(codes.Unauthenticated, "unknown device")
 	}
 	leafCert, leafKey, expiresAt, err := s.cfg.OrgCA.RefreshLeaf(ctx, devID, req.GetHostname())
@@ -429,7 +498,10 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 	if err != nil {
 		return status.Error(codes.Unauthenticated, "invalid agent token: "+err.Error())
 	}
-	if ok, _ := s.devices.Contains(stream.Context(), devID); !ok {
+	// L4: a store error is NOT "unknown device" (see JWTInterceptor).
+	if ok, err := s.devices.Contains(stream.Context(), devID); err != nil {
+		return status.Error(codes.Unavailable, "device lookup: "+err.Error())
+	} else if !ok {
 		return status.Error(codes.Unauthenticated, "unknown device")
 	}
 
@@ -464,10 +536,23 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 			delete(s.streamW, devID)
 		}
 		s.mu.Unlock()
+		// M4: re-sync the search document on disconnect too (the online
+		// flag flips to false via the offline sweeper once last_seen goes
+		// stale; this Touch keeps index == DB at the lifecycle edge).
+		s.cfg.Indexer.Touch(devID)
 	}()
 
-	// Downlink pump: forward dispatched commands / heartbeats to the agent.
+	// Downlink pump: the ONLY caller of stream.Send (H1). Every downlink
+	// frame — dispatched commands AND heartbeat acks — funnels through ch, so
+	// sends are serialized. grpc-go's ServerStream.Send is NOT safe for
+	// concurrent use: the old code had the pump Send commands while the Recv
+	// loop Sent acks, and the first command dispatched mid-heartbeat could
+	// panic the whole server process (every device disconnects).
+	// pumpDone closes when the pump stops (send failed, or ch closed) so a
+	// blocked ack send unblocks instead of deadlocking on a dead consumer.
+	pumpDone := make(chan struct{})
 	go func() {
+		defer close(pumpDone)
 		for resp := range ch {
 			if err := stream.Send(resp); err != nil {
 				return
@@ -516,15 +601,33 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 					log.Printf("metrics write (heartbeat) %s: %v", devID, werr)
 				}
 			}
-			ack := &agentv1.StreamResponse{Payload: &agentv1.StreamResponse_HeartbeatAck{
-				HeartbeatAck: &agentv1.HeartbeatAck{
-					ServerTimeMs:       time.Now().UnixMilli(),
-					HeartbeatIntervalS: 0, // keep current
-					MetricIntervalS:    0,
-				},
-			}}
-			if err := stream.Send(ack); err != nil {
-				return err
+			ack := &agentv1.HeartbeatAck{
+				ServerTimeMs:       time.Now().UnixMilli(),
+				HeartbeatIntervalS: 0, // keep current
+				MetricIntervalS:    0,
+			}
+			// H3: the agent JWT has a finite lifetime (default 720h) and the
+			// agent never re-enrolls — so when the token this stream
+			// authenticated with is running out of life, hand back a fresh
+			// one (renew at the last quarter of the window). The agent
+			// persists it and uses it from the next reconnect onward, so a
+			// continuously heartbeating device never hits the day-31
+			// Unauthenticated wall.
+			if rem := s.jwtRemaining(tok); rem > 0 && rem < s.cfg.JWTLifetime/4 {
+				if newTok, err := s.mintJWT(devID); err == nil {
+					ack.Jwt = newTok
+				} else {
+					log.Printf("jwt renewal %s: %v", devID, err)
+				}
+			}
+			// H1: send via the pump (NOT a direct stream.Send) — the Recv
+			// loop must never race the command pump on stream.Send.
+			select {
+			case ch <- &agentv1.StreamResponse{Payload: &agentv1.StreamResponse_HeartbeatAck{HeartbeatAck: ack}}:
+			case <-pumpDone:
+				return status.Error(codes.Unavailable, "downlink pump stopped")
+			case <-ctx.Done():
+				return status.Error(codes.Aborted, "stream superseded by a newer connection")
 			}
 		case *agentv1.StreamRequest_Metrics:
 			if len(p.Metrics.GetSamples()) > 0 {

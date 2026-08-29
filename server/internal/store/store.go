@@ -53,6 +53,11 @@ type DeviceStore interface {
 	Touch(ctx context.Context, id string) error
 	// List returns all devices (admin / W2-1 / W1-7 indexing source).
 	List(ctx context.Context) ([]*Device, error)
+	// SweepOffline (M4) flips every online device whose last_seen has gone
+	// stale (older than 3× its heartbeat interval, minimum 90s) to offline,
+	// returning the ids it flipped. A device that stops heartbeating must
+	// stop showing as online — without this the online flag is sticky-forever.
+	SweepOffline(ctx context.Context) ([]string, error)
 }
 
 // Device is the registry row shape shared by all DeviceStore implementations.
@@ -199,16 +204,61 @@ func (r *MemoryDeviceStore) GetByID(id string) (*Device, bool) {
 	return &cp, true
 }
 
+// SweepOffline (M4) flips stale online devices offline (in-memory mirror of
+// the Postgres implementation).
+func (r *MemoryDeviceStore) SweepOffline(_ context.Context) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now().UTC()
+	var out []string
+	for _, d := range r.devices {
+		if !d.Online {
+			continue
+		}
+		secs := int64(d.HeartbeatIntS) * 3
+		if secs < 90 {
+			secs = 90
+		}
+		if now.Sub(d.LastSeen) > time.Duration(secs)*time.Second {
+			d.Online = false
+			out = append(out, d.ID)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // ---- migrations -------------------------------------------------------------
 
 // Migrate applies every migration in dir that hasn't been recorded in
 // schema_migrations, each in its own transaction.
+//
+// L6: two servers racing the same database (a restart during deploy, or a
+// second replica coming up) would otherwise both run the same migration and
+// one's INSERT into schema_migrations would fail. A session-scoped advisory
+// lock serializes the whole pass; the lock lives on a dedicated connection
+// held for the pass (a pool Exec could bounce between sessions, where
+// pg_advisory_lock is per-session).
 func Migrate(ctx context.Context, db *pgxpool.Pool, dir string) (applied int, err error) {
-	_, err = db.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	conn, err := db.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtext('rmmway_migrations'))`); err != nil {
+		return 0, fmt.Errorf("take migration lock: %w", err)
+	}
+	// Best-effort explicit unlock (the lock also drops when the connection
+	// returns to the pool / closes).
+	defer func() {
+		_, _ = conn.Exec(context.WithoutCancel(context.Background()),
+			`SELECT pg_advisory_unlock(hashtext('rmmway_migrations'))`)
+	}()
+
+	if _, err = conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		name text PRIMARY KEY,
 		applied_at timestamptz NOT NULL DEFAULT now()
-	)`)
-	if err != nil {
+	)`); err != nil {
 		return 0, fmt.Errorf("create schema_migrations: %w", err)
 	}
 
@@ -227,7 +277,7 @@ func Migrate(ctx context.Context, db *pgxpool.Pool, dir string) (applied int, er
 	for _, f := range files {
 		name := strings.TrimSuffix(f, ".sql")
 		var exists bool
-		if err := db.QueryRow(ctx,
+		if err := conn.QueryRow(ctx,
 			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name = $1)`, name).Scan(&exists); err != nil {
 			return applied, fmt.Errorf("check migration %s: %w", name, err)
 		}
@@ -238,7 +288,7 @@ func Migrate(ctx context.Context, db *pgxpool.Pool, dir string) (applied int, er
 		if err != nil {
 			return applied, fmt.Errorf("read %s: %w", f, err)
 		}
-		tx, err := db.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return applied, fmt.Errorf("begin %s: %w", name, err)
 		}

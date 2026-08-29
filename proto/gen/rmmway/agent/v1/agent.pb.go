@@ -645,8 +645,15 @@ type HeartbeatAck struct {
 	ServerTimeMs       int64                  `protobuf:"varint,1,opt,name=server_time_ms,json=serverTimeMs,proto3" json:"server_time_ms,omitempty"`                   // for clock skew correction
 	HeartbeatIntervalS int32                  `protobuf:"varint,2,opt,name=heartbeat_interval_s,json=heartbeatIntervalS,proto3" json:"heartbeat_interval_s,omitempty"` // 0 = keep current
 	MetricIntervalS    int32                  `protobuf:"varint,3,opt,name=metric_interval_s,json=metricIntervalS,proto3" json:"metric_interval_s,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// H3: a RENEWED agent JWT. The agent JWT has a finite lifetime (720h) and
+	// the agent never re-enrolls, so the server hands back a fresh token once
+	// the stream's token is into its last quarter of validity. The agent
+	// persists it and uses it from the next reconnect onward — a device that
+	// keeps heartbeating never hits the expiry wall. Empty = no renewal this
+	// beat (the current token still has plenty of life).
+	Jwt           string `protobuf:"bytes,4,opt,name=jwt,proto3" json:"jwt,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatAck) Reset() {
@@ -700,6 +707,13 @@ func (x *HeartbeatAck) GetMetricIntervalS() int32 {
 	return 0
 }
 
+func (x *HeartbeatAck) GetJwt() string {
+	if x != nil {
+		return x.Jwt
+	}
+	return ""
+}
+
 var File_rmmway_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
@@ -748,11 +762,12 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"cpuPercent\x12%\n" +
 	"\x0ememory_percent\x18\x03 \x01(\x01R\rmemoryPercent\x12\x14\n" +
 	"\x05state\x18\x04 \x01(\tR\x05state\x126\n" +
-	"\ametrics\x18\x05 \x01(\v2\x1c.rmmway.agent.v1.MetricBatchR\ametrics\"\x92\x01\n" +
+	"\ametrics\x18\x05 \x01(\v2\x1c.rmmway.agent.v1.MetricBatchR\ametrics\"\xa4\x01\n" +
 	"\fHeartbeatAck\x12$\n" +
 	"\x0eserver_time_ms\x18\x01 \x01(\x03R\fserverTimeMs\x120\n" +
 	"\x14heartbeat_interval_s\x18\x02 \x01(\x05R\x12heartbeatIntervalS\x12*\n" +
-	"\x11metric_interval_s\x18\x03 \x01(\x05R\x0fmetricIntervalS2\x82\x02\n" +
+	"\x11metric_interval_s\x18\x03 \x01(\x05R\x0fmetricIntervalS\x12\x10\n" +
+	"\x03jwt\x18\x04 \x01(\tR\x03jwt2\x82\x02\n" +
 	"\fAgentService\x12I\n" +
 	"\x06Enroll\x12\x1e.rmmway.agent.v1.EnrollRequest\x1a\x1f.rmmway.agent.v1.EnrollResponse\x12M\n" +
 	"\x06Stream\x12\x1e.rmmway.agent.v1.StreamRequest\x1a\x1f.rmmway.agent.v1.StreamResponse(\x010\x01\x12X\n" +

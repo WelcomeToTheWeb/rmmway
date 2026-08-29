@@ -1,6 +1,6 @@
 module github.com/welcometotheweb/rmmway/agent
 
-go 1.25.0
+go 1.26.0
 
 require github.com/welcometotheweb/rmmway/proto/gen v0.0.0
 

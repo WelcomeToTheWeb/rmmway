@@ -1,0 +1,11 @@
+# minisign signature files and the binary fixtures they sign are hashed
+# content: a CRLF checkout (Windows core.autocrlf=true) changes the bytes
+# and breaks verification in the update tests and for real release assets.
+*.minisig -text
+*.minisig eol=lf
+*.bin -text
+agent/internal/update/testdata/ -text
+# PS 5.1 misreads non-CRLF .ps1 files; shell scripts break under CRLF.
+# Normalize in-repo to the canonical eol so autocrlf checkouts diff clean.
+*.ps1 text eol=crlf
+*.sh -text eol=lf

@@ -11,8 +11,11 @@
 //     "stable device_id" model).
 //
 // The bootstrap token is a one-time code the operator embedded in the
-// one-line bootstrap installer (W1-3); after the first successful enroll it
-// is consumed and can be safely cleared from config.
+// one-line bootstrap installer (W1-3). After the first successful enroll it
+// is consumed: the agent strips it from its --config file itself (L3), and
+// the server's grace window (ingest.BootstrapGraceWindow) covers the window
+// between a successful enroll and a failed persist — replaying the same
+// token rebinds the same device instead of erroring (H2).
 package enroll
 
 import (

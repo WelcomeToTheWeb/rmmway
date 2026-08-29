@@ -151,4 +151,11 @@ message HeartbeatAck {
   int64 server_time_ms = 1;          // for clock skew correction
   int32 heartbeat_interval_s = 2;    // 0 = keep current
   int32 metric_interval_s = 3;
+  // H3: a RENEWED agent JWT. The agent JWT has a finite lifetime (720h) and
+  // the agent never re-enrolls, so the server hands back a fresh token once
+  // the stream's token is into its last quarter of validity. The agent
+  // persists it and uses it from the next reconnect onward — a device that
+  // keeps heartbeating never hits the expiry wall. Empty = no renewal this
+  // beat (the current token still has plenty of life).
+  string jwt = 4;
 }
