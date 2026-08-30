@@ -67,6 +67,12 @@ _Proof: `make setup-e2e` (real server vs scratch Timescale — fresh DB triggers
 **Description:** Wire the React/Tauri app to consume the Server-Sent Events (SSE) framework. Device status changes (online/offline) and new alerts should reflect in the DOM immediately without polling.
 **Definition of done:** A device going offline updates the UI badge instantly across all open operator sessions.
 
+_Progress (in flight):_
+- [x] Audit: W6-2 SSE framework (server) + `sse.js` + Devices/badge wiring already landed in 06a8f43 — verified end to end
+- [x] Gap closed: Alerts inbox now reacts to live alert events (App `alertTick` → `Alerts liveTick`), not just the nav badge
+- [x] DoD proof: `make sse-ui-smoke` — real `<App/>` in TWO operator sessions (jsdom): offline flip in 24 ms, alert badge+inbox in 28 ms, far inside the 5 s / 15 s polls
+- [ ] Final verification (build + existing smokes) + close-out (done date + commit)
+
 ### B-2 — Dynamic Device Grouping & Bulk Actions
 - **Status:** ⬜ pending
 - **Claimed by:** —
