@@ -4,17 +4,17 @@
 // It proves the WHOLE new flow on a real in-process server + the REAL agent
 // binary, self-contained (no backing services):
 //
-//  1. MINT — the operator "Add a device" action (POST /api/bootstrap) is
-//     auth-gated (401 without a token, 200 with one); the open
-//     /admin/bootstrap still works for machine callers.
+//  1. MINT — both mint routes are auth-gated (C1): /api/bootstrap and
+//     /admin/bootstrap return 401 without an operator token, 200 with one.
 //  2. ENROLL over the operator's HTTPS origin (POST /agent/enroll) — the
 //     architectural fix. A fresh agent has no mTLS material yet, so it proves
 //     the one-time bootstrap token HERE instead of over the internal-only
 //     plain gRPC bootstrap port. The minted identity (device_id + agent JWT)
 //     and the org-root mTLS leaf are verified (the leaf is genuinely signed by
 //     the returned org root).
-//  3. ONE-TIME — the same token cannot enroll twice (a cloned agent with a
-//     stolen token gets a 403, not a second identity).
+//  3. GRACE WINDOW — a replayed token is idempotent while it is still warm
+//     (ingest.BootstrapGraceWindow): the SAME device id comes back (no
+//     second identity minted); only a LAPSED replay gets a 403.
 //  4. REAL AGENT — the built agent binary runs with the PLAIN gRPC bootstrap
 //     port pointed at a DEAD address, so it is FORCED to enroll over the
 //     operator origin (HTTP). It then opens its mTLS uplink (port 50052 model)
@@ -286,22 +286,26 @@ func main() {
 	operator := login(s)
 	info("operator token minted (admin/e2e-pass)")
 
-	step("1. MINT — /api/bootstrap is auth-gated; /admin/bootstrap stays open")
-	// No token -> 401.
+	step("1. MINT — both mint routes are auth-gated (C1): 401 without a token, 200 with one")
+	// /api/bootstrap, no token -> 401.
 	code, _ := doJSON(http.MethodPost, s.httpAddr+"/api/bootstrap", map[string]any{}, "")
 	check(code == http.StatusUnauthorized, "/api/bootstrap no token = %d, want 401", code)
-	// Authed -> 200 with a token + pre-allocated device id.
+	// /api/bootstrap authed -> 200 with a token + pre-allocated device id.
 	code, out := doJSON(http.MethodPost, s.httpAddr+"/api/bootstrap", map[string]any{}, operator)
 	check(code == http.StatusOK, "/api/bootstrap authed = %d, want 200: %v", code, out)
 	token := mustStr(out, "bootstrap_token")
 	prealloc := mustStr(out, "device_id")
 	check(token != "" && prealloc != "", "mint missing fields: %v", out)
 	info("minted bootstrap token=%s (pre-alloc device %s)", short(token), prealloc)
-	// The open /admin/bootstrap still works (machine callers / e2e).
-	code, aout := doJSON(http.MethodPost, s.httpAddr+"/admin/bootstrap", map[string]any{}, "")
-	check(code == http.StatusOK, "/admin/bootstrap = %d, want 200", code)
+	// C1: /admin/bootstrap is now auth-gated too (it was open for machine
+	// callers) — no token -> 401.
+	code, _ = doJSON(http.MethodPost, s.httpAddr+"/admin/bootstrap", map[string]any{}, "")
+	check(code == http.StatusUnauthorized, "/admin/bootstrap no token = %d, want 401 (now auth-gated)", code)
+	// With the operator token it mints like /api/bootstrap.
+	code, aout := doJSON(http.MethodPost, s.httpAddr+"/admin/bootstrap", map[string]any{}, operator)
+	check(code == http.StatusOK, "/admin/bootstrap authed = %d, want 200: %v", code, aout)
 	check(mustStr(aout, "bootstrap_token") != "", "admin bootstrap missing token: %v", aout)
-	info("open /admin/bootstrap still mints (machine callers)")
+	info("/admin/bootstrap is auth-gated too: 401 bare, 200 with the operator token")
 
 	step("2. ENROLL over the operator origin (POST /agent/enroll)")
 	code, eout := doJSON(http.MethodPost, s.httpAddr+"/agent/enroll", map[string]any{
@@ -344,15 +348,32 @@ func main() {
 	check(found, "enrolled device %s not in the device list (%d devices)", devID, len(list))
 	info("device %s is present + online in the operator list", devID)
 
-	step("3. ONE-TIME — the same token cannot enroll twice")
+	step("3. GRACE WINDOW — a still-warm token replay is idempotent; a lapsed one is 403")
+	// Within the grace window (H2): a clone replaying a consumed-but-warm
+	// token gets the SAME identity back (200, same device id), not a new one.
 	code, r2 := doJSON(http.MethodPost, s.httpAddr+"/agent/enroll", map[string]any{
 		"bootstrap_token": token,
 		"hostname":        "clone-host",
 		"os":              "linux",
 		"arch":            "amd64",
 	}, "")
-	check(code == http.StatusForbidden, "re-enroll with same token = %d, want 403: %v", code, r2)
-	info("a cloned agent reusing the token is refused (403) — no second identity")
+	check(code == http.StatusOK, "warm re-enroll with same token = %d, want 200 (grace window): %v", code, r2)
+	check(mustStr(r2, "device_id") == devID, "warm replay minted a DIFFERENT identity: got %q, want %q", mustStr(r2, "device_id"), devID)
+	info("a clone replaying a still-warm token gets the SAME device id — idempotent, no second identity")
+	// Lapsed: shrink the grace window to nothing, let the recorded consume
+	// age past it, and the same replay is a 403 again.
+	oldWindow := ingest.BootstrapGraceWindow
+	ingest.BootstrapGraceWindow = time.Nanosecond
+	defer func() { ingest.BootstrapGraceWindow = oldWindow }()
+	time.Sleep(50 * time.Millisecond)
+	code, r3 := doJSON(http.MethodPost, s.httpAddr+"/agent/enroll", map[string]any{
+		"bootstrap_token": token,
+		"hostname":        "clone-host-2",
+		"os":              "linux",
+		"arch":            "amd64",
+	}, "")
+	check(code == http.StatusForbidden, "lapsed re-enroll with same token = %d, want 403: %v", code, r3)
+	info("the same replay AFTER the grace window lapses is refused (403) — no second identity")
 
 	step("4. REAL AGENT — forced to enroll over HTTP (plain gRPC pointed at a DEAD port)")
 	// Mint a fresh token for the real agent, then run the built binary with:
@@ -417,7 +438,8 @@ func main() {
 	fmt.Println(" ADD A DEVICE DoD MET:")
 	fmt.Println("   (1) the operator mints a token from the UI action (auth-gated)")
 	fmt.Println("   (2) a fresh agent enrolls over the operator's HTTPS origin")
-	fmt.Println("       (leaf signed by the pinned org root) — token is one-time")
+	fmt.Println("       (leaf signed by the pinned org root) — token replay is")
+	fmt.Println("       idempotent in its grace window, 403 once lapsed")
 	fmt.Println("   (3) the REAL agent, with the plain gRPC port DEAD, still")
 	fmt.Println("       enrolls (via HTTP) and comes online over the mTLS port")
 	fmt.Println("   => a remote machine needs only the operator origin + the")

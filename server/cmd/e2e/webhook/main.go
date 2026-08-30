@@ -356,6 +356,8 @@ func main() {
 	defer apiSrv2.Close()
 	apiBase := apiSrv2.URL
 	info("operator HTTP surface on %s (/admin/webhooks, /admin/events/stream)", apiBase)
+	// C1: the operator routes are JWT-gated — log in once for a token.
+	opTok := loginOp(ctx, apiBase)
 
 	// ---- the user-defined endpoint receivers -------------------------------
 	recvA := &recorder{}             // always 200; all categories
@@ -368,13 +370,13 @@ func main() {
 	const secretB = "shared-secret-B"
 
 	step("create user-defined endpoints (via the real HTTP surface)")
-	epA, err := createWebhook(ctx, apiBase, "alerts+inventory+automation", srvA.URL, secretA, []string{
+	epA, err := createWebhook(ctx, apiBase, opTok, "alerts+inventory+automation", srvA.URL, secretA, []string{
 		webhook.CategoryAlert, webhook.CategoryInventory, webhook.CategoryAutomation,
 	})
 	if err != nil {
 		die("create endpoint A: %v", err)
 	}
-	epB, err := createWebhook(ctx, apiBase, "retrying-alerts", srvB.URL, secretB, []string{webhook.CategoryAlert})
+	epB, err := createWebhook(ctx, apiBase, opTok, "retrying-alerts", srvB.URL, secretB, []string{webhook.CategoryAlert})
 	if err != nil {
 		die("create endpoint B: %v", err)
 	}
@@ -495,7 +497,7 @@ func main() {
 	firstID := firstEnv.ID
 	// Replay from before the first event -> the endpoint re-receives events.
 	body := map[string]int64{"from_seq": firstID - 1}
-	if _, err := postJSON(ctx, apiBase, fmt.Sprintf("/admin/webhooks/%d/replay", epA.ID), body); err != nil {
+	if _, err := postJSON(ctx, apiBase, fmt.Sprintf("/admin/webhooks/%d/replay", epA.ID), body, opTok); err != nil {
 		die("replay: %v", err)
 	}
 	info("replay requested from seq %d", firstID-1)
@@ -513,7 +515,7 @@ func main() {
 
 	// ---- assert 4: SSE live stream -----------------------------------------
 	step("assert: SSE event stream (GET /events/stream)")
-	frames, err := readSSE(ctx, apiBase+"/admin/events/stream", 3)
+	frames, err := readSSE(ctx, apiBase+"/admin/events/stream", 3, opTok)
 	check(err == nil, "read SSE: %v", err)
 	check(len(frames) >= 1, "SSE stream delivered no frames")
 	var env envelope
@@ -567,11 +569,11 @@ type webhookOut struct {
 	Status     string   `json:"status"`
 }
 
-func createWebhook(ctx context.Context, apiBase, name, url, secret string, categories []string) (*webhookOut, error) {
+func createWebhook(ctx context.Context, apiBase, token, name, url, secret string, categories []string) (*webhookOut, error) {
 	in := map[string]any{
 		"name": name, "url": url, "secret": secret, "categories": categories,
 	}
-	b, err := postJSON(ctx, apiBase, "/admin/webhooks", in)
+	b, err := postJSON(ctx, apiBase, "/admin/webhooks", in, token)
 	if err != nil {
 		return nil, err
 	}
@@ -582,13 +584,35 @@ func createWebhook(ctx context.Context, apiBase, name, url, secret string, categ
 	return &out, nil
 }
 
-func postJSON(ctx context.Context, apiBase, path string, in any) ([]byte, error) {
+// loginOp hits the OPEN POST /api/login with the env admin and returns the
+// short-lived operator JWT the C1-gated /admin/* + /api/* routes require.
+func loginOp(ctx context.Context, apiBase string) string {
+	b, err := postJSON(ctx, apiBase, "/api/login",
+		map[string]string{"username": "admin", "password": "admin"}, "")
+	if err != nil {
+		die("operator login: %v", err)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil || out.Token == "" {
+		die("operator login: no token in response: %s", string(b))
+	}
+	return out.Token
+}
+
+// postJSON POSTs in as JSON; token (when non-empty) rides the C1 operator
+// JWT gate via Authorization: Bearer <token>.
+func postJSON(ctx context.Context, apiBase, path string, in any, token string) ([]byte, error) {
 	b, _ := json.Marshal(in)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+path, strings.NewReader(string(b)))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -602,11 +626,15 @@ func postJSON(ctx context.Context, apiBase, path string, in any) ([]byte, error)
 }
 
 // readSSE opens the event stream and returns up to n decoded data-payloads
-// (each an Envelope JSON), honoring Last-Event-ID-free catch-up.
-func readSSE(ctx context.Context, streamURL string, n int) ([]json.RawMessage, error) {
+// (each an Envelope JSON), honoring Last-Event-ID-free catch-up. token
+// (when non-empty) satisfies the C1 operator JWT gate.
+func readSSE(ctx context.Context, streamURL string, n int, token string) ([]json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamURL, nil)
 	if err != nil {
 		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

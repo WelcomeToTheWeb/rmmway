@@ -34,8 +34,16 @@ func die(f string, a ...any) {
 	os.Exit(1)
 }
 
-func postJSON(url string, payload []byte, out any) error {
-	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+func postJSON(url string, payload []byte, out any, token ...string) error {
+	req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if len(token) > 0 && token[0] != "" {
+		req.Header.Set("Authorization", "Bearer "+token[0])
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -62,15 +70,28 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// 1. mint a bootstrap token over HTTP.
+	// 1. operator login (admin/admin) -> the C1-gated /admin/* routes need
+	// the operator JWT before a bootstrap token can be minted.
+	var opLogin struct {
+		Token string `json:"token"`
+	}
+	if err := postJSON("http://127.0.0.1:8080/api/login",
+		[]byte(`{"username":"admin","password":"admin"}`), &opLogin); err != nil {
+		die("login: %v", err)
+	}
+	if opLogin.Token == "" {
+		die("login: no token returned")
+	}
+
+	// 2. mint a bootstrap token over HTTP (operator-authed).
 	var boot struct {
 		BootstrapToken string `json:"bootstrap_token"`
 	}
-	if err := postJSON("http://127.0.0.1:8080/admin/bootstrap", []byte("{}"), &boot); err != nil {
+	if err := postJSON("http://127.0.0.1:8080/admin/bootstrap", []byte("{}"), &boot, opLogin.Token); err != nil {
 		die("bootstrap: %v", err)
 	}
 
-	// 2. enroll over the PLAIN port — the response must carry the mTLS identity.
+	// 3. enroll over the PLAIN port — the response must carry the mTLS identity.
 	conn, err := grpc.NewClient(plain, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		die("dial plain: %v", err)
@@ -90,7 +111,7 @@ func main() {
 	fmt.Printf("enrolled %s; mTLS identity present (leaf %dB, key %dB, root %dB)\n",
 		enroll.DeviceId, len(enroll.LeafCertPem), len(enroll.LeafKeyPem), len(enroll.OrgRootCaPem))
 
-	// 3. valid leaf -> Stream over the mTLS port (server verified vs pinned root).
+	// 4. valid leaf -> Stream over the mTLS port (server verified vs pinned root).
 	kp, err := tls.X509KeyPair([]byte(enroll.LeafCertPem), []byte(enroll.LeafKeyPem))
 	if err != nil {
 		die("leaf keypair: %v", err)
@@ -127,7 +148,7 @@ func main() {
 	}
 	fmt.Println("OK: valid org-issued leaf streamed a live heartbeat+ack over the mTLS port")
 
-	// 4. random cert (different CA) -> rejected at the handshake.
+	// 5. random cert (different CA) -> rejected at the handshake.
 	rogue, err := ca.GenerateRoot()
 	if err != nil {
 		die("rogue root: %v", err)
@@ -163,7 +184,7 @@ func main() {
 		fmt.Printf("OK: random (non-org) cert rejected — %v\n", err)
 	}
 
-	// 5. no client cert at all -> rejected too (RequireAndVerifyClientCert).
+	// 6. no client cert at all -> rejected too (RequireAndVerifyClientCert).
 	noCert, err := grpc.NewClient(mtls, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 		RootCAs:    roots,
 		ServerName: host,

@@ -403,6 +403,8 @@ func main() {
 	defer apiSrv2.Close()
 	apiBase := apiSrv2.URL
 	info("operator HTTP surface on %s (/admin/webhooks, /admin/events/stream)", apiBase)
+	// C1: the operator routes are JWT-gated — log in once for a token.
+	opTok := loginOp(ctx, apiBase)
 
 	// ---- the one device ----------------------------------------------------
 	step("enroll the one device (the condition's host)")
@@ -423,7 +425,7 @@ func main() {
 	srvRecv := httptest.NewServer(http.HandlerFunc(recv.serve))
 	defer srvRecv.Close()
 	const secret = "shared-secret-automation"
-	ep, err := createWebhook(ctx, apiBase, "ops-automation", srvRecv.URL, secret, []string{
+	ep, err := createWebhook(ctx, apiBase, opTok, "ops-automation", srvRecv.URL, secret, []string{
 		webhook.CategoryAlert, webhook.CategoryAutomation,
 	})
 	if err != nil {
@@ -739,11 +741,11 @@ type webhookOut struct {
 	Status     string   `json:"status"`
 }
 
-func createWebhook(ctx context.Context, apiBase, name, url, secret string, categories []string) (*webhookOut, error) {
+func createWebhook(ctx context.Context, apiBase, token, name, url, secret string, categories []string) (*webhookOut, error) {
 	in := map[string]any{
 		"name": name, "url": url, "secret": secret, "categories": categories,
 	}
-	b, err := postJSON(ctx, apiBase, "/admin/webhooks", in)
+	b, err := postJSON(ctx, apiBase, "/admin/webhooks", in, token)
 	if err != nil {
 		return nil, err
 	}
@@ -754,13 +756,35 @@ func createWebhook(ctx context.Context, apiBase, name, url, secret string, categ
 	return &out, nil
 }
 
-func postJSON(ctx context.Context, apiBase, path string, in any) ([]byte, error) {
+// loginOp hits the OPEN POST /api/login with the env admin and returns the
+// short-lived operator JWT the C1-gated /admin/* + /api/* routes require.
+func loginOp(ctx context.Context, apiBase string) string {
+	b, err := postJSON(ctx, apiBase, "/api/login",
+		map[string]string{"username": "admin", "password": "admin"}, "")
+	if err != nil {
+		die("operator login: %v", err)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil || out.Token == "" {
+		die("operator login: no token in response: %s", string(b))
+	}
+	return out.Token
+}
+
+// postJSON POSTs in as JSON; token (when non-empty) rides the C1 operator
+// JWT gate via Authorization: Bearer <token>.
+func postJSON(ctx context.Context, apiBase, path string, in any, token string) ([]byte, error) {
 	b, _ := json.Marshal(in)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+path, strings.NewReader(string(b)))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err

@@ -42,6 +42,28 @@ func die(f string, a ...any) {
 	os.Exit(1)
 }
 
+// authGet / authPost are the C1-gate versions of http.Get / http.Post: they
+// attach the operator JWT minted via POST /api/login, which every /admin/*
+// route (and the operator /api/* routes) now demands.
+func authGet(url, token string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return http.DefaultClient.Do(req)
+}
+
+func authPost(url, token string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	return http.DefaultClient.Do(req)
+}
+
 func main() {
 	grpcAddr := "127.0.0.1:50051"
 	httpAddr := "http://127.0.0.1:8080"
@@ -68,8 +90,26 @@ func main() {
 	resp.Body.Close()
 	fmt.Printf("healthz ok=%v\n", h.OK)
 
+	// 0b. C1 gate: operator login (admin/admin) before any /admin/* call —
+	// every /admin/* route and the operator /api/* routes demand this JWT.
+	lb, _ := json.Marshal(map[string]string{"username": "admin", "password": "admin"})
+	lresp, err := http.Post(httpAddr+"/api/login", "application/json", bytes.NewReader(lb))
+	if err != nil {
+		die("login: %v", err)
+	}
+	var opLogin struct {
+		Token        string   `json:"token"`
+		Capabilities []string `json:"capabilities"`
+	}
+	_ = json.NewDecoder(lresp.Body).Decode(&opLogin)
+	lresp.Body.Close()
+	if lresp.StatusCode != 200 || opLogin.Token == "" {
+		die("login failed: status %d, no token", lresp.StatusCode)
+	}
+	fmt.Printf("operator session minted (caps: %v)\n", opLogin.Capabilities)
+
 	// 1. mint a bootstrap token over HTTP admin.
-	resp, err = http.Post(httpAddr+"/admin/bootstrap", "application/json", bytes.NewReader([]byte("{}")))
+	resp, err = authPost(httpAddr+"/admin/bootstrap", opLogin.Token, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		die("bootstrap: %v", err)
 	}
@@ -79,6 +119,9 @@ func main() {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&boot)
 	resp.Body.Close()
+	if len(boot.BootstrapToken) < 12 {
+		die("bootstrap: empty or short token (%q) — mint failed?", boot.BootstrapToken)
+	}
 	fmt.Printf("bootstrap token=%s device=%s\n", boot.BootstrapToken[:12]+"...", boot.DeviceID)
 
 	// 2. enroll over gRPC (unique hostname so the W1-7 search assertion
@@ -178,28 +221,13 @@ func main() {
 	// W3-3 agent: verify -> execute -> report CommandResult (RECEIVED, then
 	// SUCCEEDED) -> assert the server recorded it.
 	{
-		lb, _ := json.Marshal(map[string]string{"username": "admin", "password": "admin"})
-		lresp, err := http.Post(httpAddr+"/api/login", "application/json", bytes.NewReader(lb))
-		if err != nil {
-			die("login: %v", err)
-		}
-		var loginOut struct {
-			Token        string   `json:"token"`
-			Capabilities []string `json:"capabilities"`
-		}
-		_ = json.NewDecoder(lresp.Body).Decode(&loginOut)
-		lresp.Body.Close()
-		if lresp.StatusCode != 200 || loginOut.Token == "" {
-			die("login failed: status %d, no token", lresp.StatusCode)
-		}
-		fmt.Printf("operator session minted (caps: %v)\n", loginOut.Capabilities)
 		scriptB64 := base64.StdEncoding.EncodeToString([]byte("echo w22 e2e ping"))
 		db, _ := json.Marshal(map[string]any{
 			"action": "run_script", "lang": "sh", "script": scriptB64,
 		})
 		req, _ := http.NewRequest("POST", httpAddr+"/api/devices/"+boot.DeviceID+"/commands", bytes.NewReader(db))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+loginOut.Token)
+		req.Header.Set("Authorization", "Bearer "+opLogin.Token)
 		dresp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			die("dispatch: %v", err)
@@ -271,7 +299,7 @@ func main() {
 		fmt.Println("fake agent reported RECEIVED + SUCCEEDED over the live stream")
 
 		// And the server must have recorded it (W3-3 command audit).
-		aResp, err := http.Get(httpAddr + "/admin/devices/" + boot.DeviceID + "/commands")
+		aResp, err := authGet(httpAddr+"/admin/devices/"+boot.DeviceID+"/commands", opLogin.Token)
 		if err != nil {
 			die("commands audit: %v", err)
 		}
@@ -307,7 +335,7 @@ func main() {
 
 	// 6. device visible in admin JSON.
 	time.Sleep(200 * time.Millisecond)
-	resp, err = http.Get(httpAddr + "/admin/devices")
+	resp, err = authGet(httpAddr+"/admin/devices", opLogin.Token)
 	if err != nil {
 		die("devices: %v", err)
 	}
@@ -323,12 +351,12 @@ func main() {
 	// Seed 44 days of hourly samples (dow offset + hour-of-day triangle) plus
 	// a final-hour spike for a fresh device, run one deterministic pass
 	// over the real hypertable via the live API, and assert the anomaly.
-	baselineE2E(httpAddr, pgDSN)
+	baselineE2E(httpAddr, pgDSN, opLogin.Token)
 
 	// 6c. W2-4: the flagged anomaly must become ONE deduped inbox alert —
 	// repeated passes bump it (no storm), a clean pass resolves it, a new
 	// spike re-fires, and ack/resolve work through the auth-gated API.
-	alertE2E(httpAddr, pgDSN)
+	alertE2E(httpAddr, pgDSN, opLogin.Token)
 
 	// 6. W1-6: samples + device row are actually in TimescaleDB.
 	// (the agent's stream is already closed; metrics were flushed on write)
@@ -361,7 +389,7 @@ func main() {
 	deadline := time.Now().Add(8 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		sresp, err := http.Get(httpAddr + "/admin/search?q=" + url.QueryEscape(enrollHost))
+		sresp, err := authGet(httpAddr+"/admin/search?q="+url.QueryEscape(enrollHost), opLogin.Token)
 		if err != nil {
 			lastErr = err
 			time.Sleep(300 * time.Millisecond)
@@ -384,7 +412,7 @@ func main() {
 		if len(res.Hits) >= 1 && res.Hits[0]["id"] == boot.DeviceID {
 			fmt.Printf("meilisearch: found %d hit(s) for hostname %q (top hit = %v)\n", len(res.Hits), enrollHost, boot.DeviceID)
 			// also by id: top hit for an exact-id query must be this device
-			idResp, err := http.Get(httpAddr + "/admin/search?q=" + url.QueryEscape(boot.DeviceID))
+			idResp, err := authGet(httpAddr+"/admin/search?q="+url.QueryEscape(boot.DeviceID), opLogin.Token)
 			if err == nil {
 				var idRes struct {
 					Hits []map[string]any `json:"hits"`
@@ -400,7 +428,7 @@ func main() {
 			}
 			// and by IP: the fresh device registered interfaces=["10.0.0.99"];
 			// the fresh device must be among the hits for that query.
-			ipResp, err := http.Get(httpAddr + "/admin/search?q=10.0.0.99")
+			ipResp, err := authGet(httpAddr+"/admin/search?q=10.0.0.99", opLogin.Token)
 			if err == nil {
 				var ipRes struct {
 					Hits []map[string]any `json:"hits"`
@@ -436,7 +464,7 @@ func main() {
 // deterministic pass is forced through the real HTTP endpoint, and the
 // engine must flag exactly the final-hour spike — quiet on the pattern
 // itself. The clean (unspiked) series proves the "quiet otherwise" half.
-func baselineE2E(httpAddr, pgDSN string) {
+func baselineE2E(httpAddr, pgDSN, opToken string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pgConn, err := pgx.Connect(ctx, pgDSN)
@@ -489,7 +517,7 @@ func baselineE2E(httpAddr, pgDSN string) {
 	fmt.Printf("baseline: seeded 2 x 44d synthetic weekly series for %s\n", devID)
 
 	// Force one deterministic pass through the live API.
-	runResp, err := http.Post(httpAddr+"/admin/baseline/run", "application/json", nil)
+	runResp, err := authPost(httpAddr+"/admin/baseline/run", opToken, nil)
 	if err != nil {
 		die("baseline run: %v", err)
 	}
@@ -557,7 +585,7 @@ func baselineE2E(httpAddr, pgDSN string) {
 		at.Format("2006-01-02 15:04 UTC"), spiked[0].score, runOut.Series)
 
 	// And it is persisted + queryable through the anomaly feed.
-	feedResp, err := http.Get(httpAddr + "/admin/baseline/anomalies?limit=50")
+	feedResp, err := authGet(httpAddr+"/admin/baseline/anomalies?limit=50", opToken)
 	if err != nil {
 		die("baseline feed: %v", err)
 	}
@@ -604,7 +632,7 @@ func baselineE2E(httpAddr, pgDSN string) {
 //
 // It reuses W2-3's synthetic series shape so the same engine output feeds
 // both checks.
-func alertE2E(httpAddr, pgDSN string) {
+func alertE2E(httpAddr, pgDSN, opToken string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	pgConn, err := pgx.Connect(ctx, pgDSN)
@@ -672,7 +700,7 @@ func alertE2E(httpAddr, pgDSN string) {
 
 	// ---- helpers: force a pass, list alerts, patch a status -------------
 	forcePass := func() {
-		resp, err := http.Post(httpAddr+"/admin/baseline/run", "application/json", nil)
+		resp, err := authPost(httpAddr+"/admin/baseline/run", opToken, nil)
 		if err != nil {
 			die("alert pass: %v", err)
 		}
@@ -683,7 +711,7 @@ func alertE2E(httpAddr, pgDSN string) {
 		}
 	}
 	openAlerts := func() []map[string]any {
-		resp, err := http.Get(httpAddr + "/admin/alerts?status=open")
+		resp, err := authGet(httpAddr+"/admin/alerts?status=open", opToken)
 		if err != nil {
 			die("alert list: %v", err)
 		}
@@ -708,6 +736,7 @@ func alertE2E(httpAddr, pgDSN string) {
 		b, _ := json.Marshal(map[string]string{"status": status})
 		req, _ := http.NewRequest("PATCH", fmt.Sprintf("%s/admin/alerts/%d", httpAddr, id), bytes.NewReader(b))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+opToken)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			die("alert patch: %v", err)
@@ -756,7 +785,7 @@ func alertE2E(httpAddr, pgDSN string) {
 		die("pass3: expected auto-resolve (0 open alerts), got %d: %v", len(alerts), alerts)
 	}
 	// The resolved row is queryable by status.
-	resResp, err := http.Get(httpAddr + "/admin/alerts?status=resolved")
+	resResp, err := authGet(httpAddr+"/admin/alerts?status=resolved", opToken)
 	if err != nil {
 		die("alert resolved list: %v", err)
 	}
@@ -780,7 +809,7 @@ func alertE2E(httpAddr, pgDSN string) {
 	fmt.Printf("alerts: pass4 -> fresh alert fired on the new anomaly (re-fire allowed)\n")
 
 	// ---- counts endpoint agrees (scoped to our device) ------------------
-	cntResp, err := http.Get(httpAddr + "/admin/alerts/counts")
+	cntResp, err := authGet(httpAddr+"/admin/alerts/counts", opToken)
 	if err != nil {
 		die("alert counts: %v", err)
 	}
@@ -792,7 +821,7 @@ func alertE2E(httpAddr, pgDSN string) {
 	}
 	// The global open count may include other devices' alerts (e.g. W2-3's
 	// spike), so assert the scoped view: our device must show exactly 1.
-	scResp, err := http.Get(httpAddr + "/admin/alerts?status=open&device_id=" + devID)
+	scResp, err := authGet(httpAddr+"/admin/alerts?status=open&device_id="+devID, opToken)
 	if err != nil {
 		die("alert scoped list: %v", err)
 	}
@@ -819,7 +848,7 @@ func alertE2E(httpAddr, pgDSN string) {
 	if got := openAlerts(); len(got) != 0 {
 		die("ack: expected 0 open alerts after ack, got %d: %v", len(got), got)
 	}
-	ackResp, err := http.Get(httpAddr + "/admin/alerts?status=acked&device_id=" + devID)
+	ackResp, err := authGet(httpAddr+"/admin/alerts?status=acked&device_id="+devID, opToken)
 	if err != nil {
 		die("alert acked list: %v", err)
 	}
@@ -837,7 +866,7 @@ func alertE2E(httpAddr, pgDSN string) {
 	if alerts = openAlerts(); len(alerts) != 0 {
 		die("manual resolve: expected 0 open alerts, got %d: %v", len(alerts), alerts)
 	}
-	resResp2, err := http.Get(httpAddr + "/admin/alerts?status=resolved&device_id=" + devID)
+	resResp2, err := authGet(httpAddr+"/admin/alerts?status=resolved&device_id="+devID, opToken)
 	if err != nil {
 		die("alert resolved list 2: %v", err)
 	}

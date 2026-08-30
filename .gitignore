@@ -27,6 +27,8 @@ frontend/.tmp-*.mjs
 # Build artifacts
 agent/bin/
 server/bin/
+agent/agent
+server/server
 SHA256SUMS
 SHA256SUMS.minisig
 *.minisig

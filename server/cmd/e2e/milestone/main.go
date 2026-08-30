@@ -88,8 +88,21 @@ func info(f string, a ...any) {
 
 // ---- HTTP helpers ------------------------------------------------------------
 
-func getJSON(url string, out any) error {
-	resp, err := http.Get(url)
+// getJSON performs an unauthenticated GET (or an operator-authed one when
+// token != "", for the C1-gated /admin/* and operator /api/* routes).
+func getJSON(url string, out any, token ...string) error {
+	auth := ""
+	if len(token) > 0 {
+		auth = token[0]
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
+	}
+	if auth != "" {
+		req.Header.Set("Authorization", "Bearer "+auth)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -104,8 +117,18 @@ func getJSON(url string, out any) error {
 	return nil
 }
 
-func postJSON(url string, payload []byte, out any) (int, error) {
-	resp, err := http.Post(url, "application/json", bytes.NewReader(payload))
+// postJSON performs an unauthenticated POST (or an operator-authed one when
+// token != "").
+func postJSON(url string, payload []byte, out any, token ...string) (int, error) {
+	req, err := http.NewRequest("POST", url, bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if len(token) > 0 && token[0] != "" {
+		req.Header.Set("Authorization", "Bearer "+token[0])
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -202,6 +225,20 @@ func main() {
 	}
 	info("stack healthy (server %s)", h.Version)
 
+	// C1 gate: the operator session must exist before any /admin/* (or
+	// operator /api/*) call. admin/admin is the built-in dev credential.
+	var opLogin struct {
+		Token string `json:"token"`
+	}
+	if _, err := postJSON(httpAddr+"/api/login",
+		[]byte(`{"username":"admin","password":"admin"}`), &opLogin); err != nil {
+		die("operator login: %v", err)
+	}
+	if opLogin.Token == "" {
+		die("operator login: no token returned")
+	}
+	info("operator session minted (admin/admin)")
+
 	pgConn, err := pgx.Connect(context.Background(), pgDSN)
 	if err != nil {
 		die("pg connect: %v", err)
@@ -276,7 +313,7 @@ func main() {
 		BootstrapToken string `json:"bootstrap_token"`
 		DeviceID       string `json:"device_id"`
 	}
-	if _, err := postJSON(httpAddr+"/admin/bootstrap", []byte("{}"), &boot); err != nil {
+	if _, err := postJSON(httpAddr+"/admin/bootstrap", []byte("{}"), &boot, opLogin.Token); err != nil {
 		die("bootstrap: %v", err)
 	}
 	if boot.BootstrapToken == "" || boot.DeviceID == "" {
@@ -347,7 +384,7 @@ func main() {
 	}
 	var devices []devOut
 	if err := pollUntil("device online in /admin/devices", 60*time.Second, func() error {
-		if err := getJSON(httpAddr+"/admin/devices", &devices); err != nil {
+		if err := getJSON(httpAddr+"/admin/devices", &devices, opLogin.Token); err != nil {
 			return err
 		}
 		for _, d := range devices {
@@ -397,7 +434,7 @@ func main() {
 		var res struct {
 			Hits []map[string]any `json:"hits"`
 		}
-		if err := getJSON(httpAddr+"/admin/search?q="+host, &res); err != nil {
+		if err := getJSON(httpAddr+"/admin/search?q="+host, &res, opLogin.Token); err != nil {
 			return err
 		}
 		for _, hit := range res.Hits {
@@ -451,7 +488,7 @@ func main() {
 		time.Sleep(rem + 10*time.Second)
 	}
 	step("5. alert precision on the test estate (seeded + scored, two engine paths)")
-	est := estatePrecision(httpAddr, pgDSN, pgConn)
+	est := estatePrecision(httpAddr, pgDSN, pgConn, opLogin.Token)
 	info("estate: %d devices x %d series x 45d, %d injected faults", est.Devices, est.SeriesPerDevice, est.Faults)
 	info("precision: TP=%d FP=%d FN=%d  =>  precision=%.1f%%  recall=%.1f%%",
 		est.TP, est.FP, est.FN, 100*est.Precision, 100*est.Recall)
@@ -472,7 +509,7 @@ func main() {
 
 	// ---------------------------------------------------------------- 6.
 	step("6. live fault on the real device's own series -> ONE deduped alert")
-	live := liveFaultE2E(httpAddr, pgConn, boot.DeviceID)
+	live := liveFaultE2E(httpAddr, pgConn, boot.DeviceID, opLogin.Token)
 	info("fault on real series %s[%s]: flagged at z=%.1f", live.Metric, live.Source, live.Z)
 	info("-> exactly %d open alert (2nd pass bumps events to %d, no storm)", live.Open, live.Events)
 	if !live.AutoResolved {
@@ -527,7 +564,7 @@ const estatePrefix = "estate-"
 // hour-of-day-independent. A faulted series carries a +35 spike in the
 // CURRENT hour (the hour the engine scores) — far outside any slot's band
 // (z is O(50–140), matching W2-3's measured z~87 on the same shape).
-func estatePrecision(httpAddr, pgDSN string, pg *pgx.Conn) estateStats {
+func estatePrecision(httpAddr, pgDSN string, pg *pgx.Conn, opToken string) estateStats {
 	rng := rand.New(rand.NewSource(20260823)) // fixed seed: reproducible estate
 	const (
 		devices    = 12
@@ -693,14 +730,8 @@ func estatePrecision(httpAddr, pgDSN string, pg *pgx.Conn) estateStats {
 		Series int `json:"series"`
 		Runs   int `json:"runs"`
 	}
-	resp, err := http.Post(httpAddr+"/admin/baseline/run", "application/json", nil)
-	if err != nil {
-		die("estate live baseline run: %v", err)
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&runOut)
-	resp.Body.Close()
-	if resp.StatusCode != 200 {
-		die("estate live baseline run: status %d", resp.StatusCode)
+	if code, err := postJSON(httpAddr+"/admin/baseline/run", nil, &runOut, opToken); err != nil {
+		die("estate live baseline run: %v (status %d)", err, code)
 	}
 	liveFlagged := map[string]bool{}
 	for _, a := range runOut.Anomalies {
@@ -800,7 +831,7 @@ func purgeEstate(ctx context.Context, pg *pgx.Conn) {
 // concurrent pass only bumps events or reconciles the same state, and the
 // final checks run after the series is returned to baseline (no re-fire
 // source remains).
-func liveFaultE2E(httpAddr string, pg *pgx.Conn, devID string) liveStats {
+func liveFaultE2E(httpAddr string, pg *pgx.Conn, devID, opToken string) liveStats {
 	ctx := context.Background()
 
 	// 1. Pick the real device's largest disk series + its real level.
@@ -833,14 +864,8 @@ func liveFaultE2E(httpAddr string, pg *pgx.Conn, devID string) liveStats {
 	}
 
 	forcePass := func() {
-		resp, err := http.Post(httpAddr+"/admin/baseline/run", "application/json", nil)
-		if err != nil {
-			die("live force pass: %v", err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			die("live force pass: status %d: %s", resp.StatusCode, truncate(string(body), 300))
+		if code, err := postJSON(httpAddr+"/admin/baseline/run", nil, nil, opToken); err != nil {
+			die("live force pass: %v (status %d)", err, code)
 		}
 	}
 	setHour := func(v float64) {
@@ -854,14 +879,10 @@ func liveFaultE2E(httpAddr string, pg *pgx.Conn, devID string) liveStats {
 		}
 	}
 	openAlerts := func() []map[string]any {
-		resp, err := http.Get(httpAddr + "/admin/alerts?status=open")
-		if err != nil {
+		var out []map[string]any
+		if err := getJSON(httpAddr+"/admin/alerts?status=open", &out, opToken); err != nil {
 			die("live alert list: %v", err)
 		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		var out []map[string]any
-		_ = json.Unmarshal(body, &out)
 		var mine []map[string]any
 		for _, a := range out {
 			if fmt.Sprint(a["device_id"]) == devID && fmt.Sprint(a["name"]) == metric {
@@ -1413,7 +1434,7 @@ func verifyCommandCapability(httpAddr, devID string) error {
 		} `json:"results"`
 	}
 	if err := pollUntil("terminal CommandResult for "+dOut.CommandID, 30*time.Second, func() error {
-		if err := getJSON(httpAddr+"/admin/devices/"+devID+"/commands", &res); err != nil {
+		if err := getJSON(httpAddr+"/admin/devices/"+devID+"/commands", &res, loginOut.Token); err != nil {
 			return err
 		}
 		for _, r := range res.Results {

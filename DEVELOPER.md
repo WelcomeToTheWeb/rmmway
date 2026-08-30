@@ -38,7 +38,7 @@ minted account is the primary login).
 
 | Port | Service |
 | --- | --- |
-| 8080 | Server HTTP API — health, bootstrap-token mint, device list/search (auth-gated `/api/*`, open `/admin/*`) |
+| 8080 | Server HTTP API — health, bootstrap-token mint, device list/search (operator-JWT-gated `/api/*` + `/admin/*` mirrors; open: `/agent/enroll`, `/agent/releases/*`, `/api/login`, `/api/setup/*`, `/healthz`) |
 | 50051 | gRPC agent ingest — enroll + authenticated uplink (plain) |
 | 50052 | gRPC mTLS agent uplink |
 | 5432 | TimescaleDB — device registry, `metrics` hypertable + 1-min rollups, `log_events`, `baseline_anomalies`, `alerts`, setup/webhook tables |
@@ -84,7 +84,7 @@ curl -fsS -X POST localhost:8080/api/login -d '{"username":"admin","password":"a
 # device list (auth-gated)
 curl -fsS localhost:8080/api/devices -H "Authorization: Bearer $TOKEN"
 
-# search (Meilisearch; /admin/search is the open mirror)
+# search (Meilisearch; /admin/search is the JWT-gated mirror)
 curl -fsS "localhost:8080/api/search?q=fileserver" -H "Authorization: Bearer $TOKEN"
 
 # dispatch a command to a live stream
@@ -92,13 +92,15 @@ curl -fsS -X POST localhost:8080/api/devices/dev-…/commands \
   -H "Authorization: Bearer $TOKEN" -d '{"action":"run_script","lang":"sh","script":"…base64…"}'
 # 401 no token · 404 unknown device · 400 unknown action · 502 offline · 503 search index down
 
-# baseline engine + alerts
+# baseline engine + alerts (C1: these /admin/* mirrors are JWT-gated —
+# add `-H "Authorization: Bearer <operator token>"`, token from /api/login)
 curl -fsS -X POST localhost:8080/admin/baseline/run
 curl -fsS "localhost:8080/admin/alerts?status=open&limit=100"
 curl -fsS -X PATCH localhost:8080/admin/alerts/1 -d '{"status":"acked"}'
 
 # agent logs
 curl -s 'http://localhost:3100/loki/api/v1/query_range?query={device_id="dev-…"}&limit=50'
+# (C1: JWT-gated mirror — needs -H "Authorization: Bearer <operator token>")
 curl -s localhost:8080/admin/devices/dev-…/events?limit=50
 
 # verify data landed in Timescale
@@ -108,8 +110,11 @@ docker exec rmmway-timescale psql -U rmmway -d rmmway \
 
 Notes:
 
-- `/api/*` is operator-JWT-gated; `/admin/*` mirrors stay open for machine
-  callers (installers, the e2e harness).
+- `/api/*` and the `/admin/*` mirrors are BOTH operator-JWT-gated (C1: the
+  one gated action that mattered — minting enroll tokens — is a UI action, so
+  no machine caller needs the mirrors open). The only open surfaces are
+  `/agent/enroll`, `/agent/releases/*`, `/api/login`, `/api/setup/*`, and
+  `/healthz`.
 - The Vite dev server proxies `/api/*` to `:8080`, so the browser only talks
   to `:5173`. The frontend polls `/api/devices` every 5 s and logs the
   operator out if the token becomes invalid (e.g. a server restart rotated

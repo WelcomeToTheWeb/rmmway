@@ -251,12 +251,16 @@ func bootServer(ttl time.Duration, adminCaps []string) (*rig, func()) {
 
 // enrollDevice mints a bootstrap token + enrolls over the PLAIN port,
 // returning the issued mTLS identity (leaf + key + root PEM) and JWT.
-func (r *rig) enrollDevice(ctx context.Context, hostname string) (devID, jwt string, leaf, key, rootPEM []byte) {
+// token is the operator JWT (C1: /admin/bootstrap is auth-gated).
+func (r *rig) enrollDevice(ctx context.Context, token, hostname string) (devID, jwt string, leaf, key, rootPEM []byte) {
 	var boot struct {
 		BootstrapToken string `json:"bootstrap_token"`
 		DeviceID       string `json:"device_id"`
 	}
-	resp, err := http.Post(r.httpAddr+"/admin/bootstrap", "application/json", bytes.NewReader([]byte("{}")))
+	req, _ := http.NewRequest("POST", r.httpAddr+"/admin/bootstrap", nil)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		die("bootstrap: %v", err)
 	}
@@ -389,8 +393,13 @@ func main() {
 	info("server up: plain=%s mtls=%s http=%s (cap TTL %s, admin caps [rmmway.run_script])",
 		r.plain, r.mtls, r.httpAddr, r.issuer.TTL())
 
+	// C1: every /admin/* + /api/* call needs the operator token, so mint it
+	// before the first gated call (the /admin/bootstrap mint in enrollDevice).
+	opTok := login(r.httpAddr, "admin", "admin")
+	info("operator session minted (caps: [rmmway.run_script])")
+
 	step("enroll device A + open its mTLS stream (valid mTLS channel)")
-	devA, jwtA, leafA, keyA, rootA := r.enrollDevice(ctx, "caps-e2e-a")
+	devA, jwtA, leafA, keyA, rootA := r.enrollDevice(ctx, opTok, "caps-e2e-a")
 	rootCertA, err := rootCertFromPEM(rootA)
 	if err != nil {
 		die("parse root A: %v", err)
@@ -411,7 +420,7 @@ func main() {
 	info("device %s streaming over mTLS (leaf verified by the org root at the handshake)", devA)
 
 	step("enroll device B + open its mTLS stream (another valid mTLS channel)")
-	devB, jwtB, leafB, keyB, rootB := r.enrollDevice(ctx, "caps-e2e-b")
+	devB, jwtB, leafB, keyB, rootB := r.enrollDevice(ctx, opTok, "caps-e2e-b")
 	rootCertB, err := rootCertFromPEM(rootB)
 	if err != nil {
 		die("parse root B: %v", err)
@@ -429,9 +438,6 @@ func main() {
 	}()
 	waitReady(agentB.ready)
 	info("device %s streaming over mTLS", devB)
-
-	opTok := login(r.httpAddr, "admin", "admin")
-	info("operator session minted (caps: [rmmway.run_script])")
 
 	// ---- 1. happy path: in-scope command executes -------------------------
 	step("1. run_script to A (session holds the capability) -> verified + EXECUTED + SUCCEEDED")
@@ -453,7 +459,9 @@ func main() {
 
 	// The audit endpoint serves the recorded state (status is the proto
 	// enum ordinal in JSON; SUCCEEDED == 3).
-	resp, err := http.Get(r.httpAddr + "/admin/devices/" + devA + "/commands")
+	req, _ := http.NewRequest("GET", r.httpAddr+"/admin/devices/"+devA+"/commands", nil)
+	req.Header.Set("Authorization", "Bearer "+opTok)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		die("commands audit: %v", err)
 	}

@@ -11,7 +11,7 @@
 //     alerts (open / acked / resolved);
 //  2. one-click export: operator login + ONE GET /api/devices/{id}/export
 //     streams the bundle (no auth -> 401, unknown device -> 404, /admin
-//     mirror open);
+//     mirror auth-gated like everything else since C1);
 //  3. self-describing: export.Verify checks the bundle end-to-end against
 //     ITS OWN manifest (every sha256 + size + row count, no stray files);
 //  4. tamper detection: a flipped byte inside metrics.parquet fails
@@ -129,20 +129,27 @@ func main() {
 	info("server on %s (GET /api/devices/{id}/export, /admin mirror, POST /api/login)", srvURL.URL)
 
 	// ---- auth + routing gates ----------------------------------------------
-	step("gates: no auth -> 401, unknown device -> 404")
+	step("gates: no auth -> 401, unknown device (authed) -> 404")
+	token := login(ctx, srvURL.URL)
+	info("operator session minted (admin/e2e-pass)")
 	resp, err := http.Get(srvURL.URL + "/api/devices/" + devID + "/export")
 	check(err == nil, "unauthed request: %v", err)
 	check(resp.StatusCode == http.StatusUnauthorized, "unauthed = %d, want 401", resp.StatusCode)
 	resp.Body.Close()
 
+	// C1: /admin/* is auth-gated now — the same URL with no token is a 401.
 	resp, err = http.Get(srvURL.URL + "/admin/devices/nope/export")
+	check(err == nil, "admin no-token request: %v", err)
+	check(resp.StatusCode == http.StatusUnauthorized, "admin export no token = %d, want 401 (auth-gated)", resp.StatusCode)
+	resp.Body.Close()
+	// ...and with the operator token, an unknown device is a 404.
+	resp, err = httpGetBearer(srvURL.URL+"/admin/devices/nope/export", token)
 	check(err == nil, "unknown device: %v", err)
 	check(resp.StatusCode == http.StatusNotFound, "unknown device = %d, want 404", resp.StatusCode)
 	resp.Body.Close()
 
 	// ---- the one-click export ------------------------------------------------
-	step("one-click export: login + ONE GET")
-	token := login(ctx, srvURL.URL)
+	step("one-click export: ONE GET with the operator token")
 	resp, err = httpGetBearer(srvURL.URL+"/api/devices/"+devID+"/export", token)
 	check(err == nil, "export request: %v", err)
 	check(resp.StatusCode == http.StatusOK, "export = %d, want 200", resp.StatusCode)
@@ -155,8 +162,9 @@ func main() {
 	check(err == nil, "read bundle: %v", err)
 	info("bundle downloaded: %d bytes", len(bundle))
 
-	// /admin mirror (open for e2e/ops) serves the same shape.
-	resp, err = http.Get(srvURL.URL + "/admin/devices/" + devID + "/export?rollups=0")
+	// /admin mirror (C1: auth-gated like the /api surface) serves the same
+	// shape.
+	resp, err = httpGetBearer(srvURL.URL+"/admin/devices/"+devID+"/export?rollups=0", token)
 	check(err == nil && resp.StatusCode == http.StatusOK, "admin mirror: %v status=%d", err, resp.StatusCode)
 	if b, _ := io.ReadAll(resp.Body); b != nil {
 		_, verr := export.Verify(bytes.NewReader(b), int64(len(b)))

@@ -400,17 +400,22 @@ func main() {
 	})
 	srvURL := serveAPI(apiSrv)
 	defer srvURL.Close()
-	// gates: no auth -> 401, unknown device -> 404
+	token := login(ctx, srvURL.URL)
+	// gates: no auth -> 401; authed unknown device -> 404 (C1: the /admin
+	// mirror is auth-gated now, so bare no-token is a 401 too).
 	resp, err := http.Get(srvURL.URL + "/api/devices/" + devID + "/export")
 	check(err == nil && resp.StatusCode == http.StatusUnauthorized,
 		"unauthed = %v/%d, want 401", err, resp.StatusCode)
 	resp.Body.Close()
 	resp, err = http.Get(srvURL.URL + "/admin/devices/nope/export")
+	check(err == nil && resp.StatusCode == http.StatusUnauthorized,
+		"admin export no token = %v/%d, want 401 (auth-gated)", err, resp.StatusCode)
+	resp.Body.Close()
+	resp, err = httpGetBearer(srvURL.URL+"/admin/devices/nope/export", token)
 	check(err == nil && resp.StatusCode == http.StatusNotFound,
-		"unknown device (open /admin mirror) = %v/%d, want 404", err, resp.StatusCode)
+		"unknown device (authed /admin mirror) = %v/%d, want 404", err, resp.StatusCode)
 	resp.Body.Close()
 
-	token := login(ctx, srvURL.URL)
 	resp, err = httpGetBearer(srvURL.URL+"/api/devices/"+devID+"/export", token)
 	check(err == nil && resp.StatusCode == http.StatusOK, "export = %v/%d, want 200", err, resp.StatusCode)
 	check(resp.Header.Get("Content-Type") == "application/zip",

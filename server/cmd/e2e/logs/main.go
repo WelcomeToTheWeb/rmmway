@@ -159,6 +159,8 @@ func main() {
 	go func() { _ = http.Serve(httpLis, mux) }()
 	httpAddr := "http://" + httpLis.Addr().String()
 	info("operator API on %s", httpAddr)
+	// C1: the operator routes are JWT-gated — log in once for a token.
+	opTok := loginOp(ctx, httpAddr)
 
 	// ---- build the REAL agent binary --------------------------------------
 	step("build real agent binary")
@@ -313,7 +315,7 @@ func main() {
 	fetchEvents := func() (*eventsResp, error) {
 		cctx, ccancel := context.WithTimeout(ctx, 10*time.Second)
 		defer ccancel()
-		resp, err := getWithCtx(cctx, httpAddr+"/admin/devices/"+devID+"/events?limit=100")
+		resp, err := getBearerCtx(cctx, httpAddr+"/admin/devices/"+devID+"/events?limit=100", opTok)
 		if err != nil {
 			return nil, err
 		}
@@ -365,7 +367,7 @@ func main() {
 	info("consistency: every RMM-indexed event is also queryable in Loki")
 
 	// Level filter works server-side.
-	warnResp, err := fetchWarnEvents(httpAddr, devID)
+	warnResp, err := fetchWarnEvents(httpAddr, opTok, devID)
 	check(err == nil, "warn filter fetch: %v", err)
 	for _, e := range warnResp.Events {
 		check(strings.EqualFold(e.Level, "warn"), "warn filter leaked level %q", e.Level)
@@ -394,6 +396,41 @@ func getWithCtx(ctx context.Context, url string) (*http.Response, error) {
 		return nil, err
 	}
 	return http.DefaultClient.Do(req)
+}
+
+// getBearerCtx is getWithCtx with an Authorization header; token=="" stays unauthed.
+func getBearerCtx(ctx context.Context, url, token string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return http.DefaultClient.Do(req)
+}
+
+// loginOp hits the OPEN POST /api/login with the env admin and returns the
+// short-lived operator JWT the C1-gated /admin/* + /api/* routes require.
+func loginOp(ctx context.Context, base string) string {
+	payload := `{"username":"admin","password":"admin"}`
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/login", strings.NewReader(payload))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		die("operator login: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		die("operator login = %d: %s", resp.StatusCode, b)
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out.Token == "" {
+		die("operator login: no token in response: %v", err)
+	}
+	return out.Token
 }
 
 // repoRoot walks up from cwd to the directory containing agent/go.mod
@@ -465,11 +502,11 @@ func containsMsgs(evs []store.LogEvent, needles ...string) bool {
 	return true
 }
 
-func fetchWarnEvents(base, devID string) (*struct {
+func fetchWarnEvents(base, token, devID string) (*struct {
 	DeviceID string           `json:"device_id"`
 	Events   []store.LogEvent `json:"events"`
 }, error) {
-	resp, err := http.Get(base + "/admin/devices/" + devID + "/events?level=warn")
+	resp, err := getBearerCtx(context.Background(), base+"/admin/devices/"+devID+"/events?level=warn", token)
 	if err != nil {
 		return nil, err
 	}
