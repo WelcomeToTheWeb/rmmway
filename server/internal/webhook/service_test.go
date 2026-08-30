@@ -217,6 +217,64 @@ func TestLiveFanoutByCategory(t *testing.T) {
 	}
 }
 
+// TestLiveFanoutByDeviceAndType proves the structured Filter (category +
+// device + type) routes each event only to subscribers whose set fields all
+// match — the "monitors/alerts per device" primitive behind the SSE route.
+func TestLiveFanoutByDeviceAndType(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bus := flow.NewMemBus()
+	svc := New(nil, bus)
+	if err := svc.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	all, cancelAll := svc.AddLiveFilter(ctx, Filter{})
+	dev1, cancelDev1 := svc.AddLiveFilter(ctx, Filter{Device: "dev-1"})
+	dev1Alerts, cancelDev1A := svc.AddLiveFilter(ctx, Filter{Device: "dev-1", Category: CategoryAlert})
+	dev2Device, cancelDev2D := svc.AddLiveFilter(ctx, Filter{Device: "dev-2", Type: "rmmway.events.device"})
+	defer func() { cancelAll(); cancelDev1(); cancelDev1A(); cancelDev2D() }()
+
+	at := time.Now().UTC()
+	pub := func(subject, dev string) {
+		_ = bus.Publish(ctx, subject, &flow.Event{
+			Type: subject, DeviceID: dev, At: at, Data: map[string]any{"action": "x"},
+		})
+	}
+	pub("rmmway.events.alert", "dev-1")  // alert on dev-1
+	pub("rmmway.events.device", "dev-2") // device/online on dev-2
+	pub("rmmway.events.alert", "dev-3")  // alert on dev-3
+
+	expect := func(ch <-chan Event, n int, label string) {
+		t.Helper()
+		for i := 0; i < n; i++ {
+			select {
+			case ev := <-ch:
+				_ = ev
+			case <-time.After(2 * time.Second):
+				t.Fatalf("timed out expecting an event on %s", label)
+			}
+		}
+	}
+	noMore := func(ch <-chan Event, label string) {
+		t.Helper()
+		select {
+		case ev := <-ch:
+			t.Fatalf("%s got an unexpected extra event: %+v", label, ev)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	expect(all, 3, "all")
+	expect(dev1, 1, "dev-1 (device filter)")
+	expect(dev1Alerts, 1, "dev-1 + alert (device+category)")
+	expect(dev2Device, 1, "dev-2 + device type (device+type)")
+
+	// dev-3's alert must not leak to the dev-1 subscribers.
+	noMore(dev1, "dev-1")
+	noMore(dev1Alerts, "dev-1+alert")
+}
+
 // ---- live-Postgres: journal -> sweep -> cursor --------------------------------
 
 // testHarness wires a scratch DB + memBus + service.

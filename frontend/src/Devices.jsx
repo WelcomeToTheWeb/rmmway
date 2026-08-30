@@ -282,7 +282,7 @@ function DeviceRow({ d, open, onToggle }) {
   );
 }
 
-export default function Devices({ token, onUnauthorized, focusFilter, focusKey }) {
+export default function Devices({ token, onUnauthorized, focusFilter, focusKey, liveTick }) {
   const [devices, setDevices] = useState(null);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
@@ -316,6 +316,13 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey }
     const id = setInterval(load, 5000);
     return () => clearInterval(id);
   }, [load]);
+
+  // B-1: a device online/offline flip arrives on the live stream (App bumps
+  // liveTick); re-pull immediately so the status badge flips without waiting
+  // for the 5s poll. liveTick=0 is the initial mount (load() already ran).
+  useEffect(() => {
+    if (liveTick && liveTick > 0) load();
+  }, [liveTick, load]);
 
   // Force a re-render every 30s so the "Ns ago" labels stay honest.
   useEffect(() => {

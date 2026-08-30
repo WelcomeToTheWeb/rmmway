@@ -421,6 +421,61 @@ func main() {
 	alertStore.Reconcile(seeks, map[baseline.SeriesKey]bool{{DeviceID: fa.devID, Name: "cpu.utilization_percent", Source: ""}: true})
 	info("reconciler driven with a CPU anomaly for %s (alert 'fired')", fa.devID)
 
+	// ---- fire a device OFFLINE event + prove the device-scoped filter ----
+	step("fire a device offline event + assert the device-scoped catch-up filter")
+	// A real offline flip is produced by the offline sweeper (a device that
+	// stops heartbeating) — the same inventory event the reactive UI relies
+	// on. Drive it through the bus the way the sweeper does.
+	publishEvent(flow.SubjectDevice, fa.devID, "offline device", map[string]any{
+		"action": "offline", "device_id": fa.devID, "reason": "stale last_seen",
+	})
+	info("device %s 'offline' event published (inventory)", fa.devID)
+	// The journal should now hold that event, and the REST catch-up query
+	// filtered to this device + the device type must surface it (the
+	// per-device "monitor/alert" primitive the SSE route also exposes).
+	odl := time.Now().Add(10 * time.Second)
+	var offlineSeen bool
+	for {
+		fevs, ferr := whStore.EventsAfterFilter(ctx, 0, webhook.Filter{Device: fa.devID, Type: flow.SubjectDevice}, 100)
+		if ferr == nil {
+			for _, e := range fevs {
+				var raw struct {
+					Action string `json:"action"`
+				}
+				if err := json.Unmarshal(e.Data, &raw); err == nil && raw.Action == "offline" {
+					offlineSeen = true
+				}
+			}
+		}
+		if offlineSeen || time.Now().After(odl) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	check(offlineSeen, "device-scoped catch-up (device=%s type=%s) did not surface the offline event", fa.devID, flow.SubjectDevice)
+	info("device-scoped catch-up surfaced the offline event (filter: device + type)")
+	// And it is exposed over the REST operator surface too (auth-gated).
+	evBody, err := getJSON(ctx, apiBase, "/admin/events?device="+fa.devID+"&type="+flow.SubjectDevice, opTok)
+	if err != nil {
+		die("GET /admin/events (device filter): %v", err)
+	}
+	var list []envelope
+	if err := json.Unmarshal(evBody, &list); err != nil {
+		die("decode /admin/events: %v", err)
+	}
+	check(len(list) >= 1, "GET /admin/events?device=&type= returned %d envelopes, want >=1", len(list))
+	restOffline := false
+	for _, e := range list {
+		var inner struct {
+			Action string `json:"action"`
+		}
+		if json.Unmarshal(e.Event, &inner) == nil && inner.Action == "offline" {
+			restOffline = true
+		}
+	}
+	check(restOffline, "REST /admin/events device-filtered did not include the offline event")
+	info("REST /admin/events?device=&type= returned the offline event (%d envelope(s))", len(list))
+
 	// ---- wait for deliveries (the 300ms sweep drives them) -----------------
 	step("await signed deliveries to both endpoints")
 	deadline := time.Now().Add(40 * time.Second)
@@ -602,7 +657,7 @@ func loginOp(ctx context.Context, apiBase string) string {
 }
 
 // postJSON POSTs in as JSON; token (when non-empty) rides the C1 operator
-// JWT gate via Authorization: Bearer <token>.
+// JWT gate via Authorization: Bearer ***
 func postJSON(ctx context.Context, apiBase, path string, in any, token string) ([]byte, error) {
 	b, _ := json.Marshal(in)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiBase+path, strings.NewReader(string(b)))
@@ -621,6 +676,28 @@ func postJSON(ctx context.Context, apiBase, path string, in any, token string) (
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
 		return body, fmt.Errorf("POST %s -> %d: %s", path, resp.StatusCode, string(body))
+	}
+	return body, nil
+}
+
+// getJSON GETs a path (token via the C1 operator JWT gate) and returns the
+// response body; non-2xx is an error.
+func getJSON(ctx context.Context, apiBase, path, token string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return body, fmt.Errorf("GET %s -> %d: %s", path, resp.StatusCode, string(body))
 	}
 	return body, nil
 }

@@ -248,14 +248,17 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/flows", s.requireOperator(s.handleFlows))
 	mux.HandleFunc("/admin/flows/", s.requireOperator(s.handleFlowSub))
 	// W6-2: signed webhooks + live event stream. Endpoints are user-defined
-	// (HMAC secret + categories); /events/stream is the SSE subscription.
-	// /admin mirrors below for e2e/ops (C1: auth-gated).
+	// (HMAC secret + categories); /events/stream is the SSE subscription,
+	// /events is the REST catch-up query. The stream route accepts the JWT
+	// via ?token= (EventSource can't set headers). /admin mirrors for e2e/ops.
 	mux.HandleFunc("/api/webhooks", s.requireOperator(s.handleWebhooks))
 	mux.HandleFunc("/api/webhooks/", s.requireOperator(s.handleWebhookSub))
-	mux.HandleFunc("/api/events/stream", s.requireOperator(s.handleEventStream))
+	mux.HandleFunc("/api/events", s.requireOperator(s.handleEvents))
+	mux.HandleFunc("/api/events/stream", s.requireOperatorStream(s.handleEventStream))
 	mux.HandleFunc("/admin/webhooks", s.requireOperator(s.handleWebhooks))
 	mux.HandleFunc("/admin/webhooks/", s.requireOperator(s.handleWebhookSub))
-	mux.HandleFunc("/admin/events/stream", s.requireOperator(s.handleEventStream))
+	mux.HandleFunc("/admin/events", s.requireOperator(s.handleEvents))
+	mux.HandleFunc("/admin/events/stream", s.requireOperatorStream(s.handleEventStream))
 	// A-2: first-boot setup wizard. /api/setup/status is always open (the UI
 	// needs it to decide between wizard and login, pre-auth); the POST routes
 	// are open only while the server is uninitialized, then operator-gated.
@@ -437,6 +440,31 @@ func (s *Server) requireOperator(next http.HandlerFunc) http.HandlerFunc {
 		tok, ok := bearerToken(r.Header.Get("Authorization"))
 		capList, ok2 := ingest.ParseOperatorJWT(s.jwtSecret, tok)
 		if !ok || !ok2 {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), capsKey{}, capList)))
+	}
+}
+
+// requireOperatorStream is the SSE variant of requireOperator: it also accepts
+// the operator JWT via ?token= (the EventSource browser API cannot set an
+// Authorization header, so the UI passes the short-lived JWT as a query param
+// for the stream route only — the header form is still honored for curl/API
+// clients).
+func (s *Server) requireOperatorStream(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// The operator JWT arrives as an Authorization header (curl/API
+		// clients) or a ?token= query param (EventSource can't set headers).
+		// Header wins if present.
+		var tok string
+		if htok, ok := bearerToken(r.Header.Get("Authorization")); ok {
+			tok = htok
+		} else if q := r.URL.Query().Get("token"); q != "" {
+			tok = q
+		}
+		capList, ok2 := ingest.ParseOperatorJWT(s.jwtSecret, tok)
+		if tok == "" || !ok2 {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
@@ -1953,13 +1981,77 @@ func (s *Server) handleWebhookEvents(w http.ResponseWriter, r *http.Request, id 
 	writeJSON(w, http.StatusOK, out)
 }
 
+// streamFilterFromQuery reads the subscription filter from the query string:
+// category (alert|inventory|automation|other), device (exact id) and type
+// (exact event type / bus subject). Any may be omitted. It reports an error
+// only for an unknown category (device/type are free-form exact matches).
+func streamFilterFromQuery(q url.Values) (webhook.Filter, error) {
+	fl := webhook.Filter{
+		Category: q.Get("category"),
+		Device:   q.Get("device"),
+		Type:     q.Get("type"),
+	}
+	if !fl.Valid() {
+		return fl, fmt.Errorf("unknown category %s", fl.Category)
+	}
+	return fl, nil
+}
+
+// handleEvents is the REST catch-up query over the event journal — the
+// non-streaming twin of the SSE route, so a client can page through history
+// (or the events since a given seq) without holding a connection.
+//
+//	GET /{api|admin}/events?after=0&limit=200&category=&device=&type=
+//
+//	200  [event, ...] (oldest first; each an Envelope)
+//	400  unknown category
+//	503  webhook framework not wired (in-memory mode)
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.webhooks == nil {
+		http.Error(w, "webhook framework not configured", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	fl, err := streamFilterFromQuery(q)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var after int64
+	if v := q.Get("after"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			after = n
+		}
+	}
+	limit := 200
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	evs, err := s.webhooks.Store().EventsAfterFilter(r.Context(), after, fl, limit)
+	if err != nil {
+		http.Error(w, "events: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := make([]webhook.Envelope, 0, len(evs))
+	for i := range evs {
+		out = append(out, evs[i].Envelope())
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleEventStream is the live SSE subscription (W6-2's "SSE/subscription").
 // It sends recent journal events as catch-up (honoring Last-Event-ID), then
 // streams new events as they are journaled. Each frame is an SSE `data:` with
 // the Envelope JSON and an `id:` of the journal seq (so a client can resume
 // with Last-Event-ID).
 //
-//	GET /{api|admin}/events/stream[?category=]
+//	GET /{api|admin}/events/stream[?category=&device=&type=]
 //
 //	200  text/event-stream (catch-up + live)
 //	400  unknown category
@@ -1974,9 +2066,9 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming not supported", http.StatusServiceUnavailable)
 		return
 	}
-	category := r.URL.Query().Get("category")
-	if category != "" && !containsStr(webhook.AllCategories, category) {
-		http.Error(w, "unknown category "+category, http.StatusBadRequest)
+	flt, err := streamFilterFromQuery(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1988,7 +2080,7 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 
 	// Subscribe FIRST so no journaled event is missed between the catch-up
 	// read and the live loop (the seq-dedupe below collapses any overlap).
-	ch, cancel := s.webhooks.AddLive(r.Context(), category)
+	ch, cancel := s.webhooks.AddLiveFilter(r.Context(), flt)
 	defer cancel()
 	st := s.webhooks.Store()
 
@@ -2019,7 +2111,7 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 		lastSent = ev.Seq
 	}
 
-	catchUp, err := st.EventsAfter(r.Context(), lastSent, category, 200)
+	catchUp, err := st.EventsAfterFilter(r.Context(), lastSent, flt, 200)
 	if err == nil {
 		for i := range catchUp {
 			writeSSE(catchUp[i])

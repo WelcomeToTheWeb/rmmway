@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { AuthProvider, useAuth } from "./auth.jsx";
 import { api } from "./api.js";
+import { openEventStream } from "./sse.js";
 import Login from "./Login.jsx";
 import Setup from "./Setup.jsx";
 import Devices from "./Devices.jsx";
@@ -108,22 +109,46 @@ function Shell() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // The nav badge: poll the open-alert count while signed in.
+  // The nav badge: the open-alert count. Refreshed on a timer AND the moment
+  // an alert-category event lands on the live stream (below), so a new alert
+  // bumps the badge instantly instead of on the next 15s poll.
+  const refreshAlerts = useCallback(async () => {
+    try {
+      const c = await api.alertCounts(token);
+      setOpenCount(c && c.open ? c.open : 0);
+    } catch {
+      /* keep the last known count */
+    }
+  }, [token]);
   useEffect(() => {
     if (!token) { setOpenCount(0); return; }
-    let alive = true;
-    const tick = async () => {
-      try {
-        const c = await api.alertCounts(token);
-        if (alive) setOpenCount(c && c.open ? c.open : 0);
-      } catch {
-        /* keep the last known count */
-      }
-    };
-    tick();
-    const id = setInterval(tick, 15000);
-    return () => { alive = false; clearInterval(id); };
-  }, [token]);
+    refreshAlerts();
+    const id = setInterval(refreshAlerts, 15000);
+    return () => clearInterval(id);
+  }, [token, refreshAlerts]);
+
+  // B-1: the live event stream. A device online/offline flip re-pulls the
+  // device list (the status badge updates without waiting for the 5s poll);
+  // an alert event re-pulls the open count (the nav badge updates at once).
+  // The stream is best-effort — it auto-reconnects and resumes from
+  // Last-Event-ID; when the framework is unwired (in-memory server) it 401s
+  // / 503s and the polls above remain the fallback.
+  const [deviceTick, setDeviceTick] = useState(0);
+  useEffect(() => {
+    if (!token) return;
+    const close = openEventStream({
+      token,
+      onEvent: (env) => {
+        if (!env || !env.category) return;
+        if (env.category === "inventory") {
+          setDeviceTick((t) => t + 1);
+        } else if (env.category === "alert") {
+          refreshAlerts();
+        }
+      },
+    });
+    return close;
+  }, [token, refreshAlerts]);
 
   // Global ⌘K / Ctrl+K opens the palette (only when signed in).
   const openPalette = useCallback(() => setPaletteOpen(true), []);
@@ -175,6 +200,7 @@ function Shell() {
             onUnauthorized={logout}
             focusFilter={focusFilter}
             focusKey={focusKey}
+            liveTick={deviceTick}
           />
         )}
       </main>

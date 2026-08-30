@@ -55,8 +55,10 @@ type Config struct {
 	Logs store.LogSink
 	// OnDeviceEvent (W6-2) fires on inventory changes so the event bus /
 	// webhook framework can publish them: action is "created" (a brand-new
-	// device enrolls) or "online" (a device's uplink stream opens or
-	// reconnects). payload carries device_id + (for created) identity fields.
+	// device enrolls), "online" (a device's uplink stream opens or
+	// reconnects), or "offline" (a genuine client disconnect — the uplink
+	// dropped and this stream is not being superseded by a newer one).
+	// payload carries device_id + (for created) identity fields.
 	// Nil = no hook (tests).
 	OnDeviceEvent func(action string, payload map[string]any)
 }
@@ -528,20 +530,28 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 	defer func() {
 		cancel()
 		s.mu.Lock()
+		wasCurrent := false
 		if w := s.streamW[devID]; w != nil && w.ch == ch {
 			// Close the downlink channel (same lock Push takes, so no
 			// send-on-closed race) so the pump goroutine exits and the
 			// dead stream can no longer look dispatchable.
 			close(ch)
 			delete(s.streamW, devID)
+			wasCurrent = true
 		}
 		s.mu.Unlock()
 		// M4: re-sync the search document on disconnect too (the online
 		// flag flips to false via the offline sweeper once last_seen goes
 		// stale; this Touch keeps index == DB at the lifecycle edge).
 		s.cfg.Indexer.Touch(devID)
+		// W6-2: inventory event — a genuine disconnect. wasCurrent is true
+		// only when no newer uplink superseded us (a reconnect replaces
+		// streamW before this handler returns, so a superseded stream
+		// reports no "offline" — the device is still online).
+		if wasCurrent {
+			s.emitDevice("offline", map[string]any{"action": "offline", "device_id": devID, "reason": "uplink closed"})
+		}
 	}()
-
 	// Downlink pump: the ONLY caller of stream.Send (H1). Every downlink
 	// frame — dispatched commands AND heartbeat acks — funnels through ch, so
 	// sends are serialized. grpc-go's ServerStream.Send is NOT safe for

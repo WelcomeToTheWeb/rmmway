@@ -680,6 +680,24 @@ func main() {
 		log.Println("meilisearch: disabled (RMMWAY_MEILI_ENDPOINT empty/off)")
 	}
 
+	// ---- event bus (W5-2) + event fan-out (W6-2) ------------------------
+	// Declared BEFORE the offline sweeper below (which publishes device
+	// offline events onto it). The bus is wired to NATS a few blocks later;
+	// the sweeper goroutine is async, so by the time it first ticks the bus
+	// var is assigned (a nil bus — NATS down — makes publishEvent a no-op).
+	var flowBus flow.Bus
+	// A single publish helper the alert / device / notify emitters share. It
+	// references the (possibly nil) flowBus var, so emitters wired before or
+	// after the bus is up all behave: a nil bus (NATS down) is a no-op.
+	publishEvent := func(subject, deviceID, message string, data map[string]any) {
+		if flowBus == nil {
+			return
+		}
+		_ = flowBus.Publish(context.Background(), subject, &flow.Event{
+			Type: subject, DeviceID: deviceID, Message: message, Data: data, At: time.Now().UTC(),
+		})
+	}
+
 	// ---- offline sweeper (M4) ---------------------------------------------
 	// A device that stops heartbeating must stop showing as online: flip
 	// online->false once last_seen goes stale (3× its heartbeat interval,
@@ -697,17 +715,25 @@ func main() {
 			for _, id := range flipped {
 				log.Printf("device %s marked offline (stale last_seen)", id)
 				indexer.Touch(id)
+				// W6-2: a device going OFFLINE is an inventory event on the
+				// bus, so SSE subscribers + webhooks see the status flip
+				// immediately (the DoD for the reactive UI: a device that
+				// stops heartbeating updates every open operator session).
+				publishEvent(flow.SubjectDevice, id, "offline device", map[string]any{
+					"action":    "offline",
+					"device_id": id,
+					"reason":    "stale last_seen",
+				})
 			}
 		}
 	}()
 
-	// ---- event bus (W5-2) -------------------------------------------------
+	// ---- event bus wiring (W5-2) ------------------------------------------
 	// The NATS/JetStream stream that carries every flow hop. Flows are
 	// Postgres-backed (the replay-safe run state), so the engine needs
 	// hasPG; when NATS is down the server degrades to in-memory mode for
 	// the rest of the stack, so the flow engine is disabled too (its whole
 	// point is that the chain runs OVER the bus).
-	var flowBus flow.Bus
 	if hasPG {
 		fb, err := flow.NewNatsBus(context.Background(), env("RMMWAY_NATS_URL", "nats://localhost:4222"), "RMMWAY_EVENTS", "flow-engine")
 		if err != nil {
@@ -718,18 +744,6 @@ func main() {
 		}
 	}
 
-	// ---- W6-2: event fan-out ---------------------------------------------
-	// A single publish helper the alert / device / notify emitters share.
-	// It references the (possibly nil) flowBus var, so emitters wired before
-	// or after the bus is up all behave: a nil bus (NATS down) is a no-op.
-	publishEvent := func(subject, deviceID, message string, data map[string]any) {
-		if flowBus == nil {
-			return
-		}
-		_ = flowBus.Publish(context.Background(), subject, &flow.Event{
-			Type: subject, DeviceID: deviceID, Message: message, Data: data, At: time.Now().UTC(),
-		})
-	}
 	// Alerts (W2-4) surface lifecycle events (fired/updated/resolved) on the
 	// bus so the webhook / SSE framework journals + delivers them.
 	if hasPG && alertStore != nil {

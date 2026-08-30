@@ -107,11 +107,40 @@ type Service struct {
 	log *log.Logger
 
 	mu   sync.Mutex
-	live map[chan Event]liveFilter
+	live map[chan Event]Filter
 }
 
-type liveFilter struct {
-	category string // "" = all
+// Filter is a live subscriber's subscription filter. Every field is optional;
+// an empty field matches everything ("" = all categories, all devices, all
+// types). A subscriber gets an event only when it matches every set field, so
+// an operator can subscribe to e.g. "alerts for one device" or "all
+// rmmway.events.device events". It is shared by the in-process AddLiveFilter
+// channel and the SSE route (handleEventStream builds one from query params).
+type Filter struct {
+	Category string // "" = all; else one of AllCategories
+	Device   string // "" = all; else an exact device_id
+	Type     string // "" = all; else an exact event type (the bus subject)
+}
+
+// matches reports whether ev passes every set filter field.
+func (f Filter) matches(ev Event) bool {
+	if f.Category != "" && f.Category != ev.Category {
+		return false
+	}
+	if f.Device != "" && f.Device != ev.DeviceID {
+		return false
+	}
+	if f.Type != "" && f.Type != ev.Type {
+		return false
+	}
+	return true
+}
+
+// Valid reports whether the filter names a real category (empty is valid).
+// Type/Device are free-form: an exact match that simply never fires is a
+// legal subscription, not an error.
+func (f Filter) Valid() bool {
+	return f.Category == "" || validCategory(f.Category)
 }
 
 // New builds a Service. bus is the NATS (or in-memory) event bus; store is
@@ -122,7 +151,7 @@ func New(st *Store, bus flow.Bus) *Service {
 		bus:           bus,
 		client:        &http.Client{},
 		sweepInterval: 2 * time.Second,
-		live:          make(map[chan Event]liveFilter),
+		live:          make(map[chan Event]Filter),
 	}
 }
 
@@ -206,14 +235,24 @@ func (s *Service) onEvent(ctx context.Context, subject string, ev *flow.Event) e
 
 // ---- live SSE fan-out --------------------------------------------------------
 
-// AddLive registers a live subscriber and returns its channel + a cancel func
-// (also released when ctx is done). category "" = all categories. The channel
-// is buffered; a slow consumer that overflows it drops the oldest event (SSE
-// is best-effort live; the journal is the durable record for catch-up).
+// AddLive registers a live subscriber for one category and returns its channel
+// + a cancel func (also released when ctx is done). category "" = all
+// categories. Kept for existing callers; prefer AddLiveFilter for the
+// structured filter.
 func (s *Service) AddLive(ctx context.Context, category string) (<-chan Event, func()) {
+	return s.AddLiveFilter(ctx, Filter{Category: category})
+}
+
+// AddLiveFilter registers a live subscriber and returns its channel + a cancel
+// func (also released when ctx is done). Every filter field is optional; an
+// empty field matches everything. The channel is buffered; a slow consumer that
+// overflows it drops the event (SSE is best-effort live — the journal is the
+// durable record for catch-up, and the stream's catch-up pass re-covers the
+// gap on resume via Last-Event-ID).
+func (s *Service) AddLiveFilter(ctx context.Context, fl Filter) (<-chan Event, func()) {
 	ch := make(chan Event, 256)
 	s.mu.Lock()
-	s.live[ch] = liveFilter{category: category}
+	s.live[ch] = fl
 	s.mu.Unlock()
 	var once sync.Once
 	cancel := func() {
@@ -235,7 +274,7 @@ func (s *Service) broadcast(ev Event) {
 	s.mu.Lock()
 	var chs []chan Event
 	for ch, f := range s.live {
-		if f.category != "" && f.category != ev.Category {
+		if !f.matches(ev) {
 			continue
 		}
 		chs = append(chs, ch)

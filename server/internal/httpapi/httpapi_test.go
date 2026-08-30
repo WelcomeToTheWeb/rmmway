@@ -355,3 +355,61 @@ func TestDeviceEventsEndpoint(t *testing.T) {
 		t.Fatalf("nil logEvents: got %d, want 503", code)
 	}
 }
+
+// TestEventsStreamAuth (W6-2 build-out): the SSE stream + /events catch-up
+// routes are operator-gated and the stream also accepts the JWT via ?token=
+// (EventSource can't set an Authorization header). With the webhook
+// framework unwired (in-memory server) auth is what we can assert: 401
+// without a token, 401 on a bad ?token=, and 503 (auth passed, no framework)
+// on a valid ?token= or header token. No Postgres needed.
+func TestEventsStreamAuth(t *testing.T) {
+	s, _ := newTestServer(t)
+	_, body := login(t, s, "admin", "s3cret")
+	tok, _ := body["token"].(string)
+
+	// Unwired server (no webhook framework) — auth is what's under test.
+	s2 := New(Config{Devices: store.NewMemoryDeviceStore(), JWTSecret: []byte("test-secret"), AdminUser: "admin", AdminPassword: "s3cret"})
+	mux2 := http.NewServeMux()
+	s2.Register(mux2)
+	code := func(method, path string, headerTok string) int {
+		req := httptest.NewRequest(method, path, nil)
+		if headerTok != "" {
+			req.Header.Set("Authorization", "Bearer "+headerTok)
+		}
+		rec := httptest.NewRecorder()
+		mux2.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// No token -> 401 on both routes.
+	if c := code(http.MethodGet, "/api/events", ""); c != http.StatusUnauthorized {
+		t.Fatalf("/api/events no auth: got %d, want 401", c)
+	}
+	if c := code(http.MethodGet, "/api/events/stream", ""); c != http.StatusUnauthorized {
+		t.Fatalf("stream no auth: got %d, want 401", c)
+	}
+	// ?token= accepted for EventSource: valid token passes auth (then 503,
+	// unwired); garbage ?token= is 401.
+	if c := code(http.MethodGet, "/api/events/stream?token="+tok, ""); c != http.StatusServiceUnavailable {
+		t.Fatalf("stream ?token=valid: got %d, want 503 (auth passed)", c)
+	}
+	if c := code(http.MethodGet, "/api/events/stream?token=***", ""); c != http.StatusUnauthorized {
+		t.Fatalf("stream ?token=garbage: got %d, want 401", c)
+	}
+	// Header form still honored on the stream route.
+	if c := code(http.MethodGet, "/api/events/stream", tok); c != http.StatusServiceUnavailable {
+		t.Fatalf("stream header token: got %d, want 503", c)
+	}
+	// /events catch-up is the REST twin (called via fetch with the
+	// Authorization header, so it uses the standard gate, not ?token=):
+	// auth-gated, GET only.
+	if c := code(http.MethodGet, "/api/events", tok); c != http.StatusServiceUnavailable {
+		t.Fatalf("/api/events header token: got %d, want 503", c)
+	}
+	if c := code(http.MethodPost, "/api/events", tok); c != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/events: got %d, want 405", c)
+	}
+	if c := code(http.MethodGet, "/api/events", ""); c != http.StatusUnauthorized {
+		t.Fatalf("/api/events no auth: got %d, want 401", c)
+	}
+}

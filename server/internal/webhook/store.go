@@ -246,16 +246,33 @@ func (s *Store) MaxSeq(ctx context.Context) (int64, error) {
 }
 
 // EventsAfter returns journaled events with seq > after, oldest first,
-// limited to limit. category "" = all.
+// limited to limit. category "" = all. Kept for simple callers; use
+// EventsAfterFilter for device/type-scoped queries.
 func (s *Store) EventsAfter(ctx context.Context, after int64, category string, limit int) ([]Event, error) {
+	return s.EventsAfterFilter(ctx, after, Filter{Category: category}, limit)
+}
+
+// EventsAfterFilter returns journaled events with seq > after, oldest first,
+// limited to limit, matching every set field of fl (category/device/type).
+// An empty field matches everything. This is the catch-up / REST query behind
+// GET /{api|admin}/events and the SSE stream's initial window.
+func (s *Store) EventsAfterFilter(ctx context.Context, after int64, fl Filter, limit int) ([]Event, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
 	q := `SELECT seq, category, type, device_id, at, data FROM webhook_events WHERE seq > $1`
 	args := []any{after}
-	if category != "" {
-		args = append(args, category)
+	if fl.Category != "" {
+		args = append(args, fl.Category)
 		q += fmt.Sprintf(` AND category = $%d`, len(args))
+	}
+	if fl.Device != "" {
+		args = append(args, fl.Device)
+		q += fmt.Sprintf(` AND device_id = $%d`, len(args))
+	}
+	if fl.Type != "" {
+		args = append(args, fl.Type)
+		q += fmt.Sprintf(` AND type = $%d`, len(args))
 	}
 	args = append(args, limit)
 	q += ` ORDER BY seq ASC LIMIT $` + fmt.Sprint(len(args))

@@ -75,3 +75,5 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 
 CREATE INDEX IF NOT EXISTS idx_webhook_events_category_seq ON webhook_events (category, seq);
 CREATE INDEX IF NOT EXISTS idx_webhook_events_seq ON webhook_events (seq);
+-- device-scoped queries (the SSE /events ?device= filter + the REST catch-up):
+CREATE INDEX IF NOT EXISTS idx_webhook_events_device_seq ON webhook_events (device_id, seq);
