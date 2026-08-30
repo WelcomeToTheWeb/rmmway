@@ -58,20 +58,16 @@ _Proof: `make setup-e2e` (real server vs scratch Timescale — fresh DB triggers
 *Goal: Make the telemetry actionable and reactive.*
 
 ### B-1 — SSE Integration for Reactive UI
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** HermesAgent
 - **Started:** 2026-08-30
-- **Done:** —
+- **Done:** 2026-08-30 (commit 06a8f43 + this close-out)
 - **Depends on:** Phase 1 W6-2
 - **Effort/Impact:** M / High
 **Description:** Wire the React/Tauri app to consume the Server-Sent Events (SSE) framework. Device status changes (online/offline) and new alerts should reflect in the DOM immediately without polling.
 **Definition of done:** A device going offline updates the UI badge instantly across all open operator sessions.
 
-_Progress (in flight):_
-- [x] Audit: W6-2 SSE framework (server) + `sse.js` + Devices/badge wiring already landed in 06a8f43 — verified end to end
-- [x] Gap closed: Alerts inbox now reacts to live alert events (App `alertTick` → `Alerts liveTick`), not just the nav badge
-- [x] DoD proof: `make sse-ui-smoke` — real `<App/>` in TWO operator sessions (jsdom): offline flip in 24 ms, alert badge+inbox in 28 ms, far inside the 5 s / 15 s polls
-- [ ] Final verification (build + existing smokes) + close-out (done date + commit)
+_Proof: `make sse-ui-smoke` (jsdom drives the real <App/> in TWO operator sessions: each signs in through the real Login form and opens its own live SSE stream with the operator JWT; a device going offline flips both sessions' status badge in ~20 ms and a new alert bumps both sessions' nav badge AND the open inbox in ~20–30 ms — far inside the 5 s device poll / 15 s alert-counts / 10 s inbox polls, so the updates are provably from the stream, not polling) + `make webhook-e2e` (server half of the DoD: the offline sweeper's inventory event journals + streams over real SSE, device-scoped catch-up filter verified)._
 
 ### B-2 — Dynamic Device Grouping & Bulk Actions
 - **Status:** ⬜ pending

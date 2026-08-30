@@ -129,11 +129,14 @@ function Shell() {
 
   // B-1: the live event stream. A device online/offline flip re-pulls the
   // device list (the status badge updates without waiting for the 5s poll);
-  // an alert event re-pulls the open count (the nav badge updates at once).
+  // an alert event re-pulls the open count (the nav badge updates at once)
+  // AND bumps the alerts inbox (a new alert appears in the open list
+  // immediately, not on the next 10s poll).
   // The stream is best-effort — it auto-reconnects and resumes from
   // Last-Event-ID; when the framework is unwired (in-memory server) it 401s
   // / 503s and the polls above remain the fallback.
   const [deviceTick, setDeviceTick] = useState(0);
+  const [alertTick, setAlertTick] = useState(0);
   useEffect(() => {
     if (!token) return;
     const close = openEventStream({
@@ -144,6 +147,7 @@ function Shell() {
           setDeviceTick((t) => t + 1);
         } else if (env.category === "alert") {
           refreshAlerts();
+          setAlertTick((t) => t + 1);
         }
       },
     });
@@ -191,7 +195,7 @@ function Shell() {
       <Header route={route} openCount={openCount} onOpenPalette={openPalette} />
       <main className="content">
         {route === "alerts" ? (
-          <Alerts token={token} onUnauthorized={logout} />
+          <Alerts token={token} onUnauthorized={logout} liveTick={alertTick} />
         ) : route === "flows" ? (
           <Flows token={token} onUnauthorized={logout} />
         ) : (

@@ -103,7 +103,10 @@ const TABS = [
 // Alerts is the W2-4 inbox: baseline-driven anomalies folded into one
 // deduped alert per (device, metric, source). Open alerts auto-resolve when
 // the series returns to baseline (or are acked/resolved manually).
-export default function Alerts({ token, onUnauthorized }) {
+// liveTick (B-1) is bumped by the parent on every alert-category event on
+// the live stream, so a NEW alert appears in the open inbox immediately
+// instead of on the next 10s poll.
+export default function Alerts({ token, onUnauthorized, liveTick }) {
   const [alerts, setAlerts] = useState(null);
   const [counts, setCounts] = useState(null);
   const [error, setError] = useState(null);
@@ -134,6 +137,14 @@ export default function Alerts({ token, onUnauthorized }) {
     const id = setInterval(load, 10000);
     return () => clearInterval(id);
   }, [load]);
+
+  // B-1: an alert-category event arrives on the live stream (the parent
+  // bumps liveTick); re-pull immediately so a new alert lands in the open
+  // inbox the moment it fires, not on the next 10s poll. liveTick=0 is the
+  // initial mount (load() already ran).
+  useEffect(() => {
+    if (liveTick && liveTick > 0) load();
+  }, [liveTick, load]);
 
   // Keep "Ns ago" labels honest.
   useEffect(() => {

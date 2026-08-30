@@ -238,6 +238,10 @@ setup-ui-smoke: ## A-2 UI DoD: the real <App/> redirects a fresh database to the
 adddevice-ui-smoke: ## Add-device UI DoD: the real <App/> — sign in -> Devices -> "Add a device" mints a one-time token (POST /api/bootstrap) and renders copy-paste install commands with the origin + token + device id (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/adddevice.smoke.sh
 
+.PHONY: sse-ui-smoke
+sse-ui-smoke: ## B-1 UI DoD: the real <App/> in TWO operator sessions — a device going offline flips both sessions' status badge and a new alert bumps both sessions' nav badge + open inbox, instantly off the live SSE stream (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/sse.smoke.sh
+
 .PHONY: frontend
 frontend: ## Run the frontend dev server (http://localhost:5173)
 	cd frontend && npm run dev

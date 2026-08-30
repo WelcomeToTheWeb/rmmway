@@ -73,6 +73,7 @@ in-process servers against scratch databases:
 | `make update-e2e` | signed release is applied (1.0.0 → 2.0.0); a tampered build is refused by the signature gate; an unsigned build is refused — previous binary intact |
 | `make export-e2e` | client export: bundle verifies against its own manifest, a flipped byte is rejected, `since/until` honored, re-read by an independent Parquet reader, re-imported into a fresh DB |
 | `make webhook-e2e` | real enroll + flow + alert onto the NATS journal: user endpoint receives all 3 categories, HMAC-verified (wrong secret rejected), retried (500→200), replayed, and mirrored over SSE |
+| `make sse-ui-smoke` | B-1: the real `<App/>` in TWO operator sessions — each opens its own live SSE stream (JWT via `?token=`); a device going offline flips both sessions' status badge and a new alert bumps both sessions' nav badge + open inbox in ~20–30 ms, far inside the 5 s / 15 s / 10 s polls (jsdom, no browser needed) |
 | `make logs-e2e` | real agent's log lines land in Loki **and** the per-device `log_events` store (needs the stack up) |
 
 ## Key endpoints (dev stack)
