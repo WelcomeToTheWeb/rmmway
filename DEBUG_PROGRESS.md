@@ -10,7 +10,7 @@ needed · ⬜ remaining.
 
 | ID | Status | What was done |
 |----|--------|---------------|
-| C1 | ✅ (server side; harness ⬜) | All `/admin/*` routes now wrapped in `s.requireOperator` (operator JWT, same token as `/api/*`). Open surfaces left: `/agent/enroll`, `/agent/releases/*`, `/api/login`, `/api/setup/*`. Tests: `TestAdminDevicesAuthGate` (401 w/o token, 200 with), `TestAdminBootstrapStillWorks` (mint stays open; token needed on the replay), dispatch + device-events tests now login first. |
+| C1 | ✅ | All `/admin/*` routes wrapped in `s.requireOperator` (operator JWT, same token as `/api/*`). Open surfaces left: `/agent/enroll`, `/agent/releases/*`, `/api/login`, `/api/setup/*`. Tests: `TestAdminDevicesAuthGate` (401 w/o token, 200 with), `TestAdminBootstrapStillWorks` (mint needs the operator token; the one-time token is still required on enroll). **Harnesses (W1)**: every e2e main + `mtlscheck` now logs in via `/api/login` and sends the operator JWT on all `/admin/*` calls; `adddevice`'s step-1 asserts `/admin/bootstrap` 401 bare / 200 authed, and its replay check now walks the grace window (warm replay → 200 + same device id; lapsed → 403). |
 | C2 | ✅ | `server/cmd/server/main.go`: non-`dev` env with a built-in default in play (JWT secret, admin/admin, Meili master key) → `log.Fatal` with the exact env var to set; dev → loud warning. |
 
 ## High
@@ -41,7 +41,7 @@ needed · ⬜ remaining.
 
 | ID | Status | What was done |
 |----|--------|---------------|
-| L1 | ⬜ | `git rm --cached agent/agent server/server` + `.gitignore` entries (build artifacts committed). |
+| L1 | ✅ | `git rm --cached agent/agent server/server` (worktree files kept) + `agent/agent` / `server/server` added to the .gitignore Build-artifacts section. |
 | L2 | ✅ | `RMMWAY_DEVICE_ID` dropped from both installers (device id comes from enroll); replaced with an NB comment in each. |
 | L3 | ✅ | `agent/main.go`: `stripBootstrapTokenFromConfig` — after successful enroll the agent rewrites `--config` with the `RMMWAY_BOOTSTRAP_TOKEN` line removed (mode 0600, warn-not-fatal). `enroll/facts.go` doc updated to describe the split: agent strips, server grace window covers persist-failure retry. |
 | L4 | ✅ | `errors.Is(err, errTokenMissing)` → `codes.Unavailable` (was `FailedPrecondition`) in JWT interceptor / Stream / RefreshLeaf paths. |
@@ -50,7 +50,7 @@ needed · ⬜ remaining.
 | L7 | ✅ | `/healthz` readiness check cached 5s (healthCache) instead of a DB round-trip per probe. |
 | L8 | ✅ | Login rate limiter: 10 fails/5min per client IP → 15min lockout, 429 + `Retry-After`, success clears. Config `LoginRateLimit *bool` (nil = enabled). Tests: `TestLoginRateLimit` (10 fails from one IP → 429 even with correct creds; second IP unaffected). |
 | L9 | ✅ | Disk samples keyed `device@mountpoint` (multi-partition hosts no longer collide on the `disk.used_percent` metric name). |
-| L10 | ⬜ | e2e: guard `len(boot.BootstrapToken) < 12` (a failed mint silently enrolls with a garbage token). |
+| L10 | ✅ | e2e: `len(boot.BootstrapToken) < 12` → `die("bootstrap: empty or short token … — mint failed?")` before the `[:12]` slice (a failed mint no longer panics the harness). |
 | L11 | ✅ | `install.ps1`: dead `-not (Test-Path "env:PATH")` branch removed; stale "W1-4" notes in both installers gone (only accurate milestone labels in file headers remain). |
 
 ## Extra fixes found along the way (not in DEBUG.md)
@@ -65,16 +65,57 @@ needed · ⬜ remaining.
 
 ## Test status (as of this writing)
 
-- **server module**: all packages pass (`go test ./...`), `go vet` clean; ingest suite stable across 5 consecutive runs.
-- **agent module**: `go vet ./...` clean; **all packages pass** (caps, collectors, enroll, exec, logship, rotate, secure, update, uplink).
+- **server module**: all packages pass (`go test ./...`), `go vet` clean; ingest suite stable across 5 consecutive runs. Re-verified after the harness work: every server package `ok`.
+- **agent module**: `go vet ./...` clean; all packages pass EXCEPT
+  `internal/collectors` in this container: gopsutil v4.26.7's
+  `disk.Partitions(false)` returns ZERO partitions here (the container's
+  real ext4 mounts don't show up in `Partitions(false)`; only v4.26.1 saw
+  the one /dev/loop1), so `TestCollectProducesAllFiveFamilies` and
+  `TestCollectPartialFailureStillEmitsBatch` miss the disk family.
+  Environmental — the agent tree was untouched by the harness work and the
+  tests pass on a normal Linux host.
 - **installers**: `bash -n scripts/install.sh` clean; darwin/plist branch functionally exercised with stubs (see H4/H5). `install.ps1` syntax verified by review only (no pwsh on this machine).
+- **e2e harnesses run live (in-process)**: `go run ./cmd/e2e/adddevice` PASS
+  (real agent binary, HTTP enroll, mTLS uplink, grace-window replay),
+  `go run ./cmd/e2e/caps` PASS. The live-server mains (e2e, milestone,
+  mtlscheck) + the PG-backed ones (automation, webhook, logs, export, trust)
+  compile + vet; running them needs the dev stack (Timescale/Meili + server).
+- **final gate**: `make build` green (server + agent); GOOS=linux
+  GOARCH=amd64 agent cross-build OK (ELF x86-64, 20 MB).
 - `-race` not exercised on this machine (needs cgo, not installed).
-- Test caveat for future work on this machine: monotonic `time.Now()` advances in ~528µs quanta — tests must not compare sub-tick durations (age stored timestamps instead of shrinking windows).
+- This box's test caveats: monotonic `time.Now()` advances in ~528µs quanta
+  (tests must not compare sub-tick durations — age stored timestamps instead
+  of shrinking windows); `/tmp` is `noexec`, so `go test`/`go run` need
+  `TMPDIR=/root/.gotmp` (and `GOFLAGS=-buildvcs=false` outside git).
 
 ## Remaining work (planned order)
 
-1. **C1 (harness)** — every e2e main (`server/cmd/e2e/main.go`, `adddevice`, `milestone`, `webhook`, `automation`, `logs`, `export`, `trust`, `caps`) + `cmd/mtlscheck` must login via `/api/login` (admin/admin) and send `Authorization: Bearer` on all `/admin/*` calls; rewrite `adddevice`'s open-bootstrap + 403-replay assertions for C1 + grace semantics.
-2. **L10** — e2e bootstrap-token length guard.
-3. **L1** — untrack committed binaries + `.gitignore`.
-4. **Docs/env** — DEVELOPER.md "open /admin/*" lines; `RMMWAY_ENV` in `docker-compose.prod.yml`/`.env.prod.example`; confirm the frontend only uses `/api/*`.
-5. **Final** — full `go build` + `go test` both modules, GOOS=linux cross-build of the agent (exec changed).
+All five planned items are done (this section kept as a log of what each
+landed as):
+
+1. **C1 (harness)** ✅ — every e2e main (`server/cmd/e2e/*`) + `cmd/mtlscheck`
+   logs in via `/api/login` and sends `Authorization: Bearer` on all
+   `/admin/*` calls (authed helpers: `authGet`/`authPost` in the live e2e,
+   `token` params on the in-process postJSON/getJSON helpers; heal/flow/update
+   needed no change — gRPC or open routes only). `adddevice` rewritten for
+   C1 + H2 grace semantics: step 1 asserts `/admin/bootstrap` 401 bare / 200
+   authed; step 3 proves the warm replay is idempotent (200, same device id)
+   and the lapsed replay 403s (shrinks the exported
+   `ingest.BootstrapGraceWindow` to a nanosecond to age the consume record).
+2. **L10** ✅ — `server/cmd/e2e/main.go` guards `len(boot.BootstrapToken) < 12`
+   before the `[:12]` slice.
+3. **L1** ✅ — `agent/agent` + `server/server` untracked (`git rm --cached`),
+   `.gitignore` extended.
+4. **Docs/env** ✅ — DEVELOPER.md's "open `/admin/*`" lines now say both
+   `/api/*` and `/admin/*` are operator-JWT-gated (with the open surfaces
+   listed) and the bare curl examples carry a Bearer-header note;
+   `RMMWAY_ENV=prod` added to `docker-compose.prod.yml` (server service) and
+   `.env.prod.example`; frontend verified: only a comment in Devices.jsx
+   mentions `/admin/*` — no real `/admin/*` fetches.
+5. **Final** ✅ — full `go build` + `go test` both modules, GOOS=linux
+   agent cross-build (see Test status below).
+
+Nothing left from DEBUG.md. Optional follow-ups (not in scope here):
+`make run-server` doesn't set `RMMWAY_ENV=dev`, so a local `go run
+./cmd/e2e` against it must have the operator set it; the dev
+`docker-compose.yml` has no server service at all (backing services only).
