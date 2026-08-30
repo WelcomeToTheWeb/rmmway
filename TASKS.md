@@ -70,9 +70,9 @@ _Proof: `make setup-e2e` (real server vs scratch Timescale — fresh DB triggers
 _Proof: `make sse-ui-smoke` (jsdom drives the real <App/> in TWO operator sessions: each signs in through the real Login form and opens its own live SSE stream with the operator JWT; a device going offline flips both sessions' status badge in ~20 ms and a new alert bumps both sessions' nav badge AND the open inbox in ~20–30 ms — far inside the 5 s device poll / 15 s alert-counts / 10 s inbox polls, so the updates are provably from the stream, not polling) + `make webhook-e2e` (server half of the DoD: the offline sweeper's inventory event journals + streams over real SSE, device-scoped catch-up filter verified)._
 
 ### B-2 — Dynamic Device Grouping & Bulk Actions
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** HermesAgent
+- **Started:** 2026-08-30
 - **Done:** —
 - **Depends on:** B-1
 - **Effort/Impact:** M / Medium
