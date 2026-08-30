@@ -58,9 +58,9 @@ _Proof: `make setup-e2e` (real server vs scratch Timescale — fresh DB triggers
 *Goal: Make the telemetry actionable and reactive.*
 
 ### B-1 — SSE Integration for Reactive UI
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** HermesAgent
+- **Started:** 2026-08-30
 - **Done:** —
 - **Depends on:** Phase 1 W6-2
 - **Effort/Impact:** M / High
