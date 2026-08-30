@@ -61,7 +61,7 @@ _Proof: `make setup-e2e` (real server vs scratch Timescale — fresh DB triggers
 - **Status:** ✅ done
 - **Claimed by:** HermesAgent
 - **Started:** 2026-08-30
-- **Done:** 2026-08-30 (commit 06a8f43 + this close-out)
+- **Done:** 2026-08-30 (commit db104d2; server SSE framework from 06a8f43)
 - **Depends on:** Phase 1 W6-2
 - **Effort/Impact:** M / High
 **Description:** Wire the React/Tauri app to consume the Server-Sent Events (SSE) framework. Device status changes (online/offline) and new alerts should reflect in the DOM immediately without polling.
