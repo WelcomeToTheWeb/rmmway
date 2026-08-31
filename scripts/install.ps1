@@ -77,6 +77,32 @@ try {
     Die "downloaded binary will not run: $($_.Exception.Message)"
 }
 Log "verified: $verOut"
+
+# --- integrity: the asset must match the release's published SHA256SUMS ---
+# The v0.4.0 windows asset was once hot-swapped without re-signing (the
+# .minisig and SHA256SUMS stayed stale) - refuse to install any asset whose
+# hash does not match the published sums, so an unsigned swap fails loud
+# instead of reaching the endpoint. (Full minisign verification needs the
+# minisign tool and remains the gold standard; the checksum is a cheap guard.)
+try {
+    $sumsText = (Invoke-WebRequest -Uri "$rawdl/$Version/SHA256SUMS" -UseBasicParsing).Content
+    $wantLine = ($sumsText -split "`n") | Where-Object { $_ -match [regex]::Escape("rmmway-agent-windows-$arch.exe") } | Select-Object -First 1
+    if ($wantLine) {
+        $want = ($wantLine -split "\s+")[0].Trim()
+        $hasher = [System.Security.Cryptography.SHA256]::Create()
+        $got = [BitConverter]::ToString($hasher.ComputeHash([System.IO.File]::ReadAllBytes($tmp))).ToLower().Replace("-", "")
+        if ($want -cne $got) {
+            Remove-Item $tmp -ErrorAction SilentlyContinue
+            Die "SHA256 mismatch for rmmway-agent-windows-$arch.exe: release says $want, download is $got. The release asset does not match its published sums (unsigned hot-swap?) - not installing. Ask the operator to cut a fresh signed release."
+        }
+        Log "sha256 verified: $got"
+    } else {
+        Log "no SHA256SUMS entry for this asset - skipping checksum check"
+    }
+} catch {
+    Log "WARNING: could not verify SHA256SUMS ($($_.Exception.Message)) - continuing without the checksum check"
+}
+
 Copy-Item $tmp $bin -Force
 Remove-Item $tmp
 Log "installed -> $bin"
@@ -139,12 +165,44 @@ function Set-SvcBinPath {
     }
     Log "binPath set + verified: $stored"
 }
+# Dump-StartFailure surfaces what the SCM actually saw: Start-Service swallows
+# the real error code (1053 timeout / 1066 bad binPath / 1067 process died
+# before the handshake / ...), so a generic "Cannot start service" tells you
+# nothing. `net start` prints the exact code, `sc qc` shows the binPath the
+# SCM registered, and the Application log carries the service's exit reason.
+function Dump-StartFailure {
+    param([string]$Name)
+    Log "collecting service start diagnostics for $Name ..."
+    try { & net start $Name 2>&1 | ForEach-Object { Log "  net start: $_" } }
+    catch { Log "  net start: ($($_.Exception.Message))" }
+    try { & sc.exe qc $Name 2>&1 | ForEach-Object { Log "  sc qc:   $_" } }
+    catch { Log "  sc qc:   ($($_.Exception.Message))" }
+    try {
+        $evts = Get-WinEvent -LogName Application -MaxEvents 60 -ErrorAction Stop |
+            Where-Object { $_.Message -match $Name }
+        if ($evts) {
+            $evts | ForEach-Object {
+                Log ("  event {0} @ {1}: {2}" -f $_.Id, $_.TimeCreated, ($_.Message -replace "\s+", " ").Trim())
+            }
+        } else {
+            Log "  no recent Application events mention $Name"
+        }
+    } catch {
+        Log "  (could not read the Application event log: $($_.Exception.Message))"
+    }
+}
+
 if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
     # Re-run with a new binary/config path: update binPath, not just restart,
     # or the change never takes effect.
     Set-SvcBinPath $binPath
+    # Any `sc config` call forces the SCM to re-read the service record from
+    # the registry - without it the SCM can keep using the CACHED (stale)
+    # binPath it loaded when the service was first registered, which is a
+    # classic cause of "Cannot start service" after a registry-level update.
+    & sc.exe config $svc start= auto | Out-Null
     Log "service $svc already exists - updating binPath + restarting"
-    try { Restart-Service $svc -ErrorAction Stop } catch { Log "WARNING: restart failed: $($_.Exception.Message)" }
+    try { Restart-Service $svc -ErrorAction Stop } catch { Dump-StartFailure $svc; Log "WARNING: restart failed: $($_.Exception.Message)" }
 } else {
     # Register with a placeholder binPath (no spaces -> no quoting involved),
     # set the real quoted binPath via the registry, then enable auto-start.
@@ -159,9 +217,9 @@ if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
         Start-Service $svc -ErrorAction Stop
     } catch {
         Log "WARNING: service did not start: $($_.Exception.Message)"
-        Log "  run the agent in the foreground to see the real error:"
+        Dump-StartFailure $svc
+        Log "  run the agent in the foreground (note the & call operator) to see the real error:"
         Log "    & `"$bin`" run --config `"$cfg`""
-        Log "  and check the Application log (eventvwr.msc)."
     }
 }
 # If the agent process ever crashes, auto-restart it (retry in 30s, reset the
