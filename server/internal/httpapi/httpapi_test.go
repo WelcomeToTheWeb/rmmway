@@ -695,3 +695,125 @@ func TestTagFilterExpr(t *testing.T) {
 		t.Fatalf("injection neutralized: %q", got)
 	}
 }
+
+// TestDeviceMetricsEndpoints verifies the per-device metrics viewer
+// routes: the series picker (GET .../metrics) and the bucketed series
+// (GET .../metrics/series) — operator-gated, 404 for unknown devices,
+// 400 for bad range / missing name, 503 when not wired (in-memory
+// mode), and the point payload shape (ascending points, min/max/last).
+func TestDeviceMetricsEndpoints(t *testing.T) {
+	devs := store.NewMemoryDeviceStore()
+	_ = devs.Register(context.Background(), "dev-abc", "fileserver-01", "linux", "amd64", "0.1.0", []string{"10.0.0.9"}, 30, 30)
+	now := time.Now()
+	s := New(Config{
+		Devices:       devs,
+		JWTSecret:     []byte("test-secret"),
+		AdminUser:     "admin",
+		AdminPassword: "s3cret",
+		MetricNames: func(deviceID string, since time.Time) ([]store.MetricSeries, error) {
+			if deviceID != "dev-abc" {
+				return nil, fmt.Errorf("unexpected device %q", deviceID)
+			}
+			return []store.MetricSeries{{Name: "cpu.utilization_percent", Source: "", Last: 42.0, Count: 10}}, nil
+		},
+		MetricSeries: func(deviceID, name, source string, since time.Time, bucket time.Duration) ([]store.MetricPoint, error) {
+			if name != "cpu.utilization_percent" {
+				return nil, fmt.Errorf("unexpected metric %q", name)
+			}
+			return []store.MetricPoint{
+				{T: now.Add(-10 * time.Minute), Value: 10.0},
+				{T: now.Add(-5 * time.Minute), Value: 30.0},
+				{T: now, Value: 20.0},
+			}, nil
+		},
+	})
+	mux := http.NewServeMux()
+	s.Register(mux)
+	get := func(path, token string) (int, map[string]any) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		var out map[string]any
+		_ = json.NewDecoder(rec.Body).Decode(&out)
+		return rec.Code, out
+	}
+	// Not wired (in-memory mode has no metric history) -> 503 once past
+	// the operator gate.
+	inmem := New(Config{Devices: store.NewMemoryDeviceStore(), JWTSecret: []byte("s"), AdminUser: "a", AdminPassword: "p"})
+	_, ibody := login(t, inmem, "a", "p")
+	itok, _ := ibody["token"].(string)
+	if itok == "" {
+		t.Fatal("no token from in-memory login")
+	}
+	mux2 := http.NewServeMux()
+	inmem.Register(mux2)
+	req := httptest.NewRequest(http.MethodGet, "/api/devices/dev-abc/metrics", nil)
+	req.Header.Set("Authorization", "Bearer "+itok)
+	rec := httptest.NewRecorder()
+	mux2.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("in-memory /metrics: got %d, want 503", rec.Code)
+	}
+	// No token -> 401.
+	if code, _ := get("/api/devices/dev-abc/metrics", ""); code != http.StatusUnauthorized {
+		t.Fatalf("no token: got %d, want 401", code)
+	}
+	_, body := login(t, s, "admin", "s3cret")
+	tok, _ := body["token"].(string)
+	if tok == "" {
+		t.Fatal("no token from login")
+	}
+	// Picker: 200 with the series list.
+	code, out := get("/api/devices/dev-abc/metrics?range=1h", tok)
+	if code != http.StatusOK {
+		t.Fatalf("picker: got %d, want 200", code)
+	}
+	if out["range"] != "1h" {
+		t.Fatalf("picker range = %v, want 1h", out["range"])
+	}
+	series, _ := out["series"].([]any)
+	if len(series) != 1 {
+		t.Fatalf("picker series = %v, want 1 entry", out["series"])
+	}
+	entry := series[0].(map[string]any)
+	if entry["name"] != "cpu.utilization_percent" || entry["last"] != 42.0 {
+		t.Fatalf("picker entry = %v", entry)
+	}
+	// Bad range -> 400; unknown device -> 404.
+	if code, _ := get("/api/devices/dev-abc/metrics?range=2w", tok); code != http.StatusBadRequest {
+		t.Fatalf("bad range: got %d, want 400", code)
+	}
+	if code, _ := get("/api/devices/nope/metrics", tok); code != http.StatusNotFound {
+		t.Fatalf("unknown device: got %d, want 404", code)
+	}
+	// Series: 200 with ascending points and min/max/last stats.
+	code, out = get("/api/devices/dev-abc/metrics/series?name=cpu.utilization_percent&range=24h", tok)
+	if code != http.StatusOK {
+		t.Fatalf("series: got %d, want 200", code)
+	}
+	if out["name"] != "cpu.utilization_percent" || out["range"] != "24h" {
+		t.Fatalf("series header = %v", out)
+	}
+	if out["min"].(float64) != 10.0 || out["max"].(float64) != 30.0 || out["last"].(float64) != 20.0 || out["count"].(float64) != 3 {
+		t.Fatalf("series stats = %v", out)
+	}
+	points, _ := out["points"].([]any)
+	if len(points) != 3 {
+		t.Fatalf("points = %v, want 3", out["points"])
+	}
+	p0 := points[0].([]any)
+	if p0[1].(float64) != 10.0 || p0[0].(float64) != float64(now.Add(-10*time.Minute).UnixMilli()) {
+		t.Fatalf("points[0] = %v", p0)
+	}
+	// name is required; /admin is operator-gated like /api.
+	if code, _ := get("/api/devices/dev-abc/metrics/series", tok); code != http.StatusBadRequest {
+		t.Fatalf("missing name: got %d, want 400", code)
+	}
+	if code, _ := get("/admin/devices/dev-abc/metrics", ""); code != http.StatusUnauthorized {
+		t.Fatalf("admin no token: got %d, want 401", code)
+	}
+}

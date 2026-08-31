@@ -965,6 +965,9 @@ func main() {
 		log.Println("export: per-client full export enabled (GET /api/devices/{id}/export)")
 	}
 
+	// Per-device metrics viewer: the operator UI's device-detail charts read
+	// the metric series the agents report (Timescale hypertable).
+	metricsView := store.NewPostgresMetricsView(pgPool)
 	apiSrv := httpapi.New(httpapi.Config{
 		Devices:       devicesStore,
 		Search:        mSearch,
@@ -979,6 +982,12 @@ func main() {
 		},
 		LogEvents: func(deviceID string, limit int, level string) ([]store.LogEvent, error) {
 			return logReader.Recent(context.Background(), deviceID, limit, level)
+		},
+		MetricNames: func(deviceID string, since time.Time) ([]store.MetricSeries, error) {
+			return metricsView.Names(context.Background(), deviceID, since)
+		},
+		MetricSeries: func(deviceID, name, source string, since time.Time, bucket time.Duration) ([]store.MetricPoint, error) {
+			return metricsView.Series(context.Background(), deviceID, name, source, since, bucket)
 		},
 		AdminCaps: adminCaps(),
 		Baseline:  baselineJob,

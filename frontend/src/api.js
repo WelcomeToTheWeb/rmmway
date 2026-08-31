@@ -116,6 +116,29 @@ export const api = {
     );
   },
 
+  // Per-device metrics viewer: the (name, source) series the device has
+  // reported over the window (the chart's metric picker). -> { device_id,
+  // range, series: [{name, source, last, count}] }.
+  metricsNames: (token, deviceId, range = "7d") =>
+    request(
+      `/api/devices/${encodeURIComponent(deviceId)}/metrics?range=${range}`,
+      { token }
+    ),
+
+  // The bucketed samples of one series over a range (the chart). ->
+  // { device_id, name, source, range, bucket_s, count, min, max, last,
+  // points: [[ts_ms, value], ...] } (ascending).
+  metricsSeries: (token, deviceId, name, source, range = "24h") => {
+    const q = new URLSearchParams();
+    q.set("name", name);
+    if (source) q.set("source", source);
+    q.set("range", range);
+    return request(
+      `/api/devices/${encodeURIComponent(deviceId)}/metrics/series?${q.toString()}`,
+      { token }
+    );
+  },
+
   // ---- W2-4: baseline-driven alerts + inbox ---------------------------
   // GET /api/alerts?status=open|acked|resolved&device_id=...&limit=...
   // -> Alert[] (id, device_id, hostname, name, source, status, channel,

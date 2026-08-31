@@ -91,6 +91,8 @@ _Proof: `make groups-e2e` (in-process server + 3 devices with real mTLS identiti
 **Description:** Build a drag-and-drop dashboard view. Allow pinning specific Timescale metrics (e.g., fleet-wide CPU average, disk space outliers) as visual widgets next to the alert inbox.
 **Definition of done:** A user can create a custom dashboard layout containing at least 3 distinct time-series charts that persist across sessions.
 
+_Progress: the per-device metrics viewer (first step) is done — `GET /api/devices/{id}/metrics` (series picker: the (name, source) series a device has reported) + `GET /api/devices/{id}/metrics/series?name=&source=&range=1h|6h|24h|7d|30d` (server-side `time_bucket` averaging over the raw hypertable, so every range stays a few hundred points) + a Metrics panel in the device detail row (series picker, range selector, SVG line chart with now/min/max, 30s auto-refresh). Proof: `make metrics-ui-smoke` (jsdom drives the real <App/>: picker from /metrics, chart from /metrics/series, range switch, name+source on per-source series, empty state) + `TestPostgresMetricsView` (real Timescale: picker list + bucketed series) + `TestDeviceMetricsEndpoints` (auth gate, 400/404/503, payload shape). The drag-and-drop fleet dashboard itself is still pending._
+
 ---
 
 ## Track C: AI & ChatOps Extensions

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useState, useCallback, useRef } from "react";
 import { api } from "./api.js";
 
 function relTime(iso) {
@@ -103,6 +103,216 @@ function DeviceEvents({ token, deviceId, onUnauthorized }) {
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+// Per-device metrics viewer: a series picker (which (name, source) series
+// the device has reported), a range selector, and a line chart of the
+// server-bucketed samples of the chosen series. The server averages raw
+// samples into fixed buckets, so even 30d stays a few hundred points.
+const METRIC_RANGES = ["1h", "6h", "24h", "7d", "30d"];
+
+function fmtMetricValue(name, v) {
+  if (!Number.isFinite(v)) return "—";
+  if (name === "net.bytes_total" || name.endsWith("_bytes_total")) {
+    const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let u = 0;
+    let x = v;
+    while (x >= 1024 && u < units.length - 1) {
+      x /= 1024;
+      u++;
+    }
+    return `${x.toFixed(x >= 100 ? 0 : 1)} ${units[u]}`;
+  }
+  if (name === "system.uptime_seconds" || name.endsWith("_seconds")) {
+    if (v < 86400) return `${Math.round(v / 60)}m`;
+    return `${(v / 86400).toFixed(1)}d`;
+  }
+  if (name.endsWith("_percent")) return `${v.toFixed(1)}%`;
+  return Math.abs(v) >= 100 ? String(Math.round(v)) : v.toFixed(1);
+}
+
+function MetricChart({ data }) {
+  const W = 680,
+    H = 150,
+    PL = 58,
+    PR = 12,
+    PT = 10,
+    PB = 20;
+  const pts = data.points;
+  const t0 = pts[0][0];
+  const t1 = pts[pts.length - 1][0];
+  const span = Math.max(1, t1 - t0);
+  let vmin = data.min,
+    vmax = data.max;
+  if (vmax - vmin < 1e-9) {
+    vmin -= 1;
+    vmax += 1;
+  } // flat line: avoid a zero-height plot
+  const x = (t) => PL + ((t - t0) / span) * (W - PL - PR);
+  const y = (v) => PT + (1 - (v - vmin) / (vmax - vmin)) * (H - PT - PB);
+  const line = pts
+    .map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`)
+    .join(" ");
+  const fmt = (v) => fmtMetricValue(data.name, v);
+  const tLabel = (t) =>
+    new Date(t).toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  return (
+    <div>
+      <div className="metrics-stats">
+        <span>
+          now <strong className="mono">{fmt(data.last)}</strong>
+        </span>
+        <span>
+          min <span className="mono">{fmt(data.min)}</span>
+        </span>
+        <span>
+          max <span className="mono">{fmt(data.max)}</span>
+        </span>
+        <span className="muted">
+          {data.count} samples · {data.range} · {data.bucket_s}s buckets
+        </span>
+      </div>
+      <svg className="metrics-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${data.name} over ${data.range}`}>
+        <rect
+          x={PL}
+          y={PT}
+          width={W - PL - PR}
+          height={H - PT - PB}
+          className="metrics-plot"
+        />
+        <polyline points={line} className="metrics-line" />
+        <circle cx={x(t1)} cy={y(data.last)} r={3} className="metrics-last" />
+        <text x={PL - 6} y={y(vmax) + 4} textAnchor="end">
+          {fmt(vmax)}
+        </text>
+        <text x={PL - 6} y={y(vmin) + 4} textAnchor="end">
+          {fmt(vmin)}
+        </text>
+        <text x={PL} y={H - 5}>
+          {tLabel(t0)}
+        </text>
+        <text x={W - PR} y={H - 5} textAnchor="end">
+          {tLabel(t1)}
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+function DeviceMetrics({ token, device, onUnauthorized }) {
+  const [series, setSeries] = useState(null);
+  const [selIdx, setSelIdx] = useState(0);
+  const [range, setRange] = useState("24h");
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const selRef = useRef(null); // the selected {name, source}, survives re-lists
+
+  const loadSeries = useCallback(async () => {
+    try {
+      const res = await api.metricsNames(token, device.id, "7d");
+      const list = res.series || [];
+      setSeries(list);
+      setError(null);
+      if (!list.length) return;
+      // Keep the current selection if it is still offered; otherwise
+      // default to the host-wide CPU series when present.
+      const cur = list.findIndex(
+        (m) => m.name === selRef.current?.name && m.source === selRef.current?.source
+      );
+      const cpu = list.findIndex((m) => m.name === "cpu.utilization_percent" && !m.source);
+      const pick = cur >= 0 ? cur : cpu >= 0 ? cpu : 0;
+      selRef.current = list[pick];
+      setSelIdx(pick);
+    } catch (e) {
+      if (e.unauthorized) onUnauthorized();
+      else setError(e.message);
+    }
+  }, [token, device.id, onUnauthorized]);
+
+  const sel = series && series[selIdx];
+
+  const loadData = useCallback(async () => {
+    if (!sel) {
+      setData(null);
+      return;
+    }
+    try {
+      const res = await api.metricsSeries(token, device.id, sel.name, sel.source, range);
+      setData(res);
+      setError(null);
+    } catch (e) {
+      if (e.unauthorized) onUnauthorized();
+      else setError(e.message);
+    }
+  }, [token, device.id, sel, range, onUnauthorized]);
+
+  useEffect(() => {
+    loadSeries();
+    const id = setInterval(loadSeries, 60000);
+    return () => clearInterval(id);
+  }, [loadSeries]);
+
+  useEffect(() => {
+    loadData();
+    const id = setInterval(loadData, 30000);
+    return () => clearInterval(id);
+  }, [loadData]);
+
+  const onMetricChange = (e) => {
+    const i = Number(e.target.value);
+    setSelIdx(i);
+    if (series) selRef.current = series[i];
+  };
+
+  return (
+    <div className="device-metrics">
+      <div className="device-metrics-head">
+        <span className="muted">Metrics</span>
+        <select
+          className="search"
+          value={String(selIdx)}
+          onChange={onMetricChange}
+          disabled={!series || !series.length}
+          title="Which metric to chart"
+        >
+          {(series || []).map((m, i) => (
+            <option key={`${m.name}|${m.source}`} value={i}>
+              {m.name}
+              {m.source ? ` (${m.source})` : ""}
+            </option>
+          ))}
+          {series && !series.length && <option value={0}>no series</option>}
+        </select>
+        <select
+          className="search"
+          value={range}
+          onChange={(e) => setRange(e.target.value)}
+          title="Time window"
+        >
+          {METRIC_RANGES.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+      </div>
+      {error && <div className="banner err">{error}</div>}
+      {data && data.points && data.points.length ? (
+        <MetricChart data={data} />
+      ) : !error ? (
+        <div className="empty muted">
+          No samples in this window yet (the agent ships metrics every few
+          seconds once online).
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -686,6 +896,11 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
                             device={d}
                             onUnauthorized={onUnauthorized}
                             onSaved={saveDevice}
+                          />
+                          <DeviceMetrics
+                            token={token}
+                            device={d}
+                            onUnauthorized={onUnauthorized}
                           />
                           <DeviceEvents token={token} deviceId={d.id} onUnauthorized={onUnauthorized} />
                         </div>

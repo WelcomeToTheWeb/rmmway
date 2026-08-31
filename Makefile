@@ -250,6 +250,10 @@ groups-e2e: ## B-2 DoD (server half): the operator tags a cohort, filters to the
 groups-ui-smoke: ## B-2 UI DoD: the real <App/> — tag a cohort through the per-device tag editor, filter to the exact group with `tag:web`, then ONE bulk command fans out to the whole group (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/groups.smoke.sh
 
+.PHONY: metrics-ui-smoke
+metrics-ui-smoke: ## Per-device metrics viewer UI DoD: the real <App/> — the device detail shows the Metrics panel (series picker + bucketed SVG chart), the range selector re-requests with the new range, per-source series send name+source (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/metrics.smoke.sh
+
 .PHONY: frontend
 frontend: ## Run the frontend dev server (http://localhost:5173)
 	cd frontend && npm run dev

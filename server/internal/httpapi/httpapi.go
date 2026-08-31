@@ -96,6 +96,13 @@ type Server struct {
 	// logEvents (W6-1) serves the device's recent indexed log events.
 	// Nil disables GET /{api|admin}/devices/{id}/events.
 	logEvents func(deviceID string, limit int, level string) ([]store.LogEvent, error)
+	// metricNames (per-device metrics viewer) serves GET
+	// {/api|admin}/devices/{id}/metrics: the (name, source) series the
+	// device has reported since `since`. Nil disables (in-memory mode).
+	metricNames func(deviceID string, since time.Time) ([]store.MetricSeries, error)
+	// metricSeries serves GET {/api|admin}/devices/{id}/metrics/series:
+	// the bucketed samples of one series over a range. Nil disables.
+	metricSeries func(deviceID, name, source string, since time.Time, bucket time.Duration) ([]store.MetricPoint, error)
 	// webhooks (W6-2) is the webhook + event-stream framework; nil disables
 	// /{api|admin}/webhooks* and /{api|admin}/events/stream (in-memory mode).
 	webhooks *webhook.Service
@@ -129,6 +136,13 @@ type Config struct {
 	// LogEvents (W6-1) serves GET {/api|/admin}/devices/{id}/events: the
 	// device's recent indexed agent-log events (newest first). Nil disables.
 	LogEvents func(deviceID string, limit int, level string) ([]store.LogEvent, error)
+	// MetricNames serves GET {/api|admin}/devices/{id}/metrics: the
+	// (name, source) series the device has reported (the viewer's metric
+	// picker). Nil disables (in-memory mode has no metric history).
+	MetricNames func(deviceID string, since time.Time) ([]store.MetricSeries, error)
+	// MetricSeries serves GET {/api|admin}/devices/{id}/metrics/series:
+	// the bucketed samples of one series over a range. Nil disables.
+	MetricSeries func(deviceID, name, source string, since time.Time, bucket time.Duration) ([]store.MetricPoint, error)
 	// AdminCaps is the capability set granted to operator sessions
 	// (W3-3); empty = the full Phase 1 set.
 	AdminCaps []string
@@ -214,6 +228,8 @@ func New(cfg Config) *Server {
 		commandState:  cfg.CommandState,
 		export:        cfg.Export,
 		logEvents:     cfg.LogEvents,
+		metricNames:   cfg.MetricNames,
+		metricSeries:  cfg.MetricSeries,
 		webhooks:      cfg.Webhooks,
 		setup:         cfg.Setup,
 	}
@@ -736,6 +752,8 @@ func normalizeTags(in []string) ([]string, error) {
 //	GET  {id}/commands  — pending commands + recorded results (W3-3)
 //	GET  {id}/export    — the per-client full export bundle (W4-3)
 //	GET  {id}/events    — recent indexed agent-log events (W6-1)
+//	GET  {id}/metrics    — the device's metric series (viewer picker)
+//	GET  {id}/metrics/series — bucketed samples of one series over a range
 //	PATCH {id}          — replace the device's tag list (B-2)
 //	POST bulk/commands  — capability-gated fan-out to a tag group (B-2)
 func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
@@ -757,9 +775,17 @@ func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected /devices/bulk/commands", http.StatusNotFound)
 		return
 	}
-	if len(parts) != 4 ||
-		(parts[3] != "commands" && parts[3] != "export" && parts[3] != "events") {
-		http.Error(w, "expected /devices/{id}/(commands|export|events)", http.StatusNotFound)
+	if len(parts) == 5 {
+		if parts[3] == "metrics" && parts[4] == "series" {
+			s.deviceMetricSeries(w, r, parts[2])
+			return
+		}
+		http.Error(w, "expected /devices/{id}/metrics/series", http.StatusNotFound)
+		return
+	}
+if len(parts) != 4 ||
+		(parts[3] != "commands" && parts[3] != "export" && parts[3] != "events" && parts[3] != "metrics") {
+		http.Error(w, "expected /devices/{id}/(commands|export|events|metrics)", http.StatusNotFound)
 		return
 	}
 	switch parts[3] {
@@ -773,8 +799,10 @@ func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 		s.handleDeviceExport(w, r, parts[2])
 	case "events":
 		s.deviceEvents(w, r, parts[2])
+	case "metrics":
+		s.deviceMetrics(w, r, parts[2])
 	default:
-		http.Error(w, "expected /devices/{id}/(commands|export|events)", http.StatusNotFound)
+		http.Error(w, "expected /devices/{id}/(commands|export|events|metrics)", http.StatusNotFound)
 	}
 }
 
@@ -836,6 +864,156 @@ func (s *Server) deviceEvents(w http.ResponseWriter, r *http.Request, deviceID s
 	})
 }
 
+
+
+// metricRanges maps the viewer's range selector to (window, bucket):
+// the query looks back `window`, and the raw samples are averaged into
+// one point per `bucket`, so every range stays a few hundred points
+// regardless of the agent's sample rate.
+var metricRanges = map[string]struct {
+	window time.Duration
+	bucket time.Duration
+}{
+	"1h":  {time.Hour, 30 * time.Second},
+	"6h":  {6 * time.Hour, 2 * time.Minute},
+	"24h": {24 * time.Hour, 10 * time.Minute},
+	"7d":  {7 * 24 * time.Hour, time.Hour},
+	"30d": {30 * 24 * time.Hour, 6 * time.Hour},
+}
+
+// deviceMetrics serves the per-device metrics viewer's series picker:
+// which (name, source) series the device has reported over the range.
+//
+//	GET /{api|admin}/devices/{id}/metrics?range=7d
+//
+//	200 {device_id, range, series: [{name, source, last, count}]}
+//	400 bad range
+//	404 unknown device
+//	503 metric history not wired (in-memory mode)
+func (s *Server) deviceMetrics(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.metricNames == nil {
+		http.Error(w, "metric history not configured", http.StatusServiceUnavailable)
+		return
+	}
+	rng := r.URL.Query().Get("range")
+	if rng == "" {
+		rng = "7d"
+	}
+	rr, ok := metricRanges[rng]
+	if !ok {
+		http.Error(w, "range must be one of 1h|6h|24h|7d|30d", http.StatusBadRequest)
+		return
+	}
+	ok, err := s.devices.Contains(r.Context(), deviceID)
+	if err != nil {
+		http.Error(w, "device lookup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	series, err := s.metricNames(deviceID, time.Now().Add(-rr.window))
+	if err != nil {
+		http.Error(w, "metric series: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if series == nil {
+		series = []store.MetricSeries{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_id": deviceID,
+		"range":     rng,
+		"series":    series,
+	})
+}
+
+// deviceMetricSeries serves the bucketed samples of one metric series:
+// the operator UI's device-detail chart.
+//
+//	GET /{api|admin}/devices/{id}/metrics/series?name=cpu.utilization_percent&source=&range=24h
+//
+//	200 {device_id, name, source, range, bucket_s, count, min, max, last,
+//	      points: [[ts_ms, value], ...]} (ascending)
+//	400 missing name or bad range
+//	404 unknown device
+//	503 metric history not wired (in-memory mode)
+func (s *Server) deviceMetricSeries(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.metricSeries == nil {
+		http.Error(w, "metric history not configured", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	name := q.Get("name")
+	if name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	source := q.Get("source")
+	rng := q.Get("range")
+	if rng == "" {
+		rng = "24h"
+	}
+	rr, ok := metricRanges[rng]
+	if !ok {
+		http.Error(w, "range must be one of 1h|6h|24h|7d|30d", http.StatusBadRequest)
+		return
+	}
+	ok, err := s.devices.Contains(r.Context(), deviceID)
+	if err != nil {
+		http.Error(w, "device lookup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	points, err := s.metricSeries(deviceID, name, source, time.Now().Add(-rr.window), rr.bucket)
+	if err != nil {
+		http.Error(w, "metric series: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if points == nil {
+		points = []store.MetricPoint{}
+	}
+	min, max, last := 0.0, 0.0, 0.0
+	if len(points) > 0 {
+		min, max, last = points[0].Value, points[0].Value, points[0].Value
+		for _, p := range points[1:] {
+			if p.Value < min {
+				min = p.Value
+			}
+			if p.Value > max {
+				max = p.Value
+			}
+			last = p.Value
+		}
+	}
+	jsonPoints := make([][2]any, 0, len(points))
+	for _, p := range points {
+		jsonPoints = append(jsonPoints, [2]any{p.T.UnixMilli(), p.Value})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"device_id": deviceID,
+		"name":      name,
+		"source":    source,
+		"range":     rng,
+		"bucket_s":  int64(rr.bucket.Seconds()),
+		"count":     len(points),
+		"min":       min,
+		"max":       max,
+		"last":      last,
+		"points":    jsonPoints,
+	})
+}
 // deviceCommands serves the W3-3 command audit view for one device.
 //
 //	GET /{api|admin}/devices/{id}/commands
