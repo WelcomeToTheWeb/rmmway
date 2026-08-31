@@ -3,14 +3,18 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
+	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
@@ -411,5 +415,283 @@ func TestEventsStreamAuth(t *testing.T) {
 	}
 	if c := code(http.MethodGet, "/api/events", ""); c != http.StatusUnauthorized {
 		t.Fatalf("/api/events no auth: got %d, want 401", c)
+	}
+}
+
+// ---- B-2: device tag editing + bulk fan-out -------------------------------
+
+// loginToken performs POST /api/login and returns the operator token.
+func loginToken(t *testing.T, s *Server) string {
+	t.Helper()
+	_, body := login(t, s, "admin", "s3cret")
+	tok, _ := body["token"].(string)
+	if tok == "" {
+		t.Fatalf("login: no token in %v", body)
+	}
+	return tok
+}
+
+// doJSON issues an authed request with a JSON body and returns the status
+// + parsed response.
+func doJSON(t *testing.T, s *Server, method, path, token string, body any) (int, map[string]any) {
+	t.Helper()
+	mux := http.NewServeMux()
+	s.Register(mux)
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(method, path, bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var out map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&out)
+	return rec.Code, out
+}
+
+// TestPatchDeviceTags (B-2): the operator replaces a device's whole tag
+// list from the UI. Normalization (trim/lowercase/dedupe), validation
+// (shape, limits), the unknown-device and method gates, and the
+// degraded search re-index (Search=nil -> indexed=false, 200 anyway).
+func TestPatchDeviceTags(t *testing.T) {
+	s, _ := newTestServer(t)
+
+	// No token -> 401.
+	if code := doAuthed(t, s, http.MethodPatch, "/api/devices/dev-abc", ""); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated: got %d, want 401", code)
+	}
+	tok := loginToken(t, s)
+
+	// Invalid tags -> 400 (shape).
+	if code, _ := doJSON(t, s, http.MethodPatch, "/api/devices/dev-abc", tok,
+		map[string]any{"tags": []string{"bad tag!"}}); code != http.StatusBadRequest {
+		t.Fatalf("invalid tag: got %d, want 400", code)
+	}
+	// Empty tag strings are dropped; pure-empty list clears the tags.
+	code, body := doJSON(t, s, http.MethodPatch, "/api/devices/dev-abc", tok,
+		map[string]any{"tags": []string{"Web", "web", " Prod-X ", "prod-x"}})
+	if code != http.StatusOK {
+		t.Fatalf("valid patch: got %d: %v", code, body)
+	}
+	dev, _ := body["device"].(map[string]any)
+	tags, _ := dev["tags"].([]any)
+	if len(tags) != 2 || tags[0] != "web" || tags[1] != "prod-x" {
+		t.Fatalf("normalized tags = %v, want [web prod-x]", tags)
+	}
+	if indexed, _ := body["indexed"].(bool); indexed {
+		t.Fatal("indexed=true with Search nil, want false (degraded)")
+	}
+	// The device list reflects the new tags.
+	if code := doAuthed(t, s, http.MethodGet, "/api/devices", tok); code != http.StatusOK {
+		t.Fatalf("device list: got %d", code)
+	}
+	// Too many tags -> 400.
+	many := make([]string, 21)
+	for i := range many {
+		many[i] = string(rune('a'+i%26)) + string(rune('a'+(i/26)%26))
+	}
+	if code, _ := doJSON(t, s, http.MethodPatch, "/api/devices/dev-abc", tok,
+		map[string]any{"tags": many}); code != http.StatusBadRequest {
+		t.Fatalf("21 tags: got %d, want 400", code)
+	}
+	// Long tag -> 400.
+	long := []string{strings.Repeat("a", 65)}
+	if code, _ := doJSON(t, s, http.MethodPatch, "/api/devices/dev-abc", tok,
+		map[string]any{"tags": long}); code != http.StatusBadRequest {
+		t.Fatalf("65-char tag: got %d, want 400", code)
+	}
+	// Unknown device -> 404; wrong method -> 405; clear tags -> 200 [].
+	if code, _ := doJSON(t, s, http.MethodPatch, "/api/devices/dev-nope", tok,
+		map[string]any{"tags": []string{"web"}}); code != http.StatusNotFound {
+		t.Fatalf("unknown device: got %d, want 404", code)
+	}
+	if code := doAuthed(t, s, http.MethodGet, "/api/devices/dev-abc", tok); code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET on {id}: got %d, want 405", code)
+	}
+	code, body = doJSON(t, s, http.MethodPatch, "/api/devices/dev-abc", tok,
+		map[string]any{"tags": []string{}})
+	if code != http.StatusOK {
+		t.Fatalf("clear tags: got %d", code)
+	}
+	dev, _ = body["device"].(map[string]any)
+	tags, _ = dev["tags"].([]any)
+	if len(tags) != 0 {
+		t.Fatalf("cleared tags = %v, want []", tags)
+	}
+}
+
+// TestBulkCommandFanOut (B-2 DoD): one command fans out to every device
+// carrying a tag; offline devices are reported, not retried; unknown tags
+// 404; malformed requests 400; unwired dispatch 503.
+func TestBulkCommandFanOut(t *testing.T) {
+	ctx := context.Background()
+	devs := store.NewMemoryDeviceStore()
+	for _, id := range []string{"dev-web1", "dev-web2", "dev-off", "dev-db"} {
+		if err := devs.Register(ctx, id, id, "linux", "amd64", "0.1.0", nil, 30, 30); err != nil {
+			t.Fatalf("register %s: %v", id, err)
+		}
+	}
+	for _, id := range []string{"dev-web1", "dev-web2", "dev-off"} {
+		if err := devs.SetTags(ctx, id, []string{"web"}); err != nil {
+			t.Fatalf("set tags %s: %v", id, err)
+		}
+	}
+	if err := devs.SetTags(ctx, "dev-db", []string{"db"}); err != nil {
+		t.Fatalf("set tags dev-db: %v", err)
+	}
+	var mu sync.Mutex
+	var got []string
+	dispatch := func(deviceID string, action any) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if deviceID == "dev-off" {
+			return "", fmt.Errorf("device %s not reachable", deviceID)
+		}
+		got = append(got, deviceID)
+		return "cmd-" + deviceID, nil
+	}
+	rateLimit := false
+	s := New(Config{
+		Devices:        devs,
+		JWTSecret:      []byte("test-secret"),
+		AdminUser:      "admin",
+		AdminPassword:  "s3cret",
+		Dispatch:       dispatch,
+		MintBootstrap:  func() (string, string) { return "bt", "dev-xyz" },
+		LoginRateLimit: &rateLimit,
+	})
+	tok := loginToken(t, s)
+
+	script := base64.StdEncoding.EncodeToString([]byte("echo b2"))
+	code, body := doJSON(t, s, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"tag": "web", "action": "run_script", "lang": "sh", "script": script,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("bulk: got %d: %v", code, body)
+	}
+	if n, _ := body["requested"].(float64); n != 3 {
+		t.Fatalf("requested = %v, want 3", body["requested"])
+	}
+	pushed, _ := body["pushed"].([]any)
+	if len(pushed) != 2 {
+		t.Fatalf("pushed = %v, want 2 entries", pushed)
+	}
+	offline, _ := body["offline"].([]any)
+	if len(offline) != 1 || offline[0] != "dev-off" {
+		t.Fatalf("offline = %v, want [dev-off]", offline)
+	}
+	failed, _ := body["failed"].(map[string]any)
+	if len(failed) != 0 {
+		t.Fatalf("failed = %v, want empty", failed)
+	}
+	mu.Lock()
+	if len(got) != 2 || got[0] != "dev-web1" || got[1] != "dev-web2" {
+		t.Fatalf("dispatched = %v, want [dev-web1 dev-web2] (dev-off skipped, dev-db untouched)", got)
+	}
+	mu.Unlock()
+
+	// The "db" group fans out to exactly one device.
+	code, body = doJSON(t, s, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"tag": "db", "action": "reboot",
+	})
+	if code != http.StatusOK {
+		t.Fatalf("bulk db: got %d: %v", code, body)
+	}
+	if n, _ := body["requested"].(float64); n != 1 {
+		t.Fatalf("db requested = %v, want 1", body["requested"])
+	}
+
+	// Unknown tag -> 404.
+	if code, _ := doJSON(t, s, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"tag": "nope", "action": "run_script", "script": script,
+	}); code != http.StatusNotFound {
+		t.Fatalf("unknown tag: got %d, want 404", code)
+	}
+	// Malformed action -> 400; missing tag -> 400; not base64 -> 400.
+	if code, _ := doJSON(t, s, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"tag": "web", "action": "reboot_hard",
+	}); code != http.StatusBadRequest {
+		t.Fatalf("bad action: got %d, want 400", code)
+	}
+	if code, _ := doJSON(t, s, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"action": "reboot",
+	}); code != http.StatusBadRequest {
+		t.Fatalf("missing tag: got %d, want 400", code)
+	}
+	if code, _ := doJSON(t, s, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"tag": "web", "action": "run_script", "script": "not-base64!!",
+	}); code != http.StatusBadRequest {
+		t.Fatalf("bad script: got %d, want 400", code)
+	}
+	// POST only.
+	if code := doAuthed(t, s, http.MethodGet, "/api/devices/bulk/commands", tok); code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET bulk: got %d, want 405", code)
+	}
+	// Unwired dispatch -> 503.
+	s2 := New(Config{Devices: devs, JWTSecret: []byte("test-secret"), AdminUser: "admin", AdminPassword: "s3cret"})
+	if code, _ := doJSON(t, s2, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"tag": "web", "action": "reboot",
+	}); code != http.StatusServiceUnavailable {
+		t.Fatalf("nil dispatch: got %d, want 503", code)
+	}
+}
+
+// TestBulkCommandCapabilityGate (B-2 + W3-3): a session whose operator JWT
+// lacks the action's capability gets 403 BEFORE any device is touched.
+func TestBulkCommandCapabilityGate(t *testing.T) {
+	ctx := context.Background()
+	devs := store.NewMemoryDeviceStore()
+	if err := devs.Register(ctx, "dev-a", "dev-a", "linux", "amd64", "0.1.0", nil, 30, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := devs.SetTags(ctx, "dev-a", []string{"web"}); err != nil {
+		t.Fatal(err)
+	}
+	var called int
+	rateLimit := false
+	s := New(Config{
+		Devices:        devs,
+		JWTSecret:      []byte("test-secret"),
+		AdminUser:      "admin",
+		AdminPassword:  "s3cret",
+		AdminCaps:      []string{caps.CapRunScript}, // session lacks rmmway.reboot
+		Dispatch:       func(deviceID string, action any) (string, error) { called++; return "cmd", nil },
+		MintBootstrap:  func() (string, string) { return "bt", "dev-xyz" },
+		LoginRateLimit: &rateLimit,
+	})
+	tok := loginToken(t, s)
+
+	// reboot is outside this session's grant -> 403, no dispatch.
+	code, body := doJSON(t, s, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"tag": "web", "action": "reboot",
+	})
+	if code != http.StatusForbidden {
+		t.Fatalf("reboot bulk: got %d, want 403: %v", code, body)
+	}
+	if err, _ := body["error"].(string); !strings.Contains(err, "rmmway.reboot") {
+		t.Fatalf("403 error = %q, want capability mention", err)
+	}
+	// run_script is granted -> allowed through to dispatch.
+	script := base64.StdEncoding.EncodeToString([]byte("echo ok"))
+	code, _ = doJSON(t, s, http.MethodPost, "/api/devices/bulk/commands", tok, map[string]any{
+		"tag": "web", "action": "run_script", "script": script,
+	})
+	if code != http.StatusOK {
+		t.Fatalf("run_script bulk: got %d, want 200", code)
+	}
+	if called != 1 {
+		t.Fatalf("dispatch called %d times, want 1 (the 403 must not touch devices)", called)
+	}
+}
+
+// TestTagFilterExpr (B-2): the `tag:web` search syntax maps to an exact
+// Meilisearch filter, and quote/backslash injection is neutralized.
+func TestTagFilterExpr(t *testing.T) {
+	if got := tagFilterExpr("web"); got != `tags = "web"` {
+		t.Fatalf("tagFilterExpr(web) = %q", got)
+	}
+	if got := tagFilterExpr(`a"b\c`); got != `tags = "abc"` {
+		t.Fatalf("injection neutralized: %q", got)
 	}
 }

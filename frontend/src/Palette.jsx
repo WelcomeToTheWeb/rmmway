@@ -20,7 +20,7 @@ function b64(s) {
   return btoa(unescape(encodeURIComponent(s)));
 }
 
-export default function Palette({ open, onClose, onGoToDevice, onGoToAll }) {
+export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoToTag }) {
   const { token } = useAuth();
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState([]);
@@ -72,7 +72,8 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll }) {
   }, [query, open, token]);
 
   // Build the flat items list: action rows (when query is short/empty or
-  // matches action name) followed by device hits.
+  // matches action name), the B-2 tag-group row when the query is `tag:<name>`,
+  // then device hits.
   const items = [];
   if (!query.trim() || query.trim().length <= 3) {
     for (const a of ACTIONS) {
@@ -80,6 +81,18 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll }) {
         items.push(a);
       }
     }
+  }
+  // B-2: `tag:web` in the palette is a group selector — a Navigate row that
+  // jumps to the device list filtered to that exact tag (and the same string
+  // is what /api/search filters on, so the hits below are the group too).
+  const tagMatch = /^tag:(.+)$/.exec(query.trim());
+  if (tagMatch && tagMatch[1].trim()) {
+    items.push({
+      kind: "tag",
+      id: tagMatch[1].trim(),
+      label: `Go to devices tagged "${tagMatch[1].trim()}"`,
+      hint: "Navigate (B-2 group)",
+    });
   }
   for (const h of hits) {
     items.push({
@@ -147,13 +160,17 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll }) {
         } finally {
           setBusy(null);
         }
+      } else if (item.kind === "tag") {
+        // B-2: go to the device list filtered to this exact tag group.
+        onClose();
+        onGoToTag(item.id);
       } else if (item.kind === "device") {
         // Go to device.
         onClose();
         onGoToDevice(item.id, item.hostname);
       }
     },
-    [items, selected, onClose, onGoToDevice, onGoToAll, token]
+    [items, selected, onClose, onGoToDevice, onGoToAll, onGoToTag, token]
   );
 
   // Keyboard handling: attach when open.

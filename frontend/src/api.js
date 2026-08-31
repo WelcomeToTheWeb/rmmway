@@ -82,6 +82,26 @@ export const api = {
       body,
     }),
 
+  // PATCH /api/devices/{id} { tags: [...] } -> { device, indexed } (B-2:
+  // replaces the device's whole tag list; the server normalizes tags and
+  // best-effort re-syncs the search index — indexed=false means Meilisearch
+  // was down, the next heartbeat re-covers it). 400 = invalid tag shape.
+  setTags: (token, deviceId, tags) =>
+    request(`/api/devices/${encodeURIComponent(deviceId)}`, {
+      method: "PATCH",
+      token,
+      body: { tags },
+    }),
+
+  // POST /api/devices/bulk/commands (B-2: ONE capability-gated command
+  // fanned out to every device carrying a tag — a "group" like web).
+  // body: { tag, action:"run_script"|"reboot", lang?, script? (base64),
+  // args?, timeout_s? } -> { tag, requested, pushed[{device_id,command_id}],
+  // offline[], failed{device_id:err} }. 403 = the session lacks the
+  // action's capability; 404 = no device carries the tag.
+  bulkDispatch: (token, body) =>
+    request("/api/devices/bulk/commands", { method: "POST", token, body }),
+
   // GET /api/devices/{id}/events?limit=&level= -> { device_id, events[] }
   // (newest first). W6-1: the device's recent indexed agent-log events
   // (the Timescale copy of what also ships to Loki). Each event has

@@ -107,6 +107,247 @@ function DeviceEvents({ token, deviceId, onUnauthorized }) {
   );
 }
 
+// JS base64 of a UTF-8 string (script payloads are short).
+function b64(s) {
+  return btoa(unescape(encodeURIComponent(s)));
+}
+
+// B-2: the per-device tag editor (operator tagging). Chips remove a tag;
+// the input adds one. Each change PATCHes the device's WHOLE tag list, so
+// the list always matches what the server (and the search index) sees.
+function TagEditor({ token, device, onUnauthorized, onSaved }) {
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const apply = async (tags) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.setTags(token, device.id, tags);
+      onSaved(res.device || { ...device, tags });
+    } catch (e) {
+      if (e.unauthorized) onUnauthorized();
+      else setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  function add() {
+    const t = draft.trim();
+    if (!t || busy) return;
+    if ((device.tags || []).includes(t.toLowerCase())) {
+      setDraft("");
+      return;
+    }
+    setDraft("");
+    apply([...(device.tags || []), t]);
+  }
+
+  function remove(tag) {
+    if (busy) return;
+    apply((device.tags || []).filter((t) => t !== tag));
+  }
+
+  return (
+    <div className="tag-editor">
+      <span className="tag-editor-label muted">Tags (B-2)</span>
+      <div className="tags">
+        {(device.tags || []).map((t) => (
+          <span key={t} className="tag editable" title={t}>
+            {t}
+            <button
+              className="tag-x"
+              disabled={busy}
+              onClick={() => remove(t)}
+              title={`Remove tag ${t}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="tag-editor-add">
+        <input
+          className="search tag-editor-input"
+          type="text"
+          placeholder="add a tag (e.g. web, windows-servers)"
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button className="btn" disabled={busy || !draft.trim()} onClick={add}>
+          + add
+        </button>
+      </div>
+      {error && <div className="banner err">{error}</div>}
+      {busy && <div className="muted tag-editor-busy">saving…</div>}
+    </div>
+  );
+}
+
+// B-2: "dispatch to a group" — ONE capability-gated command fanned out to
+// every device carrying a tag. The server re-checks the session's capability
+// (403) and mints a per-device token per pushed command (500-device cap).
+const DEFAULT_SCRIPT = "#!/bin/sh\necho RMMWay group script\nuptime";
+
+function GroupDispatchModal({ token, initialTag, onUnauthorized, onClose }) {
+  const [tag, setTag] = useState(initialTag || "");
+  const [action, setAction] = useState("run_script");
+  const [lang, setLang] = useState("sh");
+  const [script, setScript] = useState(DEFAULT_SCRIPT);
+  const [timeout, setTimeoutS] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  async function send() {
+    const body = { tag: tag.trim() };
+    if (action === "reboot") {
+      body.action = "reboot";
+    } else {
+      body.action = "run_script";
+      body.lang = lang;
+      body.script = b64(script);
+      if (timeout !== "") body.timeout_s = Number(timeout);
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setResult(await api.bulkDispatch(token, body));
+    } catch (e) {
+      if (e.unauthorized) onUnauthorized();
+      else setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const pushed = (result && result.pushed) || [];
+  const offline = (result && result.offline) || [];
+  const failed = (result && result.failed) || {};
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal bulk"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Dispatch to a device group"
+      >
+        <div className="modal-head">
+          <h3>Dispatch to a group</h3>
+          <button className="btn ghost" onClick={onClose} title="Close">
+            ✕
+          </button>
+        </div>
+        <p className="muted">
+          One command, every device carrying the tag — each push carries its
+          own per-device capability token (the server gates the session's
+          capability first; the fan-out is capped at 500 devices).
+        </p>
+        <label className="field">
+          <span>Tag (group)</span>
+          <input
+            className="search bulk-tag"
+            type="text"
+            placeholder="e.g. web, windows-servers"
+            value={tag}
+            disabled={busy}
+            onChange={(e) => setTag(e.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Action</span>
+          <select className="search bulk-action" value={action} disabled={busy} onChange={(e) => setAction(e.target.value)}>
+            <option value="run_script">run script</option>
+            <option value="reboot">reboot</option>
+          </select>
+        </label>
+        {action === "run_script" && (
+          <>
+            <label className="field">
+              <span>Language</span>
+              <select className="search bulk-lang" value={lang} disabled={busy} onChange={(e) => setLang(e.target.value)}>
+                <option value="sh">sh</option>
+                <option value="powershell">powershell</option>
+                <option value="python">python</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Script</span>
+              <textarea
+                className="bulk-script"
+                rows={5}
+                value={script}
+                disabled={busy}
+                onChange={(e) => setScript(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Timeout (s, optional)</span>
+              <input
+                className="search bulk-timeout"
+                type="number"
+                min="1"
+                placeholder="default"
+                value={timeout}
+                disabled={busy}
+                onChange={(e) => setTimeoutS(e.target.value)}
+              />
+            </label>
+          </>
+        )}
+        {error && <div className="banner err">{error}</div>}
+        <div className="bulk-actions">
+          <button className="btn primary" disabled={busy || !tag.trim()} onClick={send}>
+            {busy ? "dispatching…" : "Dispatch to whole group"}
+          </button>
+        </div>
+        {result && (
+          <div className="bulk-result">
+            <p>
+              <strong>{result.requested}</strong> matched · {pushed.length} pushed
+              {offline.length > 0 && <> · {offline.length} offline</>}
+              {Object.keys(failed).length > 0 && (
+                <> · {Object.keys(failed).length} failed</>
+              )}
+            </p>
+            {pushed.length > 0 && (
+              <ul className="bulk-result-list mono">
+                {pushed.map((p) => (
+                  <li key={p.device_id}>
+                    <span className="muted">{p.device_id}</span> → {p.command_id}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {offline.length > 0 && (
+              <p className="muted mono">offline (no live stream): {offline.join(", ")}</p>
+            )}
+            {Object.keys(failed).length > 0 && (
+              <ul className="bulk-result-list mono">
+                {Object.entries(failed).map(([id, err]) => (
+                  <li key={id}>
+                    <span className="muted">{id}</span> → {err}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StatusPill({ online, lastSeen }) {
   return (
     <div className="status">
@@ -291,6 +532,12 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
   const [open, setOpen] = useState(null);
   // The "Add a device" modal (mint a one-time token -> copy-paste installer).
   const [addOpen, setAddOpen] = useState(false);
+  // B-2: the "Dispatch to a group" modal (tag group -> bulk fan-out).
+  const [bulkOpen, setBulkOpen] = useState(false);
+  // B-2: a tag editor save replaces the device row in local state.
+  const saveDevice = useCallback((d) => {
+    setDevices((list) => (list ? list.map((x) => (x.id === d.id ? d : x)) : list));
+  }, []);
 
   // When the palette triggers "go to device", the parent bumps focusKey and
   // sets focusFilter to the hostname; we sync the local filter here.
@@ -331,13 +578,19 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
   }, []);
 
   const needle = q.trim().toLowerCase();
-  const filtered = (devices || []).filter(
-    (d) =>
-      !needle ||
-      d.hostname.toLowerCase().includes(needle) ||
-      d.id.toLowerCase().includes(needle) ||
-      (d.interfaces || []).some((ip) => ip.includes(needle)) ||
-      (d.tags || []).some((t) => t.toLowerCase().includes(needle))
+  // B-2: `tag:<name>` in the filter box is an EXACT tag-group filter (the
+  // same syntax the palette + /api/search use) — everything else is the
+  // substring match over hostname / id / ip / tags.
+  const tagOnly = needle.startsWith("tag:");
+  const tagNeedle = tagOnly ? needle.slice(4).trim() : "";
+  const filtered = (devices || []).filter((d) =>
+    tagOnly
+      ? (d.tags || []).includes(tagNeedle)
+      : !needle ||
+        d.hostname.toLowerCase().includes(needle) ||
+        d.id.toLowerCase().includes(needle) ||
+        (d.interfaces || []).some((ip) => ip.includes(needle)) ||
+        (d.tags || []).some((t) => t.toLowerCase().includes(needle))
   );
   const onlineCount = (devices || []).filter((d) => d.online).length;
   const total = (devices || []).length;
@@ -362,10 +615,17 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
           >
             + Add device
           </button>
+          <button
+            className="btn"
+            onClick={() => setBulkOpen(true)}
+            title="Fan one capability-gated command out to every device carrying a tag (B-2)"
+          >
+            ⚡ Dispatch to group
+          </button>
           <input
             className="search"
             type="search"
-            placeholder="filter: hostname, id, ip, tag"
+            placeholder="filter: hostname, id, ip, tag (or tag:web)"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -420,7 +680,15 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
                   {open === d.id && (
                     <tr className="detail-row">
                       <td colSpan={6} className="detail-cell">
-                        <DeviceEvents token={token} deviceId={d.id} onUnauthorized={onUnauthorized} />
+                        <div className="device-detail">
+                          <TagEditor
+                            token={token}
+                            device={d}
+                            onUnauthorized={onUnauthorized}
+                            onSaved={saveDevice}
+                          />
+                          <DeviceEvents token={token} deviceId={d.id} onUnauthorized={onUnauthorized} />
+                        </div>
                       </td>
                     </tr>
                   )}
@@ -436,6 +704,15 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
           token={token}
           onUnauthorized={onUnauthorized}
           onClose={() => setAddOpen(false)}
+        />
+      )}
+
+      {bulkOpen && (
+        <GroupDispatchModal
+          token={token}
+          initialTag={tagNeedle}
+          onUnauthorized={onUnauthorized}
+          onClose={() => setBulkOpen(false)}
         />
       )}
     </section>

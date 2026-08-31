@@ -181,6 +181,23 @@ func (d *PostgresDevices) SweepOffline(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
+// SetTags replaces the device's tag list (B-2 operator tagging); the
+// caller passes an already-normalized list. store.ErrNotFound when unknown.
+func (d *PostgresDevices) SetTags(ctx context.Context, id string, tags []string) error {
+	if tags == nil {
+		tags = []string{}
+	}
+	res, err := d.db.Exec(ctx, `UPDATE devices SET tags = $2 WHERE id = $1`, id, tags)
+	if err != nil {
+		return err
+	}
+	n := res.RowsAffected()
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // List returns all devices (W2-1 device list / W1-7 indexing source).
 func (d *PostgresDevices) List(ctx context.Context) ([]*Device, error) {
 	rows, err := d.db.Query(ctx, `

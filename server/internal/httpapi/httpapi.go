@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -613,6 +614,21 @@ type deviceOut struct {
 	LastSeen     time.Time `json:"last_seen"`
 }
 
+// toDeviceOut maps a store row to its JSON shape (nil slices rendered []).
+func toDeviceOut(d *store.Device) deviceOut {
+	if d.Interfaces == nil {
+		d.Interfaces = []string{}
+	}
+	if d.Tags == nil {
+		d.Tags = []string{}
+	}
+	return deviceOut{
+		ID: d.ID, Hostname: d.Hostname, OS: d.OS, Arch: d.Arch,
+		AgentVersion: d.AgentVersion, Interfaces: d.Interfaces, Tags: d.Tags,
+		Online: d.Online, FirstSeen: d.FirstSeen, LastSeen: d.LastSeen,
+	}
+}
+
 // deviceList is served at both /api/devices (auth-gated) and /admin/devices
 // (open). It returns every enrolled device with live status.
 func (s *Server) deviceList(w http.ResponseWriter, r *http.Request) {
@@ -623,36 +639,38 @@ func (s *Server) deviceList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, d := range list {
-		if d.Interfaces == nil {
-			d.Interfaces = []string{}
-		}
-		if d.Tags == nil {
-			d.Tags = []string{}
-		}
-		out = append(out, deviceOut{
-			ID: d.ID, Hostname: d.Hostname, OS: d.OS, Arch: d.Arch,
-			AgentVersion: d.AgentVersion, Interfaces: d.Interfaces, Tags: d.Tags,
-			Online: d.Online, FirstSeen: d.FirstSeen, LastSeen: d.LastSeen,
-		})
+		out = append(out, toDeviceOut(d))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 // handleSearch serves Meilisearch device search. Degraded (503) when the
 // index is unavailable so the rest of the API keeps working.
+//
+// B-2: a `tag:<name>` prefix (or a ?tag=<name> param) switches to an exact
+// tag filter (`tags = "<name>"`) over the index instead of a keyword query,
+// so the palette and the device view can jump to a whole tag group.
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if s.search == nil {
 		http.Error(w, "search index not available (meilisearch down or disabled)", http.StatusServiceUnavailable)
 		return
 	}
 	q := r.URL.Query().Get("q")
+	filter := ""
+	if t := r.URL.Query().Get("tag"); t != "" {
+		filter = tagFilterExpr(t)
+		q = ""
+	} else if strings.HasPrefix(q, "tag:") {
+		filter = tagFilterExpr(strings.TrimSpace(q[len("tag:"):]))
+		q = ""
+	}
 	limit := 20
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	res, err := s.search.Search(r.Context(), q, limit)
+	res, err := s.search.SearchFiltered(r.Context(), q, filter, limit)
 	if err != nil {
 		http.Error(w, "search: "+err.Error(), http.StatusBadGateway)
 		return
@@ -661,17 +679,85 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
+// tagFilterExpr builds the Meilisearch filter for an exact tag. Quotes and
+// backslashes are stripped so the expression can never be broken out of
+// (stored tags are normalized to [a-z0-9._-]* anyway; a non-matching value
+// simply yields zero hits).
+func tagFilterExpr(tag string) string {
+	t := strings.Map(func(r rune) rune {
+		if r == '"' || r == '\\' {
+			return -1
+		}
+		return r
+	}, tag)
+	return `tags = "` + t + `"`
+}
+
+// normalizeTags (B-2) validates an operator-supplied tag list: trims,
+// lowercases, dedupes, and enforces shape/limits. A tag is
+// [a-z0-9][a-z0-9._-]* at most maxTagLen characters; at most
+// maxTagsPerDevice tags per device. Returns an empty slice for empty input.
+var tagPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+const (
+	maxTagLen        = 64
+	maxTagsPerDevice = 20
+)
+
+func normalizeTags(in []string) ([]string, error) {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		t := strings.ToLower(strings.TrimSpace(raw))
+		if t == "" {
+			continue
+		}
+		if len(t) > maxTagLen {
+			return nil, fmt.Errorf("tag %q exceeds %d characters", t, maxTagLen)
+		}
+		if !tagPattern.MatchString(t) {
+			return nil, fmt.Errorf("invalid tag %q (want [a-z0-9][a-z0-9._-]*)", t)
+		}
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	if len(out) > maxTagsPerDevice {
+		return nil, fmt.Errorf("at most %d tags per device", maxTagsPerDevice)
+	}
+	return out, nil
+}
+
 // deviceSub routes the /{api|admin}/devices/{id}/... subtree (W2-2 + W3-3 +
-// W4-3 + W6-1):
+// W4-3 + W6-1) plus the B-2 tag endpoints:
 //
 //	POST {id}/commands  — dispatch (auth-gated under /api, open under /admin)
 //	GET  {id}/commands  — pending commands + recorded results (W3-3)
 //	GET  {id}/export    — the per-client full export bundle (W4-3)
 //	GET  {id}/events    — recent indexed agent-log events (W6-1)
+//	PATCH {id}          — replace the device's tag list (B-2)
+//	POST bulk/commands  — capability-gated fan-out to a tag group (B-2)
 func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	// parts: ["api"|"admin", "devices", "<id>", "commands"|"export"|"events"]
-	if len(parts) != 4 || parts[1] != "devices" || parts[2] == "" ||
+	// parts: ["api"|"admin", "devices", ...]
+	if len(parts) < 3 || parts[1] != "devices" || parts[2] == "" {
+		http.Error(w, "expected /devices/{id}/(commands|export|events) or /devices/bulk/commands", http.StatusNotFound)
+		return
+	}
+	if len(parts) == 3 {
+		s.patchDeviceTags(w, r, parts[2])
+		return
+	}
+	if parts[2] == "bulk" {
+		if len(parts) == 4 && parts[3] == "commands" {
+			s.bulkCommand(w, r)
+			return
+		}
+		http.Error(w, "expected /devices/bulk/commands", http.StatusNotFound)
+		return
+	}
+	if len(parts) != 4 ||
 		(parts[3] != "commands" && parts[3] != "export" && parts[3] != "events") {
 		http.Error(w, "expected /devices/{id}/(commands|export|events)", http.StatusNotFound)
 		return
@@ -945,6 +1031,192 @@ func buildCommandAction(in dispatchRequest) (any, error) {
 	default:
 		return nil, fmt.Errorf("unknown action %q (want run_script|reboot)", in.Action)
 	}
+}
+
+// patchDeviceTags is the B-2 tag editor backend: the operator replaces a
+// device's whole tag list from the UI (add/remove chips in the device view).
+//
+//	PATCH /{api|admin}/devices/{id}   {"tags":["web","prod"]}
+//
+//	200 {device, indexed}  — tags persisted; indexed=false when the search
+//	                          index is down (best-effort re-sync)
+//	400  bad body / invalid tags
+//	404  unknown device
+//	500  store error
+//
+// The Meilisearch re-index is best-effort: a tag edit must not fail because
+// the search index is down (the next heartbeat re-index or boot FullSync
+// re-covers it), but when it succeeds the new tag is searchable at once.
+func (s *Server) patchDeviceTags(w http.ResponseWriter, r *http.Request, deviceID string) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "PATCH only", http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	tags, err := normalizeTags(in.Tags)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.devices.SetTags(r.Context(), deviceID, tags); err != nil {
+		if err == store.ErrNotFound {
+			http.Error(w, "unknown device", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "set tags: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	indexed := false
+	if s.search != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		indexed = s.search.Sync(ctx, s.devices, deviceID) == nil
+		cancel()
+	}
+	d, err := s.devices.Get(r.Context(), deviceID)
+	if err != nil {
+		http.Error(w, "device lookup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"device": toDeviceOut(d), "indexed": indexed})
+}
+
+// bulkCommand is the B-2 fan-out: ONE capability-gated command dispatched
+// to every device carrying a tag (a "group" like tag:windows-servers).
+//
+//	POST /{api|admin}/devices/bulk/commands
+//	{"tag":"web", "action":"run_script", "lang":"sh", "script":"<b64>", "args":[...], "timeout_s":0}
+//
+//	200 {tag, requested, pushed:[{device_id,command_id}], offline:[id], failed:{id:err}}
+//	400  bad body / unknown action / unsupported lang / fan-out above the cap
+//	403  session lacks the action's capability (W3-3) — checked BEFORE any
+//	      device is touched
+//	404  no device carries the tag
+//	503  dispatch not wired (tests)
+//
+// A bulk fan-out is exactly N single-device grants: each pushed command
+// carries its own per-device capability token the agent verifies (caps), so
+// the bulk route mints no blanket authority beyond what dispatching to each
+// device individually would grant.
+const maxBulkFanout = 500
+
+// bulkRequest is the JSON body for POST /devices/bulk/commands: a tag plus
+// the same fields as a single dispatch.
+type bulkRequest struct {
+	Tag      string   `json:"tag"`
+	Action   string   `json:"action"`
+	Lang     string   `json:"lang"`
+	Script   string   `json:"script"` // base64
+	Args     []string `json:"args"`
+	TimeoutS int32    `json:"timeout_s"`
+}
+
+func (s *Server) bulkCommand(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.dispatch == nil {
+		http.Error(w, "command dispatch not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var in bulkRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	tags, err := normalizeTags([]string{in.Tag})
+	if err != nil || len(tags) != 1 {
+		http.Error(w, "tag is required (want a single non-empty tag)", http.StatusBadRequest)
+		return
+	}
+	tag := tags[0]
+	action, err := buildCommandAction(dispatchRequest{
+		Action: in.Action, Lang: in.Lang, Script: in.Script,
+		Args: in.Args, TimeoutS: in.TimeoutS,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// W3-3: gate on the operator's capability BEFORE touching any device.
+	capName, ok := caps.ForAction(action)
+	if !ok {
+		http.Error(w, "no capability for action", http.StatusBadRequest)
+		return
+	}
+	if !hasCapability(r.Context(), capName) {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "session lacks capability " + capName,
+		})
+		return
+	}
+	list, err := s.devices.List(r.Context())
+	if err != nil {
+		http.Error(w, "device list: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var ids []string
+	for _, d := range list {
+		for _, t := range d.Tags {
+			if t == tag {
+				ids = append(ids, d.ID)
+				break
+			}
+		}
+	}
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "no devices carry tag " + tag,
+		})
+		return
+	}
+	if len(ids) > maxBulkFanout {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": fmt.Sprintf("tag %s matches %d devices, above the %d fan-out cap", tag, len(ids), maxBulkFanout),
+		})
+		return
+	}
+	pushed := []map[string]string{}
+	var offline []string
+	failed := map[string]string{}
+	for _, id := range ids {
+		// A FRESH action per device: the dispatcher stamps the capability
+		// token into the action struct in place, so reusing one action for
+		// the whole cohort would leave every queued command carrying the
+		// LAST device's token (agents would REFUSE them as misbound).
+		one, err := buildCommandAction(dispatchRequest{
+			Action: in.Action, Lang: in.Lang, Script: in.Script,
+			Args: in.Args, TimeoutS: in.TimeoutS,
+		})
+		if err != nil {
+			// Unreachable — the action was validated above the capability gate.
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		cmdID, err := s.dispatch(id, one)
+		if err != nil {
+			if strings.Contains(err.Error(), "not reachable") {
+				offline = append(offline, id)
+			} else {
+				failed[id] = err.Error()
+			}
+			continue
+		}
+		pushed = append(pushed, map[string]string{"device_id": id, "command_id": cmdID})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tag":       tag,
+		"requested": len(ids),
+		"pushed":    pushed,
+		"offline":   offline,
+		"failed":    failed,
+	})
 }
 
 // ---- W2-3: dynamic baselining ----------------------------------------------

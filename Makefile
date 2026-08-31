@@ -242,6 +242,14 @@ adddevice-ui-smoke: ## Add-device UI DoD: the real <App/> — sign in -> Devices
 sse-ui-smoke: ## B-1 UI DoD: the real <App/> in TWO operator sessions — a device going offline flips both sessions' status badge and a new alert bumps both sessions' nav badge + open inbox, instantly off the live SSE stream (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/sse.smoke.sh
 
+.PHONY: groups-e2e
+groups-e2e: ## B-2 DoD (server half): the operator tags a cohort, filters to the tag group, and ONE command fans out to every matched agent — per-device capability tokens, offline devices reported, capability-gated (in-process server + real mTLS identity). Self-contained
+	@cd server && go run ./cmd/e2e/groups
+
+.PHONY: groups-ui-smoke
+groups-ui-smoke: ## B-2 UI DoD: the real <App/> — tag a cohort through the per-device tag editor, filter to the exact group with `tag:web`, then ONE bulk command fans out to the whole group (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/groups.smoke.sh
+
 .PHONY: frontend
 frontend: ## Run the frontend dev server (http://localhost:5173)
 	cd frontend && npm run dev

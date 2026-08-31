@@ -178,6 +178,13 @@ function Shell() {
     setFocusFilter("");
     setFocusKey((k) => k + 1);
   }, []);
+  // B-2: the palette's `tag:<name>` group row jumps to the device list
+  // filtered to that exact tag.
+  const goToTag = useCallback((tag) => {
+    window.location.hash = "#/devices";
+    setFocusFilter("tag:" + tag);
+    setFocusKey((k) => k + 1);
+  }, []);
 
   if (setupState === null) {
     return (
@@ -213,6 +220,7 @@ function Shell() {
         onClose={() => setPaletteOpen(false)}
         onGoToDevice={goToDevice}
         onGoToAll={goToAll}
+        onGoToTag={goToTag}
       />
     </div>
   );

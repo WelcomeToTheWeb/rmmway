@@ -53,6 +53,9 @@ type DeviceStore interface {
 	Touch(ctx context.Context, id string) error
 	// List returns all devices (admin / W2-1 / W1-7 indexing source).
 	List(ctx context.Context) ([]*Device, error)
+	// SetTags replaces a device's tag list (B-2 operator tagging); the
+	// caller passes an already-normalized list. ErrNotFound when unknown.
+	SetTags(ctx context.Context, id string, tags []string) error
 	// SweepOffline (M4) flips every online device whose last_seen has gone
 	// stale (older than 3× its heartbeat interval, minimum 90s) to offline,
 	// returning the ids it flipped. A device that stops heartbeating must
@@ -190,6 +193,23 @@ func (r *MemoryDeviceStore) Get(_ context.Context, id string) (*Device, error) {
 	}
 	cp := *d
 	return &cp, nil
+}
+
+// SetTags replaces a device's tag list (B-2); store.ErrNotFound when unknown.
+func (r *MemoryDeviceStore) SetTags(_ context.Context, id string, tags []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.devices[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if tags == nil {
+		tags = []string{}
+	}
+	cp := make([]string, len(tags))
+	copy(cp, tags)
+	d.Tags = cp
+	return nil
 }
 
 // GetByID is a test helper for the memory store.

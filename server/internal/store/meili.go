@@ -111,6 +111,9 @@ func (m *Meili) ensureIndex(ctx context.Context) error {
 			"hostname", "id", "interfaces", "tags",
 			"os", "arch", "agent_version",
 		},
+		// B-2: tag groups filter by exact tag (the `tag:web` syntax in the
+		// UI/palette maps to `tags = "web"` here).
+		"filterableAttributes": []string{"tags"},
 		"displayedAttributes": []string{"*"},
 	}, nil)
 	if err != nil {
@@ -234,12 +237,22 @@ type SearchResult struct {
 // Search runs a keyword query over the device index (Cmd-K backing).
 // An empty query returns the first `limit` devices.
 func (m *Meili) Search(ctx context.Context, query string, limit int) (*SearchResult, error) {
+	return m.SearchFiltered(ctx, query, "", limit)
+}
+
+// SearchFiltered is Search with an optional Meilisearch filter expression
+// (B-2 tag groups: `tags = "web"`). An empty query + filter returns the
+// first `limit` devices matching the filter.
+func (m *Meili) SearchFiltered(ctx context.Context, query, filter string, limit int) (*SearchResult, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	body := map[string]any{"q": query, "limit": limit}
+	if filter != "" {
+		body["filter"] = filter
+	}
 	var out SearchResult
-	_, err := m.do(ctx, http.MethodPost, "/indexes/"+IndexName+"/search",
-		map[string]any{"q": query, "limit": limit}, &out)
+	_, err := m.do(ctx, http.MethodPost, "/indexes/"+IndexName+"/search", body, &out)
 	if err != nil {
 		return nil, err
 	}
