@@ -122,27 +122,39 @@ try {
 # The agent is a real Windows service (it reports the SCM handshake on start),
 # so Start-Service succeeds even before the agent has enrolled/connected.
 $svc = "RmmWayAgent"
-# sc.exe parses the binPath value itself: quote the two paths, leave the
-# arguments unquoted -> "`"$bin`" run --config `"$cfg`"". The command is then
-# passed as an ARRAY below: each element becomes a separate argv entry
-# (a single joined string would fail with an invalid parameter).
+# binPath is written DIRECTLY to the registry (not via sc.exe): sc.exe +
+# PowerShell native-argument quoting mangles the embedded quotes (the path
+# "C:\Program Files\..." loses its quotes and the SCM cannot find the exe,
+# so Start-Service fails with a generic "Cannot start service" error). The
+# registry value is the source of truth - set it verbatim, then verify it
+# round-trips before we let the SCM use it.
 $binPath = "`"$bin`" run --config `"$cfg`""
+$svcKey  = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
+function Set-SvcBinPath {
+    param([string]$Value)
+    Set-ItemProperty -Path $svcKey -Name BinPath -Value $Value
+    $stored = (Get-ItemProperty -Path $svcKey -Name BinPath).BinPath
+    if ($stored -cne $Value) {
+        Die "binPath round-trip mismatch - stored [$stored], want [$Value]"
+    }
+    Log "binPath set + verified: $stored"
+}
 if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
     # Re-run with a new binary/config path: update binPath, not just restart,
     # or the change never takes effect.
-    & sc.exe config $svc binPath= $binPath | Out-Null
-    if ($LASTEXITCODE -ne 0) { Log "WARNING: sc.exe config failed: binPath unchanged" }
+    Set-SvcBinPath $binPath
     Log "service $svc already exists - updating binPath + restarting"
     try { Restart-Service $svc -ErrorAction Stop } catch { Log "WARNING: restart failed: $($_.Exception.Message)" }
 } else {
-    # & with an array splats each element as its own argument; passing the
-    # whole command as one string makes sc.exe fail with an invalid parameter.
-    $scArgs = @("create", $svc, "binPath=", $binPath, "start=", "auto")
-    & sc.exe @scArgs | Out-Null
+    # Register with a placeholder binPath (no spaces -> no quoting involved),
+    # set the real quoted binPath via the registry, then enable auto-start.
+    & sc.exe create $svc binPath= C:\Windows\system32\cmd.exe start= disabled | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Die "sc.exe create failed (re-run as Administrator)"
     }
     Log "service $svc registered"
+    Set-SvcBinPath $binPath
+    & sc.exe config $svc start= auto | Out-Null
     try {
         Start-Service $svc -ErrorAction Stop
     } catch {
