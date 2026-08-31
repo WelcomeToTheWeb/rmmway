@@ -70,14 +70,16 @@ _Proof: `make setup-e2e` (real server vs scratch Timescale — fresh DB triggers
 _Proof: `make sse-ui-smoke` (jsdom drives the real <App/> in TWO operator sessions: each signs in through the real Login form and opens its own live SSE stream with the operator JWT; a device going offline flips both sessions' status badge in ~20 ms and a new alert bumps both sessions' nav badge AND the open inbox in ~20–30 ms — far inside the 5 s device poll / 15 s alert-counts / 10 s inbox polls, so the updates are provably from the stream, not polling) + `make webhook-e2e` (server half of the DoD: the offline sweeper's inventory event journals + streams over real SSE, device-scoped catch-up filter verified)._
 
 ### B-2 — Dynamic Device Grouping & Bulk Actions
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** HermesAgent
 - **Started:** 2026-08-30
-- **Done:** —
+- **Done:** 2026-08-31 (commit 7fc26de)
 - **Depends on:** B-1
 - **Effort/Impact:** M / Medium
 **Description:** Implement custom tagging in the UI backed by Meilisearch. Allow operators to select a group (e.g., `tag:windows-servers`) and dispatch a capability-gated script or playbook to the entire cohort.
 **Definition of done:** Operator can filter to a specific tag and execute a single command that fans out to all matched agents.
+
+_Proof: `make groups-e2e` (in-process server + 3 devices with real mTLS identities, 2 online / 1 offline: the operator tags the cohort via `PATCH /api/devices/{id}`, filters to the `tag:web` group, and ONE `POST /api/devices/bulk/commands` run_script fans out — both online agents verify their OWN per-device capability token and execute exactly once (SUCCEEDED), the offline device is reported in `offline[]` (not faked); empty group → 404; reboot fan-out → 403 because the session lacks `rmmway.reboot`, nothing dispatched). The harness caught a real bug in the first pass: the bulk route reused one action struct for the whole cohort, and the dispatcher stamps the capability token into it in place — every queued command ended up carrying the LAST device's token and the agents REFUSED them as misbound; fixed by building a fresh action per device) + `make groups-ui-smoke` (jsdom drives the real <App/>: tag a cohort through the per-device tag editor (PATCH with the full tag list per device), narrow the device list with `tag:web` (exact group, 2 of 3), then "Dispatch to group" fires ONE bulk command — the request carries tag/action/base64 script and the result panel reports 2 matched · 1 pushed (device → command id) · 1 offline). Server: Meilisearch `tags` filterable + `/api/search?tag=…` / `tag:<name>` exact-group queries. All four UI smokes, both Go modules (build + test) and the vite production build are clean._
 
 ### B-3 — Customizable Telemetry Dashboards
 - **Status:** ⬜ pending
