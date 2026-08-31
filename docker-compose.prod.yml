@@ -160,7 +160,7 @@ services:
       # C2: selects the boot-time env; non-dev refuses the built-in dev
       # defaults (JWT secret / admin creds / Meili master key).
       RMMWAY_ENV: ${RMMWAY_ENV:-prod}
-      RMMWAY_PG_DSN: postgres://${RMMWAY_PG_USER:***@timescale:5432/rmmway?sslmode=disable
+      RMMWAY_PG_DSN: postgres://${RMMWAY_PG_USER:-rmmway}:${RMMWAY_PG_PASSWORD}@timescale:5432/rmmway?sslmode=disable
       RMMWAY_NATS_URL: nats://nats:4222
       RMMWAY_REDIS_ADDR: redis:6379
       RMMWAY_MINIO_ENDPOINT: http://minio:9000
