@@ -146,19 +146,19 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 **Definition of done:** Operator navigates to Events, sees the most recent 200 journal entries with category color-coding; applies the `category=alert` + `device=web-01` filter to isolate one device's alert events; clicks an event row to see its full JSON envelope in the detail pane; clicks "Load earlier" to page to the next batch; a new event arriving via SSE appears at the top without a page refresh.
 
 ### D-3 — Heal Engine Dashboard
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** Sisyphus
 - **Started:** 2026-09-01
-- **Done:** —
+- **Done:** 2026-09-01 (claim 35bb30c, feat 61a9f7e)
 - **Depends on:** —
 - **Effort/Impact:** M-L / High
 **Description:** Add a top-level "Heal" nav item (5th in header) routing to `#/heal`. The page has two panels: (1) **Playbooks** — a table listing all heal playbooks (`GET /api/heal/playbooks`): name, target scope (device / tag / all), trigger condition (which alert or metric threshold activates it), action (script / reboot / restart-service), enabled/disabled toggle, last-run timestamp. A "New playbook" button opens a form (name, scope picker, trigger condition, action + parameters) posting to `POST /api/heal/playbooks`. (2) **Runs** — a filterable list of heal executions (`GET /api/heal/runs?status=&device_id=&limit=`): timestamp, playbook name, target device, status (RUNNING / SUCCEEDED / FAILED / SKIPPED), duration. Filter dropdowns for status and device narrow the list server-side. Clicking a run navigates to a detail view (`GET /api/heal/runs/{id}`) showing the step-by-step execution trace: which trigger fired, what action was dispatched, the agent's response, and any error output (the server returns `{run, events[]}`). A prominent "Run Pass Now" button (`POST /api/heal/pass`) triggers an immediate evaluation across all enabled playbooks; the page shows a spinner and then refreshes the Runs panel with new entries. Add `api.healPlaybooks(token)`, `api.healCreatePlaybook(token, body)`, `api.healRuns(token, {status, device_id, limit})`, `api.healRun(token, id)`, `api.healPass(token)` to `api.js`.
 **Definition of done:** Operator sees 3 pre-existing playbooks in the table; toggles one off (PATCH); clicks "Run Pass Now" and watches a new run appear in the Runs panel within 10 seconds with status transitioning from RUNNING to SUCCEEDED; clicks the run to see the full execution trace including the agent's script output.
 
 ### D-4 — Webhook Management
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** Sisyphus
+- **Started:** 2026-09-01
 - **Done:** —
 - **Depends on:** —
 - **Effort/Impact:** M / Medium
