@@ -45,6 +45,36 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/webhook"
 )
 
+// hostIPv4s returns the machine's non-loopback unicast IPv4 addresses —
+// the names a LAN agent will actually dial the server with when the server
+// is bound to all interfaces.
+func hostIPv4s() []string {
+	var out []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return out
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipn, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ip4 := ipn.IP.To4(); ip4 != nil {
+				out = append(out, ip4.String())
+			}
+		}
+	}
+	return out
+}
+
 // mtlsSANs derives the SAN names for the mTLS server cert from the listen
 // addresses: whatever hosts the server is reachable on. Agents typically
 // dial by the RMMWAY_SERVER hostname or by loopback, so we cover both the
@@ -54,6 +84,11 @@ import (
 // (e.g. rmm.example.com), which a bare listen address (":50052") can't
 // express — RMMWAY_GRPC_MTLS_SANs (comma-separated DNS names / IPs) adds
 // those to the cert so hostname verification passes for remote agents.
+//
+// T3: a bare all-interfaces bind (":50052" / 0.0.0.0 / ::) also carries no
+// hostname, but LAN agents dial the machine's IP — those are seeded into
+// the cert too, so "server on the LAN, agent dials by IP" works without
+// configuring the env var.
 func mtlsSANs(listenAddrs ...string) []string {
 	seen := map[string]bool{}
 	sans := []string{}
@@ -73,20 +108,22 @@ func mtlsSANs(listenAddrs ...string) []string {
 		if i := strings.Index(l, "://"); i >= 0 {
 			l = l[i+3:]
 		}
-		// host:port -> host (a bare port / ":50051" means all interfaces).
-		host := l
-		if i := strings.LastIndex(l, ":"); i >= 0 {
-			if net.ParseIP(l[i+1:]) != nil {
-				host = l[:i]
+		// host:port -> host. A bare port (":50051") or 0.0.0.0/"::" means
+		// all interfaces: the address carries no hostname of its own.
+		host, _, err := net.SplitHostPort(l)
+		if err != nil {
+			host = l // no host:port separator — the whole string is the name.
+		}
+		switch host {
+		case "", "0.0.0.0", "::":
+			// T3: seed the host's own IPv4 addresses — that is what LAN
+			// agents dial.
+			for _, ip := range hostIPv4s() {
+				add(ip)
 			}
+		default:
+			add(host)
 		}
-		if host == "" {
-			continue
-		}
-		add(host)
-		// ":50051" (all interfaces) is also dialable by the machine's own
-		// hostname — the caller's env is unknown here, so the "localhost"
-		// defaults above are the reliable fallback.
 	}
 	// A-1: explicitly configured public names (production domain, etc.).
 	for _, s := range strings.Split(os.Getenv("RMMWAY_GRPC_MTLS_SANs"), ",") {
