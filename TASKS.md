@@ -176,10 +176,10 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 **Definition of done:** Operator opens Baseline, sees all devices' current anomaly scores sorted worst-first; filters to `min_score=0.7` to see only significant deviations; clicks "Recompute" for the full fleet and watches scores update after the run completes; clicks a device name to jump to its detail page with the metrics chart visible.
 
 ### D-6 — One-Click Client Export
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** Sisyphus
 - **Started:** 2026-09-01
-- **Done:** —
+- **Done:** 2026-09-01 (claim c21a89f, feat da2412a)
 - **Depends on:** —
 - **Effort/Impact:** S / Medium
 **Description:** In the device detail panel (`Devices.jsx`), add an "Export" button in the device's action bar (next to the existing dispatch and tag controls). Clicking it opens a small confirmation dialog: "Export all data for <hostname>? Includes inventory, raw metrics (Parquet), 1-min rollups (Parquet), and full alert history. Estimated size: ~<n> MB." (size estimate from the device's metrics row count if available, or omit). On confirm, the button transitions to a progress state ("Preparing…") while the browser fetches `GET /api/devices/{id}/export` (returns a ZIP). On completion, triggers a browser download of the ZIP file named `<hostname>-rmmway-export-<date>.zip`. Add `api.exportDevice(token, deviceId)` to `api.js` (returns a blob, not JSON — use `fetch` directly with `response.blob()` since the existing `request()` helper assumes JSON). No time-range filter in v1 (the server supports `?since=&until=` but the UI exposes the full history; a range picker is a future enhancement).
