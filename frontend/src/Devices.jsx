@@ -107,6 +107,177 @@ function DeviceEvents({ token, deviceId, onUnauthorized }) {
   );
 }
 
+// D-1: the per-device "Commands" panel — every command dispatched to this
+// device, newest first, with the agent's reported outcome. pending[] rows
+// show PENDING (no report yet) or the agent's non-final ack (RECEIVED /
+// RUNNING); rows with a final report show its status, and expanding a row
+// reveals the reported output (stdout/stderr tail, exit code, error).
+// Live updates ride the SSE stream (a command-category envelope bumps
+// liveTick -> immediate re-fetch); the manual refresh is the fallback for
+// when the stream is down.
+const CMD_STATUS = {
+  0: ["UNSPECIFIED", "pill-mut"],
+  1: ["RECEIVED", "pill-run"],
+  2: ["RUNNING", "pill-run"],
+  3: ["SUCCEEDED", "pill-ok"],
+  4: ["FAILED", "pill-bad"],
+  5: ["TIMED_OUT", "pill-bad"],
+  6: ["UNSUPPORTED", "pill-bad"],
+  7: ["REFUSED", "pill-bad"],
+};
+const CMD_PENDING = ["PENDING", "pill-mut"];
+
+// The command's action type (run_script/reboot) lives only in the pending
+// proto (Action oneof, serialized as { RunScript: {...} } / { Reboot: {} });
+// results carry only the outcome, so the action is resolved from there.
+function cmdAction(cmd) {
+  if (!cmd || !cmd.Action) return null;
+  if (cmd.Action.RunScript) {
+    const lang = cmd.Action.RunScript.Lang || "sh";
+    return `run_script (${lang})`;
+  }
+  if (cmd.Action.Reboot) return "reboot";
+  return null;
+}
+
+function cmdStamp(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
+}
+
+// Merge pending commands with their (possibly non-final) results so each
+// command renders as exactly one row: pending wins for identity (it carries
+// the action + issued time), the result supplies the freshest status/output.
+function mergedCmdRows(pending, results) {
+  const byId = new Map();
+  for (const r of results || []) byId.set(r.command_id, r);
+  const rows = (pending || []).map((c) => ({
+    id: c.Id,
+    issued: c.IssuedAtMs || 0,
+    action: cmdAction(c),
+    result: byId.get(c.Id) || null,
+  }));
+  // Results whose command already left pending[] (history) get a row too —
+  // the server keeps the device's full command record.
+  const pendingIds = new Set((pending || []).map((c) => c.Id));
+  for (const r of results || []) {
+    if (!pendingIds.has(r.command_id)) {
+      rows.push({
+        id: r.command_id,
+        issued: r.completed_at_ms || 0,
+        action: null,
+        result: r,
+      });
+    }
+  }
+  return rows.sort((a, b) => (b.issued || 0) - (a.issued || 0));
+}
+
+function DeviceCommands({ token, deviceId, onUnauthorized, liveTick }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [openCmd, setOpenCmd] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api.commands(token, deviceId);
+      setData(res);
+      setError(null);
+    } catch (e) {
+      if (e.unauthorized) onUnauthorized();
+      else setError(e.message);
+    }
+  }, [token, deviceId, onUnauthorized]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // D-1: a final command result lands on the live stream (App bumps
+  // liveTick for command-category events); re-fetch at once instead of
+  // waiting for the operator to click refresh. liveTick=0 = initial mount
+  // (load() already ran).
+  useEffect(() => {
+    if (liveTick && liveTick > 0) load();
+  }, [liveTick, load]);
+
+  const rows = data === null ? null : mergedCmdRows(data.pending, data.results);
+
+  return (
+    <div className="device-commands">
+      <div className="device-commands-head">
+        <span className="muted">Commands (D-1 · newest first, live over the event stream)</span>
+        <button className="btn" onClick={load} title="Refresh now">
+          ↻ refresh
+        </button>
+      </div>
+      {error && <div className="banner err">{error}</div>}
+      {rows === null && !error ? (
+        <div className="empty">Loading commands…</div>
+      ) : rows.length === 0 ? (
+        <div className="empty muted">No commands dispatched yet.</div>
+      ) : (
+        <table className="events cmds">
+          <thead>
+            <tr>
+              <th>Dispatched</th>
+              <th>Command</th>
+              <th>Action</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const [label, cls] = row.result ? CMD_STATUS[row.result.status] || [String(row.result.status), "pill-mut"] : CMD_PENDING;
+              const open = openCmd === row.id;
+              const out = row.result;
+              return (
+                <Fragment key={row.id}>
+                  <tr
+                    className={open ? "cmd-row row-open" : "cmd-row"}
+                    onClick={() => setOpenCmd(open ? null : row.id)}
+                    title="Show/hide the agent's reported output"
+                  >
+                    <td className="mono evt-time">{cmdStamp(row.issued)}</td>
+                    <td className="mono">
+                      <span className="chev">{open ? "▾" : "▸"}</span> {row.id}
+                    </td>
+                    <td>{row.action || <span className="muted">—</span>}</td>
+                    <td>
+                      <span className={"pill " + cls}>{label}</span>
+                    </td>
+                  </tr>
+                  {open && out && (
+                    <tr className="detail-row">
+                      <td colSpan={4} className="detail-cell">
+                        <div className="cmd-detail mono">
+                          {out.exit_code !== undefined && out.exit_code !== null && (
+                            <div>exit code: {out.exit_code}</div>
+                          )}
+                          {out.stdout_tail && <pre className="cmd-out">{out.stdout_tail}</pre>}
+                          {out.stderr_tail && (
+                            <pre className="cmd-out err">{out.stderr_tail}</pre>
+                          )}
+                          {out.error && <div className="banner err">error: {out.error}</div>}
+                          {!out.stdout_tail && !out.stderr_tail && !out.error && (
+                            <div className="muted">The agent reported {label} with no output.</div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 // Per-device metrics viewer: a series picker (which (name, source) series
 // the device has reported), a range selector, and a line chart of the
 // server-bucketed samples of the chosen series. The server averages raw
@@ -901,6 +1072,12 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
                             token={token}
                             device={d}
                             onUnauthorized={onUnauthorized}
+                          />
+                          <DeviceCommands
+                            token={token}
+                            deviceId={d.id}
+                            onUnauthorized={onUnauthorized}
+                            liveTick={liveTick}
                           />
                           <DeviceEvents token={token} deviceId={d.id} onUnauthorized={onUnauthorized} />
                         </div>

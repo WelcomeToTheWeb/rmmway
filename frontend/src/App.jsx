@@ -129,9 +129,10 @@ function Shell() {
 
   // B-1: the live event stream. A device online/offline flip re-pulls the
   // device list (the status badge updates without waiting for the 5s poll);
-  // an alert event re-pulls the open count (the nav badge updates at once)
-  // AND bumps the alerts inbox (a new alert appears in the open list
-  // immediately, not on the next 10s poll).
+  // a command result (D-1) re-pulls the device view so the open device's
+  // Commands panel refreshes at once; an alert event re-pulls the open count
+  // (the nav badge updates at once) AND bumps the alerts inbox (a new alert
+  // appears in the open list immediately, not on the next 10s poll).
   // The stream is best-effort — it auto-reconnects and resumes from
   // Last-Event-ID; when the framework is unwired (in-memory server) it 401s
   // / 503s and the polls above remain the fallback.
@@ -143,7 +144,7 @@ function Shell() {
       token,
       onEvent: (env) => {
         if (!env || !env.category) return;
-        if (env.category === "inventory") {
+        if (env.category === "inventory" || env.category === "command") {
           setDeviceTick((t) => t + 1);
         } else if (env.category === "alert") {
           refreshAlerts();

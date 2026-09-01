@@ -254,6 +254,10 @@ groups-ui-smoke: ## B-2 UI DoD: the real <App/> — tag a cohort through the per
 metrics-ui-smoke: ## Per-device metrics viewer UI DoD: the real <App/> — the device detail shows the Metrics panel (series picker + bucketed SVG chart), the range selector re-requests with the new range, per-source series send name+source (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/metrics.smoke.sh
 
+.PHONY: commands-ui-smoke
+commands-ui-smoke: ## D-1 UI DoD: the real <App/> — the device detail shows the Commands panel (full dispatch history, newest first, PENDING/RUNNING/SUCCEEDED statuses, expandable agent output); a command-category SSE event re-fetches the list live and the manual refresh is the fallback (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/commands.smoke.sh
+
 .PHONY: frontend
 frontend: ## Run the frontend dev server (http://localhost:5173)
 	cd frontend && npm run dev

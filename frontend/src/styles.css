@@ -376,6 +376,20 @@ table.events .evt-attrs { color: var(--muted); }
 .lvl-warn  { color: #fcd34d; background: rgba(251,191,36,0.14); }
 .lvl-error { color: #fca5a5; background: rgba(239,68,68,0.16); }
 
+/* D-1: per-device command results & history (expandable device row) */
+.device-commands { display: flex; flex-direction: column; gap: 8px; }
+.device-commands-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+tr.cmd-row { cursor: pointer; }
+tr.cmd-row:hover { background: var(--bg-elev2); }
+.cmd-detail { display: flex; flex-direction: column; gap: 8px; }
+.cmd-out {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; margin: 0; overflow-x: auto;
+  white-space: pre-wrap; word-break: break-word;
+  font-size: 12.5px; line-height: 1.5;
+}
+.cmd-out.err { border-color: rgba(239,68,68,0.4); }
+
 /* ---- Add a device (modal) --------------------------------------------- */
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 50;

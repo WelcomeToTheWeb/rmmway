@@ -82,6 +82,25 @@ export const api = {
       body,
     }),
 
+  // GET /api/devices/{id}/commands -> { device_id, pending[], results[] }
+  // (D-1: the command audit view). pending[] = dispatched commands with no
+  // final report yet — proto JSON (PascalCase): Id, IssuedAtMs, Action
+  // (the oneof serializes as { RunScript: { lang, script_b64... } } or
+  // { Reboot: {...} }). results[] = the agent's reports (snake_case):
+  // command_id, status (NUMBER: 1=RECEIVED 2=RUNNING 3=SUCCEEDED 4=FAILED
+  // 5=TIMED_OUT 6=UNSUPPORTED 7=REFUSED), exit_code, stdout_tail,
+  // stderr_tail, error, completed_at_ms. A command leaves pending[] once
+  // the agent reports a final status (3–7). 404 unknown device; 503 when
+  // command state is unwired (in-memory server).
+  commands: (token, deviceId, { limit = 100 } = {}) => {
+    const q = new URLSearchParams();
+    q.set("limit", String(limit));
+    return request(
+      `/api/devices/${encodeURIComponent(deviceId)}/commands?${q.toString()}`,
+      { token }
+    );
+  },
+
   // PATCH /api/devices/{id} { tags: [...] } -> { device, indexed } (B-2:
   // replaces the device's whole tag list; the server normalizes tags and
   // best-effort re-syncs the search index — indexed=false means Meilisearch
