@@ -176,9 +176,9 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 **Definition of done:** Operator opens Baseline, sees all devices' current anomaly scores sorted worst-first; filters to `min_score=0.7` to see only significant deviations; clicks "Recompute" for the full fleet and watches scores update after the run completes; clicks a device name to jump to its detail page with the metrics chart visible.
 
 ### D-6 — One-Click Client Export
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** Sisyphus
+- **Started:** 2026-09-01
 - **Done:** —
 - **Depends on:** —
 - **Effort/Impact:** S / Medium
