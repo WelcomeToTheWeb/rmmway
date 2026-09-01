@@ -156,19 +156,19 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 **Definition of done:** Operator sees 3 pre-existing playbooks in the table; toggles one off (PATCH); clicks "Run Pass Now" and watches a new run appear in the Runs panel within 10 seconds with status transitioning from RUNNING to SUCCEEDED; clicks the run to see the full execution trace including the agent's script output.
 
 ### D-4 — Webhook Management
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** Sisyphus
 - **Started:** 2026-09-01
-- **Done:** —
+- **Done:** 2026-09-01 (claim 043a42a, feat c4902d6)
 - **Depends on:** —
 - **Effort/Impact:** M / Medium
 **Description:** Add a "Webhooks" section (either a 6th nav item or a sub-section within a "Settings" page — implementer's choice, but it must be reachable from the main nav without digging). The page lists all configured webhook endpoints (`GET /api/webhooks`): name, URL, subscribed event categories (checkboxes: alert, inventory, automation, command), enabled/disabled, last delivery timestamp, consecutive failure count. A "Add webhook" form (name, URL, category checkboxes, secret for HMAC signing) posts to `POST /api/webhooks`. Each row has an "Edit" (PATCH) and "Delete" (DELETE) action, plus a "View deliveries" link that opens the per-endpoint event journal (`GET /api/webhooks/{id}/events?after=&limit=&category=`): the events this endpoint is subscribed to, oldest-first, with delivery status. A "Replay from…" button (`POST /api/webhooks/{id}/replay` with body `{"from_seq": N}`) resets the endpoint's delivery cursor to sequence N, causing the sweeper to re-deliver all events from that point forward; the UI offers "Replay all" (from_seq=0) and "Replay since last success" (from_seq = last successfully delivered seq). Add `api.webhooks(token)`, `api.webhookCreate(token, body)`, `api.webhookUpdate(token, id, body)`, `api.webhookDelete(token, id)`, `api.webhookEvents(token, id, {after, limit, category})`, `api.webhookReplay(token, id, {from_seq})` to `api.js`.
 **Definition of done:** Operator adds a webhook pointing at `https://hooks.slack.com/T000/B000/000` subscribed to `alert` events with a shared secret; disables it (toggles off); clicks "View deliveries" to see the journaled events this endpoint is subscribed to (with sequence numbers and timestamps); clicks "Replay all" and sees the cursor reset confirmation (from_seq=0, last_seq reported); deletes the webhook and it disappears from the list.
 
 ### D-5 — Baseline Anomaly Explorer
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** Sisyphus
+- **Started:** 2026-09-01
 - **Done:** —
 - **Depends on:** —
 - **Effort/Impact:** S / Medium
