@@ -166,10 +166,10 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 **Definition of done:** Operator adds a webhook pointing at `https://hooks.slack.com/T000/B000/000` subscribed to `alert` events with a shared secret; disables it (toggles off); clicks "View deliveries" to see the journaled events this endpoint is subscribed to (with sequence numbers and timestamps); clicks "Replay all" and sees the cursor reset confirmation (from_seq=0, last_seq reported); deletes the webhook and it disappears from the list.
 
 ### D-5 — Baseline Anomaly Explorer
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** Sisyphus
 - **Started:** 2026-09-01
-- **Done:** —
+- **Done:** 2026-09-01 (claim c62a58c, feat 028a0e3)
 - **Depends on:** —
 - **Effort/Impact:** S / Medium
 **Description:** Add a "Baseline" nav item (or a tab within the Alerts page — "Alerts | Baseline" tab switcher) routing to `#/baseline`. The page shows the current anomaly score landscape: a table (`GET /api/baseline/anomalies`) with columns: device hostname, metric name, source, current value, expected range (lower–upper), anomaly score (0–1, color-coded green→yellow→red), channel (seasonal / trend), last computed timestamp. Rows are sortable by score (descending by default) so the most anomalous readings float to the top. A device+metric filter narrows the view. A "Recompute" button (`POST /api/baseline/run`) triggers a fresh baseline computation for the selected scope (all devices, or a filtered subset); the page shows a progress indicator and refreshes the table on completion. Clicking a row's device hostname navigates to that device's detail page (existing `#/devices` with focus filter). Add `api.baselineAnomalies(token, {device_id, name, min_score})` and `api.baselineRun(token, {device_id?})` to `api.js`.
