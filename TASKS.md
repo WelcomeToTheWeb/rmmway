@@ -126,10 +126,10 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 > **How this differs from Track B:** Track B builds new frontend capabilities (dashboards, SSE reactivity). Track D closes the gap where the backend is complete but the UI was never built — lower risk, faster ROI, no schema or protocol changes.
 
 ### D-1 — Command Results & History View
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** Sisyphus
 - **Started:** 2026-09-01
-- **Done:** —
+- **Done:** 2026-09-01 (commit 50da089; fix 186f00a)
 - **Depends on:** —
 - **Effort/Impact:** M / High
 **Description:** In the device detail panel, add a "Commands" tab (or section below the existing dispatch form) that lists all commands ever dispatched to that device, newest first. Each row shows: command ID, action type (run_script / reboot), timestamp dispatched, current status (PENDING / RUNNING / SUCCEEDED / FAILED / TIMEOUT), and a expandable detail area showing the agent's reported output (stdout/stderr or exit code). Wire to `GET /api/devices/{id}/commands` (already registered in `httpapi.go` deviceSub handler). Add the corresponding `api.commands(token, deviceId, {limit})` method to `api.js`. Auto-refresh the list on SSE events matching the device's command category, and provide a manual "Refresh" button as fallback.
