@@ -146,9 +146,9 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 **Definition of done:** Operator navigates to Events, sees the most recent 200 journal entries with category color-coding; applies the `category=alert` + `device=web-01` filter to isolate one device's alert events; clicks an event row to see its full JSON envelope in the detail pane; clicks "Load earlier" to page to the next batch; a new event arriving via SSE appears at the top without a page refresh.
 
 ### D-3 — Heal Engine Dashboard
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** Sisyphus
+- **Started:** 2026-09-01
 - **Done:** —
 - **Depends on:** —
 - **Effort/Impact:** M-L / High
