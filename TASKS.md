@@ -136,9 +136,9 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 **Definition of done:** Operator dispatches a reboot via the existing form; within 5 seconds (or on next SSE event) a new row appears in the Commands section with status RUNNING, then transitions to SUCCEEDED or FAILED with the agent's exit output visible on expand. Refreshing the page preserves the full history (server-persisted).
 
 ### D-2 — Event Journal Browser
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** Sisyphus
+- **Started:** 2026-09-01
 - **Done:** —
 - **Depends on:** —
 - **Effort/Impact:** M / High
