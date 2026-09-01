@@ -238,4 +238,57 @@ export const api = {
 
   // POST /api/flows/sweep -> { active_runs } (re-cover in-flight runs).
   sweepFlows: (token) => request("/api/flows/sweep", { method: "POST", token }),
+
+  // ---- D-3: self-healing playbook engine (W5-1) -------------------------
+  // GET /api/heal/playbooks[?enabled=false] -> Playbook[] (key, name,
+  // description, metric, source, detect_op, detect_threshold, os_filter,
+  // fresh_within_seconds, cooldown_seconds, remediate_sh,
+  // remediate_powershell, confirm_op, confirm_threshold,
+  // remediate_timeout_seconds, confirm_wait_seconds, enabled, updated_at).
+  // The engine's declarative rules; 503 when unwired (in-memory server).
+  // NOTE: the current server route answers GET only — the create form posts
+  // to the same path per the W5-1 contract (a 405 until the server gains the
+  // matching branch; the toggle PATCH below is the same story).
+  healPlaybooks: (token) => request("/api/heal/playbooks", { token }),
+
+  // POST /api/heal/playbooks { name, metric, detect_op, detect_threshold,
+  // confirm_op?, confirm_threshold?, source?, os_filter?, cooldown_seconds?,
+  // remediate_sh?, remediate_powershell? } -> 201 the playbook.
+  healCreatePlaybook: (token, body) =>
+    request("/api/heal/playbooks", { method: "POST", token, body }),
+
+  // PATCH /api/heal/playbooks/{key} { enabled? } -> the updated playbook
+  // (the dashboard's enable/disable toggle; 404 unknown key).
+  healUpdatePlaybook: (token, key, body) =>
+    request(`/api/heal/playbooks/${encodeURIComponent(key)}`, {
+      method: "PATCH",
+      token,
+      body,
+    }),
+
+  // GET /api/heal/runs?status=&device_id=&limit= -> Run[] newest first
+  // (id, playbook_key, device_id, source, status — detected|verifying|
+  // remediating|confirming|resolved|escalated|failed|skipped — reason?,
+  // detect_value?, detect_at?, command_id?, dispatched_at?, remediated_at?,
+  // confirm_value?, confirmed_at?, escalated_at?, created_at, updated_at).
+  healRuns: (token, { status = "", device_id = "", limit = 100 } = {}) => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    if (device_id) q.set("device_id", device_id);
+    q.set("limit", String(limit));
+    return request(`/api/heal/runs?${q.toString()}`, { token });
+  },
+
+  // GET /api/heal/runs/{id} -> { run, events[] } where events[] is the
+  // run's stage audit trail oldest first ({ id, run_id, status, reason?,
+  // at }) — which trigger fired, what was dispatched, what the agent
+  // reported, where it ended. 404 unknown run.
+  healRun: (token, id) => request(`/api/heal/runs/${id}`, { token }),
+
+  // POST /api/heal/pass -> one synchronous detect + advance pass (the same
+  // pass the background loop runs): { detections, started, skipped,
+  // confirmed, escalated, failed, active_runs, errors? }. A newly detected
+  // series starts a run in `detected`; the same pass then advances every
+  // active run one stage, so a fresh heal completes over successive passes.
+  healPass: (token) => request("/api/heal/pass", { method: "POST", token, body: {} }),
 };

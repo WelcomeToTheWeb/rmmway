@@ -8,14 +8,17 @@ import Devices from "./Devices.jsx";
 import Alerts from "./Alerts.jsx";
 import Flows from "./Flows.jsx";
 import Events from "./Events.jsx";
+import Heal from "./Heal.jsx";
 import Palette from "./Palette.jsx";
 
-// ---- tiny hash router: #/devices (default), #/alerts, #/flows, #/events -----
+// ---- tiny hash router: #/devices (default), #/alerts, #/flows, #/events,
+// ---- #/heal
 function parseRoute() {
   const h = window.location.hash;
   if (h.startsWith("#/alerts")) return "alerts";
   if (h.startsWith("#/flows")) return "flows";
   if (h.startsWith("#/events")) return "events";
+  if (h.startsWith("#/heal")) return "heal";
   return "devices";
 }
 
@@ -64,6 +67,12 @@ function Header({ route, openCount, onOpenPalette }) {
           href="#/events"
         >
           Events
+        </a>
+        <a
+          className={"nav-item" + (route === "heal" ? " active" : "")}
+          href="#/heal"
+        >
+          Heal
         </a>
         <a
           className="nav-item"
@@ -228,6 +237,8 @@ function Shell() {
             onGoToDevice={goToDevice}
             lastEvent={lastEvent}
           />
+        ) : route === "heal" ? (
+          <Heal token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
         ) : (
           <Devices
             token={token}

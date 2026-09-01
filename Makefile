@@ -262,6 +262,10 @@ commands-ui-smoke: ## D-1 UI DoD: the real <App/> — the device detail shows th
 events-ui-smoke: ## D-2 UI DoD: the real <App/> — the "Events" page pages forward to the end of the 500-entry journal and shows the newest batch first; category+device filters hit the server query; clicking a row reveals the full envelope JSON with a go-to-device link; "Load earlier" pages back and "Jump to latest" returns; a new SSE envelope appears at the top without a re-fetch (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/events.smoke.sh
 
+.PHONY: heal-ui-smoke
+heal-ui-smoke: ## D-3 UI DoD: the real <App/> — the 5th nav item "Heal" opens the self-healing dashboard: the 3 pre-existing playbooks (trigger, scope, action, last run) with enable toggles (PATCH), "Run Pass Now" starts a new run that walks detected->verifying->remediating->confirming->resolved across passes with the pass summary updating, and clicking a run opens its full stage trace (trigger fired, command dispatched, agent script output, confirmation); status/device filters hit the server query (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/heal.smoke.sh
+
 .PHONY: frontend
 frontend: ## Run the frontend dev server (http://localhost:5173)
 	cd frontend && npm run dev
