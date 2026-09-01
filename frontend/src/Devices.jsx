@@ -284,6 +284,87 @@ function DeviceCommands({ token, deviceId, onUnauthorized, liveTick }) {
 // samples into fixed buckets, so even 30d stays a few hundred points.
 const METRIC_RANGES = ["1h", "6h", "24h", "7d", "30d"];
 
+// D-6: one-click client export. One request, one self-verifying ZIP bundle
+// (manifest.json + device.json + metrics/rollups Parquet + full alert
+// history) downloaded under a hostname-stamped name.
+function DeviceExport({ token, device, onUnauthorized }) {
+  // phase machine: idle → confirm → preparing → done | error
+  const [phase, setPhase] = useState("idle");
+  const [result, setResult] = useState(null); // { name, kb }
+  const [err, setErr] = useState("");
+  const host = device.hostname || device.id;
+
+  const run = async () => {
+    setPhase("preparing");
+    setErr("");
+    try {
+      const blob = await api.exportDevice(token, device.id);
+      const name = `${host}-rmmway-export-${new Date().toISOString().slice(0, 10)}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      setResult({ name, kb: Math.max(1, Math.round(blob.size / 1024)) });
+      setPhase("done");
+    } catch (e) {
+      if (e.unauthorized) return onUnauthorized();
+      setErr(
+        e.status === 503
+          ? "Export is not wired on this server (in-memory mode) — start with Postgres to enable client exports."
+          : e.message
+      );
+      setPhase("error");
+    }
+  };
+
+  return (
+    <div className="device-export">
+      <div className="device-export-row row-actions">
+        <span className="muted">
+          Client export (D-6) — one self-verifying ZIP: inventory, raw
+          metrics + 1-min rollups (Parquet), full alert history, manifest.
+        </span>
+        {phase === "idle" && (
+          <button className="btn" onClick={() => setPhase("confirm")}>Export</button>
+        )}
+        {phase === "preparing" && <button className="btn" disabled>Preparing…</button>}
+        {phase === "done" && (
+          <button className="btn ghost" onClick={() => { setResult(null); setPhase("confirm"); }}>
+            Export again
+          </button>
+        )}
+        {phase === "error" && (
+          <button className="btn ghost" onClick={() => { setErr(""); setPhase("confirm"); }}>Retry</button>
+        )}
+      </div>
+      {phase === "confirm" && (
+        <div className="export-confirm">
+          <span>
+            Export all data for <strong>{host}</strong>? Includes inventory,
+            raw metrics (Parquet), 1-min rollups (Parquet), and full alert
+            history.
+          </span>
+          <span className="row-actions">
+            <button className="btn" onClick={run}>Yes, export</button>
+            <button className="btn ghost" onClick={() => setPhase("idle")}>Cancel</button>
+          </span>
+        </div>
+      )}
+      {phase === "done" && result && (
+        <div className="banner ok">
+          Downloaded <span className="mono">{result.name}</span> ({result.kb}
+          KB) — the manifest inside the ZIP verifies every file.
+        </div>
+      )}
+      {phase === "error" && <div className="banner err">{err}</div>}
+    </div>
+  );
+}
+
 function fmtMetricValue(name, v) {
   if (!Number.isFinite(v)) return "—";
   if (name === "net.bytes_total" || name.endsWith("_bytes_total")) {
@@ -1062,6 +1143,11 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
                     <tr className="detail-row">
                       <td colSpan={6} className="detail-cell">
                         <div className="device-detail">
+                          <DeviceExport
+                            token={token}
+                            device={d}
+                            onUnauthorized={onUnauthorized}
+                          />
                           <TagEditor
                             token={token}
                             device={d}

@@ -364,4 +364,31 @@ export const api = {
     const body = device_id ? { device_id } : {};
     return request("/api/baseline/run", { method: "POST", token, body });
   },
+
+  // ---- D-6: one-click client export (W4-3) -----------------------------------
+  // GET /api/devices/{id}/export -> a ZIP attachment (application/zip) —
+  // the client's full bundle: manifest.json (the self-verification
+  // contract), device.json, metrics.parquet, metrics_1m.parquet,
+  // alerts.json. v1 exports the full history (the server also accepts
+  // ?since=RFC3339&until=RFC3339; the UI doesn't offer a range picker yet).
+  // Resolves to a Blob — fetch directly, since the JSON `request()` helper
+  // would try to parse the ZIP. 400 bad window, 404 unknown device,
+  // 503 export unwired (in-memory mode).
+  exportDevice: async (token, id, { since = "", until = "" } = {}) => {
+    const q = new URLSearchParams();
+    if (since) q.set("since", since);
+    if (until) q.set("until", until);
+    const qs = q.toString();
+    const res = await fetch(`/api/devices/${id}/export${qs ? "?" + qs : ""}`, {
+      headers: { Authorization: "Bearer " + token },
+    });
+    if (!res.ok) {
+      const message = (await res.text().catch(() => "")) || "export failed";
+      const err = new Error(message);
+      err.status = res.status;
+      if (res.status === 401) err.unauthorized = true;
+      throw err;
+    }
+    return res.blob();
+  },
 };

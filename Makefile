@@ -266,6 +266,10 @@ events-ui-smoke: ## D-2 UI DoD: the real <App/> — the "Events" page pages forw
 heal-ui-smoke: ## D-3 UI DoD: the real <App/> — the 5th nav item "Heal" opens the self-healing dashboard: the 3 pre-existing playbooks (trigger, scope, action, last run) with enable toggles (PATCH), "Run Pass Now" starts a new run that walks detected->verifying->remediating->confirming->resolved across passes with the pass summary updating, and clicking a run opens its full stage trace (trigger fired, command dispatched, agent script output, confirmation); status/device filters hit the server query (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/heal.smoke.sh
 
+.PHONY: export-ui-smoke
+export-ui-smoke: ## D-6 UI DoD: the real <App/> in jsdom against a fake export endpoint serving a real ZIP with a self-consistent manifest — the device detail's "Client export" panel, the confirmation naming the device, the Preparing… state, a download named <hostname>-rmmway-export-<date>.zip, and the manifest's SHA-256/size verified against the actual downloaded bytes (both Parquet files PAR1-checked). Needs: make frontend-deps
+	@cd frontend && bash scripts/export.smoke.sh
+
 .PHONY: baseline-ui-smoke
 baseline-ui-smoke: ## D-5 UI DoD: the real <App/> — the 7th nav item "Baseline" opens #/baseline: the current anomaly landscape sorted worst-first (z-scores banded calm/elevated/severe), filterable by device / metric / min score; "Recompute" runs one synchronous scoring pass (working state, then the pass summary) and refreshes the table; clicking a hostname jumps to that device's detail (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/baseline.smoke.sh
