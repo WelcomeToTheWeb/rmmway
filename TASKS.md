@@ -1,5 +1,5 @@
 # Phase 2 MVP Task Board
-Shared task board for Phase 2: Production Server Setup, Frontend UX, and Advanced Integrations.
+Shared task board for Phase 2: Production Server Setup, Frontend UX, Frontend Parity, and Advanced Integrations.
 
 ## How to use this board
 1. **Claim a task** before starting. Change Status to `🔵 claimed` and add your handle and start date.
@@ -117,3 +117,70 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 - **Effort/Impact:** L / High
 **Description:** Build an inference pipeline to summarize complex Loki crash logs and Timescale anomaly data. Provide a Docker Compose service definition for `intel/llm-scaler-vllm` to run local, privacy-safe models (e.g., Qwen3.8-27B-INT4). Ensure the pipeline can utilize multi-GPU VRAM pools for speculative decoding and fast context processing.
 **Definition of done:** An alert in the RMM UI features an "AI Root Cause" button that queries the local vLLM container and streams back a technical summary of the surrounding logs and metrics.
+
+---
+
+## Track D: Frontend Parity — Exposing Built Backend Features
+*Goal: Wire already-built and tested backend API surfaces into the operator UI so every documented feature is reachable without reading source code.*
+
+> **How this differs from Track B:** Track B builds new frontend capabilities (dashboards, SSE reactivity). Track D closes the gap where the backend is complete but the UI was never built — lower risk, faster ROI, no schema or protocol changes.
+
+### D-1 — Command Results & History View
+- **Status:** ⬜ pending
+- **Claimed by:** —
+- **Started:** —
+- **Done:** —
+- **Depends on:** —
+- **Effort/Impact:** M / High
+**Description:** In the device detail panel, add a "Commands" tab (or section below the existing dispatch form) that lists all commands ever dispatched to that device, newest first. Each row shows: command ID, action type (run_script / reboot), timestamp dispatched, current status (PENDING / RUNNING / SUCCEEDED / FAILED / TIMEOUT), and a expandable detail area showing the agent's reported output (stdout/stderr or exit code). Wire to `GET /api/devices/{id}/commands` (already registered in `httpapi.go` deviceSub handler). Add the corresponding `api.commands(token, deviceId, {limit})` method to `api.js`. Auto-refresh the list on SSE events matching the device's command category, and provide a manual "Refresh" button as fallback.
+**Definition of done:** Operator dispatches a reboot via the existing form; within 5 seconds (or on next SSE event) a new row appears in the Commands section with status RUNNING, then transitions to SUCCEEDED or FAILED with the agent's exit output visible on expand. Refreshing the page preserves the full history (server-persisted).
+
+### D-2 — Event Journal Browser
+- **Status:** ⬜ pending
+- **Claimed by:** —
+- **Started:** —
+- **Done:** —
+- **Depends on:** —
+- **Effort/Impact:** M / High
+**Description:** Add a top-level "Events" nav item (4th in the header nav, after Flows) routing to a new `#/events` page. The page shows the global event journal backed by `GET /api/events?after=<seq>&limit=200&category=&device=&type=` (server returns events with sequence > `after`, oldest-first, up to `limit`). Server-side filters: `category` (alert / inventory / automation / command — validated server-side, 400 on unknown), `device` (device ID or hostname), `type` (event type within a category). Each row shows: timestamp, category badge (color-coded), device hostname, event type, one-line summary. Clicking a row expands an inline detail pane with the full event envelope JSON (pretty-printed) and a "Go to device" link. **Paging model:** on first visit the client pages forward (`after=0`, then `after=<last_seq+1>`, …) until a response returns fewer than `limit` items (the end of the journal), then displays that final batch (the most recent ≤200 entries). A "Load earlier" button sets `after` to `<first_seq_of_current_page − limit>` and fetches the preceding batch. The existing SSE stream (`sse.js`) already pushes new events for live reactivity; this page adds the *browsing, filtering, and historical paging* layer the stream alone doesn't provide. Add `api.eventJournal(token, {after, limit, category, device, type})` to `api.js`.
+**Definition of done:** Operator navigates to Events, sees the most recent 200 journal entries with category color-coding; applies the `category=alert` + `device=web-01` filter to isolate one device's alert events; clicks an event row to see its full JSON envelope in the detail pane; clicks "Load earlier" to page to the next batch; a new event arriving via SSE appears at the top without a page refresh.
+
+### D-3 — Heal Engine Dashboard
+- **Status:** ⬜ pending
+- **Claimed by:** —
+- **Started:** —
+- **Done:** —
+- **Depends on:** —
+- **Effort/Impact:** M-L / High
+**Description:** Add a top-level "Heal" nav item (5th in header) routing to `#/heal`. The page has two panels: (1) **Playbooks** — a table listing all heal playbooks (`GET /api/heal/playbooks`): name, target scope (device / tag / all), trigger condition (which alert or metric threshold activates it), action (script / reboot / restart-service), enabled/disabled toggle, last-run timestamp. A "New playbook" button opens a form (name, scope picker, trigger condition, action + parameters) posting to `POST /api/heal/playbooks`. (2) **Runs** — a filterable list of heal executions (`GET /api/heal/runs?status=&device_id=&limit=`): timestamp, playbook name, target device, status (RUNNING / SUCCEEDED / FAILED / SKIPPED), duration. Filter dropdowns for status and device narrow the list server-side. Clicking a run navigates to a detail view (`GET /api/heal/runs/{id}`) showing the step-by-step execution trace: which trigger fired, what action was dispatched, the agent's response, and any error output (the server returns `{run, events[]}`). A prominent "Run Pass Now" button (`POST /api/heal/pass`) triggers an immediate evaluation across all enabled playbooks; the page shows a spinner and then refreshes the Runs panel with new entries. Add `api.healPlaybooks(token)`, `api.healCreatePlaybook(token, body)`, `api.healRuns(token, {status, device_id, limit})`, `api.healRun(token, id)`, `api.healPass(token)` to `api.js`.
+**Definition of done:** Operator sees 3 pre-existing playbooks in the table; toggles one off (PATCH); clicks "Run Pass Now" and watches a new run appear in the Runs panel within 10 seconds with status transitioning from RUNNING to SUCCEEDED; clicks the run to see the full execution trace including the agent's script output.
+
+### D-4 — Webhook Management
+- **Status:** ⬜ pending
+- **Claimed by:** —
+- **Started:** —
+- **Done:** —
+- **Depends on:** —
+- **Effort/Impact:** M / Medium
+**Description:** Add a "Webhooks" section (either a 6th nav item or a sub-section within a "Settings" page — implementer's choice, but it must be reachable from the main nav without digging). The page lists all configured webhook endpoints (`GET /api/webhooks`): name, URL, subscribed event categories (checkboxes: alert, inventory, automation, command), enabled/disabled, last delivery timestamp, consecutive failure count. A "Add webhook" form (name, URL, category checkboxes, secret for HMAC signing) posts to `POST /api/webhooks`. Each row has an "Edit" (PATCH) and "Delete" (DELETE) action, plus a "View deliveries" link that opens the per-endpoint event journal (`GET /api/webhooks/{id}/events?after=&limit=&category=`): the events this endpoint is subscribed to, oldest-first, with delivery status. A "Replay from…" button (`POST /api/webhooks/{id}/replay` with body `{"from_seq": N}`) resets the endpoint's delivery cursor to sequence N, causing the sweeper to re-deliver all events from that point forward; the UI offers "Replay all" (from_seq=0) and "Replay since last success" (from_seq = last successfully delivered seq). Add `api.webhooks(token)`, `api.webhookCreate(token, body)`, `api.webhookUpdate(token, id, body)`, `api.webhookDelete(token, id)`, `api.webhookEvents(token, id, {after, limit, category})`, `api.webhookReplay(token, id, {from_seq})` to `api.js`.
+**Definition of done:** Operator adds a webhook pointing at `https://hooks.slack.com/T000/B000/000` subscribed to `alert` events with a shared secret; disables it (toggles off); clicks "View deliveries" to see the journaled events this endpoint is subscribed to (with sequence numbers and timestamps); clicks "Replay all" and sees the cursor reset confirmation (from_seq=0, last_seq reported); deletes the webhook and it disappears from the list.
+
+### D-5 — Baseline Anomaly Explorer
+- **Status:** ⬜ pending
+- **Claimed by:** —
+- **Started:** —
+- **Done:** —
+- **Depends on:** —
+- **Effort/Impact:** S / Medium
+**Description:** Add a "Baseline" nav item (or a tab within the Alerts page — "Alerts | Baseline" tab switcher) routing to `#/baseline`. The page shows the current anomaly score landscape: a table (`GET /api/baseline/anomalies`) with columns: device hostname, metric name, source, current value, expected range (lower–upper), anomaly score (0–1, color-coded green→yellow→red), channel (seasonal / trend), last computed timestamp. Rows are sortable by score (descending by default) so the most anomalous readings float to the top. A device+metric filter narrows the view. A "Recompute" button (`POST /api/baseline/run`) triggers a fresh baseline computation for the selected scope (all devices, or a filtered subset); the page shows a progress indicator and refreshes the table on completion. Clicking a row's device hostname navigates to that device's detail page (existing `#/devices` with focus filter). Add `api.baselineAnomalies(token, {device_id, name, min_score})` and `api.baselineRun(token, {device_id?})` to `api.js`.
+**Definition of done:** Operator opens Baseline, sees all devices' current anomaly scores sorted worst-first; filters to `min_score=0.7` to see only significant deviations; clicks "Recompute" for the full fleet and watches scores update after the run completes; clicks a device name to jump to its detail page with the metrics chart visible.
+
+### D-6 — One-Click Client Export
+- **Status:** ⬜ pending
+- **Claimed by:** —
+- **Started:** —
+- **Done:** —
+- **Depends on:** —
+- **Effort/Impact:** S / Medium
+**Description:** In the device detail panel (`Devices.jsx`), add an "Export" button in the device's action bar (next to the existing dispatch and tag controls). Clicking it opens a small confirmation dialog: "Export all data for <hostname>? Includes inventory, raw metrics (Parquet), 1-min rollups (Parquet), and full alert history. Estimated size: ~<n> MB." (size estimate from the device's metrics row count if available, or omit). On confirm, the button transitions to a progress state ("Preparing…") while the browser fetches `GET /api/devices/{id}/export` (returns a ZIP). On completion, triggers a browser download of the ZIP file named `<hostname>-rmmway-export-<date>.zip`. Add `api.exportDevice(token, deviceId)` to `api.js` (returns a blob, not JSON — use `fetch` directly with `response.blob()` since the existing `request()` helper assumes JSON). No time-range filter in v1 (the server supports `?since=&until=` but the UI exposes the full history; a range picker is a future enhancement).
+**Definition of done:** Operator clicks Export on a device with 30 days of metrics; a ZIP downloads within 10 seconds; unzipping reveals `manifest.json`, `device.json`, `metrics.parquet`, `metrics_1m.parquet`, and `alerts.json`; the manifest's SHA-256 hashes match the actual file contents (self-verifying bundle).
