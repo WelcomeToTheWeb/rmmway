@@ -266,6 +266,10 @@ events-ui-smoke: ## D-2 UI DoD: the real <App/> — the "Events" page pages forw
 heal-ui-smoke: ## D-3 UI DoD: the real <App/> — the 5th nav item "Heal" opens the self-healing dashboard: the 3 pre-existing playbooks (trigger, scope, action, last run) with enable toggles (PATCH), "Run Pass Now" starts a new run that walks detected->verifying->remediating->confirming->resolved across passes with the pass summary updating, and clicking a run opens its full stage trace (trigger fired, command dispatched, agent script output, confirmation); status/device filters hit the server query (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/heal.smoke.sh
 
+.PHONY: baseline-ui-smoke
+baseline-ui-smoke: ## D-5 UI DoD: the real <App/> — the 7th nav item "Baseline" opens #/baseline: the current anomaly landscape sorted worst-first (z-scores banded calm/elevated/severe), filterable by device / metric / min score; "Recompute" runs one synchronous scoring pass (working state, then the pass summary) and refreshes the table; clicking a hostname jumps to that device's detail (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/baseline.smoke.sh
+
 .PHONY: webhooks-ui-smoke
 webhooks-ui-smoke: ## D-4 UI DoD: the real <App/> — the 6th nav item "Webhooks" lists endpoints (URL, subscribed categories, delivery cursor, consecutive failures, enabled toggle); the add form posts name/URL/HMAC-secret + category checkboxes; "Deliveries" opens the per-endpoint journal with each seq colored delivered or pending against the endpoint's cursor; "Replay all" asks for inline confirmation, resets the cursor to seq 0 and shows the reset confirmation; delete removes the endpoint (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/webhooks.smoke.sh

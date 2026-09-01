@@ -338,4 +338,30 @@ export const api = {
   // whole journal). 400 negative from_seq; 404 unknown id.
   webhookReplay: (token, id, { from_seq = 0 } = {}) =>
     request(`/api/webhooks/${id}/replay`, { method: "POST", token, body: { from_seq } }),
+
+  // ---- D-5: baseline anomaly explorer (W2-4) --------------------------------
+  // GET /api/baseline/anomalies[?limit=] -> StoredAnomaly[] newest first
+  // (id, device_id, name, source, at, value, score — the max z of the fired
+  // scoring channels, NOT 0-1 — channel "seasonal"|"trend", seasonal_z?/
+  // trend_z?, detected_at). NOTE: the current server honors only `limit`;
+  // the device_id/name/min_score params are still sent (per the W2-4
+  // contract) and applied client-side until the server filters them.
+  baselineAnomalies: (token, { device_id = "", name = "", min_score = "", limit = 200 } = {}) => {
+    const q = new URLSearchParams();
+    if (device_id) q.set("device_id", device_id);
+    if (name) q.set("name", name);
+    if (min_score !== "") q.set("min_score", String(min_score));
+    q.set("limit", String(limit));
+    return request(`/api/baseline/anomalies?${q.toString()}`, { token });
+  },
+
+  // POST /api/baseline/run -> one synchronous scoring pass: { anomalies
+  // (baseline.Anomaly[] for this pass, score = max z of the fired channels,
+  // seasonal/trend CellScore {z, median, mad, ewma, cells}), series (the
+  // number of device-metric series scored), runs }. 503 when the engine is
+  // unwired (in-memory server).
+  baselineRun: (token, { device_id = "" } = {}) => {
+    const body = device_id ? { device_id } : {};
+    return request("/api/baseline/run", { method: "POST", token, body });
+  },
 };

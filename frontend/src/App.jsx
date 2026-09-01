@@ -10,6 +10,7 @@ import Flows from "./Flows.jsx";
 import Events from "./Events.jsx";
 import Heal from "./Heal.jsx";
 import Webhooks from "./Webhooks.jsx";
+import Baseline from "./Baseline.jsx";
 import Palette from "./Palette.jsx";
 
 // ---- tiny hash router: #/devices (default), #/alerts, #/flows, #/events,
@@ -21,6 +22,7 @@ function parseRoute() {
   if (h.startsWith("#/events")) return "events";
   if (h.startsWith("#/heal")) return "heal";
   if (h.startsWith("#/webhooks")) return "webhooks";
+  if (h.startsWith("#/baseline")) return "baseline";
   return "devices";
 }
 
@@ -81,6 +83,12 @@ function Header({ route, openCount, onOpenPalette }) {
           href="#/webhooks"
         >
           Webhooks
+        </a>
+        <a
+          className={"nav-item" + (route === "baseline" ? " active" : "")}
+          href="#/baseline"
+        >
+          Baseline
         </a>
         <a
           className="nav-item"
@@ -249,6 +257,8 @@ function Shell() {
           <Heal token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
         ) : route === "webhooks" ? (
           <Webhooks token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
+        ) : route === "baseline" ? (
+          <Baseline token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
         ) : (
           <Devices
             token={token}
