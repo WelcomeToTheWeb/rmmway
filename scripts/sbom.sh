@@ -2,7 +2,7 @@
 # W4-1: generate CycloneDX SBOMs for every artifact.
 #
 # Outputs (all CycloneDX JSON, scanned by the pinned syft):
-#   agent/dist/rmmway-agent-<os>-<arch>[.exe].cdx.json   (5 agent binaries)
+#   agent/dist/rmmway-agent-<os>-<arch>[.exe].cdx.json   (6 agent binaries)
 #   dist/rmmway-server.cdx.json                          (server Docker image)
 #
 # The agent binaries must already be built (make agent). The server image
@@ -26,7 +26,8 @@ AGENTS="rmmway-agent-linux-amd64
 rmmway-agent-linux-arm64
 rmmway-agent-darwin-amd64
 rmmway-agent-darwin-arm64
-rmmway-agent-windows-amd64.exe"
+rmmway-agent-windows-amd64.exe
+rmmway-agent-windows-arm64.exe"
 
 echo "==> agent binary SBOMs (CycloneDX JSON)"
 for a in $AGENTS; do

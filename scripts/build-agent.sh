@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # W1-1: cross-compile the RMMWay agent as static binaries.
 #
-# Targets: linux/darwin/windows × amd64/arm64 (windows arm64 skipped — the
-# agent's DoD targets Windows on x86_64; add GOOS=windows GOARCH=arm64 if needed).
+# Targets: linux/darwin/windows × amd64/arm64. (Windows arm64 is required:
+# install.ps1 maps PROCESSOR_ARCHITECTURE=ARM64 to rmmway-agent-windows-arm64.exe.)
 # Output: agent/dist/rmmway-agent-<os>-<arch>[.exe]
 #
 # Flags: CGO_ENABLED=0 (pure-Go static — no libc dependency), -trimpath,
@@ -38,6 +38,7 @@ build linux arm64
 build darwin amd64
 build darwin arm64
 build windows amd64
+build windows arm64
 
 echo "==> built for $(git -c core.abbrev=short rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev) version ${VERSION}:"
 ls -lh agent/dist/
