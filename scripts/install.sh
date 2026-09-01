@@ -110,6 +110,28 @@ chmod +x "$TMP"
 # sanity: it must run and report a version before we clobber the old binary
 VER_OUT="$("$TMP" --version 2>&1)" || die "downloaded binary will not run: $VER_OUT"
 log "verified: ${VER_OUT}"
+
+# --- integrity: the asset must match the release's published SHA256SUMS ---
+# (same guard install.ps1 has: a release asset hot-swapped without re-signing
+# fails loud here instead of reaching the endpoint. Full minisign verification
+# remains the gold standard; the checksum is the cheap guard.)
+SUMS_URL="${RAW_DL}/${VERSION}/SHA256SUMS"
+if SUMS="$(curl -fsSL "$SUMS_URL" 2>/dev/null)"; then
+  # sums lines are "<hash>  agent/dist/<asset>"; anchor on the exact asset
+  # name at the END of the path field (so rmmway-agent-X never matches
+  # rmmway-agent-X.cdx.json).
+  WANT="$(printf '%s\n' "$SUMS" | awk -v a="rmmway-agent-${OS}-${ARCH}" '$2 ~ ("/" a "$") { print $1; exit }')"
+  if [ -n "$WANT" ]; then
+    GOT="$(sha256sum "$TMP" | awk '{print $1}')"
+    [ "$GOT" = "$WANT" ] || die "SHA256 mismatch for rmmway-agent-${OS}-${ARCH}: release says ${WANT}, download is ${GOT}. The release asset does not match its published sums (unsigned hot-swap?) - not installing. Ask the operator to cut a fresh signed release."
+    log "sha256 verified: ${GOT}"
+  else
+    log "no SHA256SUMS entry for this asset - skipping checksum check"
+  fi
+else
+  log "WARNING: could not fetch SHA256SUMS from ${SUMS_URL} - continuing without the checksum check"
+fi
+
 install -m 0755 "$TMP" "$BIN"
 log "installed -> ${BIN}"
 
