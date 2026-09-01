@@ -1,9 +1,9 @@
 # RMMWay one-line bootstrap installer (W1-3) - Windows.
 #
-#   iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.ps1 | iex
+#   iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.ps1 | iex
 #
 # With arguments (recommended):
-#   iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.ps1 -OutFile install.ps1
+#   iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.ps1 -OutFile install.ps1
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Server https://rmm.example.com -Bootstrap <TOKEN>
 #
 # What it does: detect arch (amd64), download the static agent from the GitHub

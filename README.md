@@ -266,14 +266,14 @@ the agent connects.
 **Linux / macOS:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.sh \
   | bash -s -- --server https://rmm.example.com --bootstrap <TOKEN>
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.ps1 -OutFile install.ps1
+iwr -useb https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.ps1 -OutFile install.ps1
 powershell -ExecutionPolicy Bypass -File install.ps1 -Server https://rmm.example.com -Bootstrap <TOKEN>
 ```
 

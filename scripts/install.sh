@@ -2,7 +2,7 @@
 #
 # RMMWay one-line bootstrap installer (W1-3) — Linux + macOS.
 #
-#   curl -fsSL https://raw.githubusercontent.com/welcometotheweb/rmmway/Phase-1/scripts/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/welcometotheweb/rmmway/main/scripts/install.sh \
 #     | bash -s -- --server https://rmm.example.com --bootstrap <TOKEN>
 #
 #   Optional: --grpc-addr host:port when the server's gRPC port differs from
