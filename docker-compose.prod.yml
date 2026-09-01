@@ -155,8 +155,10 @@ services:
       RMMWAY_GRPC_MTLS_ADDR: ":50052"
       # A-1: the public hostname goes into the mTLS server cert's SANs so
       # remote agents' hostname verification passes when they dial
-      # https://<domain>/... -> <domain>:50052.
-      RMMWAY_GRPC_MTLS_SANs: ${RMMWAY_DOMAIN:-localhost}
+      # https://<domain>/... -> <domain>:50052. Set RMMWAY_GRPC_MTLS_SANs
+      # directly (comma-separated DNS names / IPs) to override — e.g. when
+      # agents dial the host's LAN IP rather than RMMWAY_DOMAIN.
+      RMMWAY_GRPC_MTLS_SANs: ${RMMWAY_GRPC_MTLS_SANs:-${RMMWAY_DOMAIN:-localhost}}
       # C2: selects the boot-time env; non-dev refuses the built-in dev
       # defaults (JWT secret / admin creds / Meili master key).
       RMMWAY_ENV: ${RMMWAY_ENV:-prod}
