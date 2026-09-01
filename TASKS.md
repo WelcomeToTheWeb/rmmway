@@ -126,9 +126,9 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 > **How this differs from Track B:** Track B builds new frontend capabilities (dashboards, SSE reactivity). Track D closes the gap where the backend is complete but the UI was never built — lower risk, faster ROI, no schema or protocol changes.
 
 ### D-1 — Command Results & History View
-- **Status:** ⬜ pending
-- **Claimed by:** —
-- **Started:** —
+- **Status:** 🔵 claimed
+- **Claimed by:** Sisyphus
+- **Started:** 2026-09-01
 - **Done:** —
 - **Depends on:** —
 - **Effort/Impact:** M / High
