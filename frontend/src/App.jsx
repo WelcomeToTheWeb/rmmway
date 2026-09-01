@@ -7,13 +7,15 @@ import Setup from "./Setup.jsx";
 import Devices from "./Devices.jsx";
 import Alerts from "./Alerts.jsx";
 import Flows from "./Flows.jsx";
+import Events from "./Events.jsx";
 import Palette from "./Palette.jsx";
 
-// ---- tiny hash router: #/devices (default), #/alerts, #/flows --------------
+// ---- tiny hash router: #/devices (default), #/alerts, #/flows, #/events -----
 function parseRoute() {
   const h = window.location.hash;
   if (h.startsWith("#/alerts")) return "alerts";
   if (h.startsWith("#/flows")) return "flows";
+  if (h.startsWith("#/events")) return "events";
   return "devices";
 }
 
@@ -56,6 +58,12 @@ function Header({ route, openCount, onOpenPalette }) {
           href="#/flows"
         >
           Flows
+        </a>
+        <a
+          className={"nav-item" + (route === "events" ? " active" : "")}
+          href="#/events"
+        >
+          Events
         </a>
         <a
           className="nav-item"
@@ -138,13 +146,20 @@ function Shell() {
   // / 503s and the polls above remain the fallback.
   const [deviceTick, setDeviceTick] = useState(0);
   const [alertTick, setAlertTick] = useState(0);
+  // D-2: the latest journaled envelope off the live stream — the Events page
+  // prepends it straight into the journal view (no re-fetch).
+  const [lastEvent, setLastEvent] = useState(null);
   useEffect(() => {
     if (!token) return;
     const close = openEventStream({
       token,
       onEvent: (env) => {
         if (!env || !env.category) return;
-        if (env.category === "inventory" || env.category === "command") {
+        setLastEvent(env);
+        // Command results are journaled under the "automation" category
+        // (rmmway.events.command.result); "command" is kept for streams that
+        // still label them that way.
+        if (env.category === "inventory" || env.category === "command" || env.category === "automation") {
           setDeviceTick((t) => t + 1);
         } else if (env.category === "alert") {
           refreshAlerts();
@@ -206,6 +221,13 @@ function Shell() {
           <Alerts token={token} onUnauthorized={logout} liveTick={alertTick} />
         ) : route === "flows" ? (
           <Flows token={token} onUnauthorized={logout} />
+        ) : route === "events" ? (
+          <Events
+            token={token}
+            onUnauthorized={logout}
+            onGoToDevice={goToDevice}
+            lastEvent={lastEvent}
+          />
         ) : (
           <Devices
             token={token}

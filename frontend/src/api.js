@@ -121,6 +121,26 @@ export const api = {
   bulkDispatch: (token, body) =>
     request("/api/devices/bulk/commands", { method: "POST", token, body }),
 
+  // ---- D-2: global event journal -----------------------------------------
+  // GET /api/events?after=&limit=&category=&device=&type= -> Envelope[]
+  // (oldest first; journal entries with seq > after, up to limit — server
+  // default 200, max 1000). category is one of alert|inventory|automation|
+  // other (400 on unknown — command results are journaled as "automation");
+  // device = exact device_id; type = exact bus subject. Each envelope:
+  // { id (journal seq), version, source, category, type, device_id?, at,
+  // event } where `event` is the full bus event (flow.Event JSON: type,
+  // device_id, source?, value?, command_id?, status?, message?, data{...},
+  // at). 503 when the webhook framework is unwired (in-memory server).
+  eventJournal: (token, { after = 0, limit = 200, category = "", device = "", type = "" } = {}) => {
+    const q = new URLSearchParams();
+    q.set("after", String(after));
+    q.set("limit", String(limit));
+    if (category) q.set("category", category);
+    if (device) q.set("device", device);
+    if (type) q.set("type", type);
+    return request(`/api/events?${q.toString()}`, { token });
+  },
+
   // GET /api/devices/{id}/events?limit=&level= -> { device_id, events[] }
   // (newest first). W6-1: the device's recent indexed agent-log events
   // (the Timescale copy of what also ships to Loki). Each event has

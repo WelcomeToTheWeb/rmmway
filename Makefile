@@ -258,6 +258,10 @@ metrics-ui-smoke: ## Per-device metrics viewer UI DoD: the real <App/> — the d
 commands-ui-smoke: ## D-1 UI DoD: the real <App/> — the device detail shows the Commands panel (full dispatch history, newest first, PENDING/RUNNING/SUCCEEDED statuses, expandable agent output); a command-category SSE event re-fetches the list live and the manual refresh is the fallback (jsdom, no browser needed). Needs: make frontend-deps
 	@cd frontend && bash scripts/commands.smoke.sh
 
+.PHONY: events-ui-smoke
+events-ui-smoke: ## D-2 UI DoD: the real <App/> — the "Events" page pages forward to the end of the 500-entry journal and shows the newest batch first; category+device filters hit the server query; clicking a row reveals the full envelope JSON with a go-to-device link; "Load earlier" pages back and "Jump to latest" returns; a new SSE envelope appears at the top without a re-fetch (jsdom, no browser needed). Needs: make frontend-deps
+	@cd frontend && bash scripts/events.smoke.sh
+
 .PHONY: frontend
 frontend: ## Run the frontend dev server (http://localhost:5173)
 	cd frontend && npm run dev
