@@ -9,6 +9,7 @@ import Alerts from "./Alerts.jsx";
 import Flows from "./Flows.jsx";
 import Events from "./Events.jsx";
 import Heal from "./Heal.jsx";
+import Webhooks from "./Webhooks.jsx";
 import Palette from "./Palette.jsx";
 
 // ---- tiny hash router: #/devices (default), #/alerts, #/flows, #/events,
@@ -19,6 +20,7 @@ function parseRoute() {
   if (h.startsWith("#/flows")) return "flows";
   if (h.startsWith("#/events")) return "events";
   if (h.startsWith("#/heal")) return "heal";
+  if (h.startsWith("#/webhooks")) return "webhooks";
   return "devices";
 }
 
@@ -73,6 +75,12 @@ function Header({ route, openCount, onOpenPalette }) {
           href="#/heal"
         >
           Heal
+        </a>
+        <a
+          className={"nav-item" + (route === "webhooks" ? " active" : "")}
+          href="#/webhooks"
+        >
+          Webhooks
         </a>
         <a
           className="nav-item"
@@ -239,6 +247,8 @@ function Shell() {
           />
         ) : route === "heal" ? (
           <Heal token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
+        ) : route === "webhooks" ? (
+          <Webhooks token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
         ) : (
           <Devices
             token={token}

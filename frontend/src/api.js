@@ -291,4 +291,51 @@ export const api = {
   // series starts a run in `detected`; the same pass then advances every
   // active run one stage, so a fresh heal completes over successive passes.
   healPass: (token) => request("/api/heal/pass", { method: "POST", token, body: {} }),
+
+  // ---- D-4: webhook endpoint management (W3-2) ---------------------------
+  // GET /api/webhooks -> Endpoint[] (id, name, url, categories — empty =
+  // all; enabled, max_attempts, timeout_ms, last_seq (the delivery cursor —
+  // the last seq delivered with a 2xx), attempts (consecutive failures),
+  // next_retry_at, status — "ok" | "failing", created_at, updated_at). The
+  // HMAC secret is never serialized. 503 when the framework is unwired
+  // (in-memory server).
+  webhooks: (token) => request("/api/webhooks", { token }),
+
+  // POST /api/webhooks { name, url, secret, categories?, enabled?,
+  // max_attempts?, timeout_ms? } -> 201 the endpoint (name/url/secret
+  // required; an empty category list subscribes to ALL; the delivery cursor
+  // starts at the current journal tail — a new hook gets only NEW events).
+  // 400 unknown URL shape; 422 unknown category.
+  webhookCreate: (token, body) =>
+    request("/api/webhooks", { method: "POST", token, body }),
+
+  // PATCH /api/webhooks/{id} — partial: { name?, url?, categories?,
+  // enabled? } -> the updated endpoint. Re-enabling clears a dead-lettered
+  // endpoint's failure state (attempts reset, status back to "ok").
+  // 404 unknown id.
+  webhookUpdate: (token, id, body) =>
+    request(`/api/webhooks/${id}`, { method: "PATCH", token, body }),
+
+  // DELETE /api/webhooks/{id} -> 204 (the journaled events it received stay
+  // in the global journal). 404 unknown id.
+  webhookDelete: (token, id) =>
+    request(`/api/webhooks/${id}`, { method: "DELETE", token }),
+
+  // GET /api/webhooks/{id}/events?after=&limit=&category= -> the journaled
+  // events this endpoint is subscribed to (seq > after, oldest first,
+  // { id (journal seq), category, type, device_id?, at, event }).
+  webhookEvents: (token, id, { after = 0, limit = 200, category = "" } = {}) => {
+    const q = new URLSearchParams();
+    q.set("after", String(after));
+    q.set("limit", String(limit));
+    if (category) q.set("category", category);
+    return request(`/api/webhooks/${id}/events?${q.toString()}`, { token });
+  },
+
+  // POST /api/webhooks/{id}/replay { from_seq } -> { webhook_id, from_seq,
+  // last_seq, status }: resets the delivery cursor, so the sweeper
+  // re-delivers every journaled event from that sequence forward (0 = the
+  // whole journal). 400 negative from_seq; 404 unknown id.
+  webhookReplay: (token, id, { from_seq = 0 } = {}) =>
+    request(`/api/webhooks/${id}/replay`, { method: "POST", token, body: { from_seq } }),
 };
