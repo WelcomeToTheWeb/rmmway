@@ -136,10 +136,10 @@ _Progress: the per-device metrics viewer (first step) is done — `GET /api/devi
 **Definition of done:** Operator dispatches a reboot via the existing form; within 5 seconds (or on next SSE event) a new row appears in the Commands section with status RUNNING, then transitions to SUCCEEDED or FAILED with the agent's exit output visible on expand. Refreshing the page preserves the full history (server-persisted).
 
 ### D-2 — Event Journal Browser
-- **Status:** 🔵 claimed
+- **Status:** ✅ done
 - **Claimed by:** Sisyphus
 - **Started:** 2026-09-01
-- **Done:** —
+- **Done:** 2026-09-01 (commit b0c61a0)
 - **Depends on:** —
 - **Effort/Impact:** M / High
 **Description:** Add a top-level "Events" nav item (4th in the header nav, after Flows) routing to a new `#/events` page. The page shows the global event journal backed by `GET /api/events?after=<seq>&limit=200&category=&device=&type=` (server returns events with sequence > `after`, oldest-first, up to `limit`). Server-side filters: `category` (alert / inventory / automation / command — validated server-side, 400 on unknown), `device` (device ID or hostname), `type` (event type within a category). Each row shows: timestamp, category badge (color-coded), device hostname, event type, one-line summary. Clicking a row expands an inline detail pane with the full event envelope JSON (pretty-printed) and a "Go to device" link. **Paging model:** on first visit the client pages forward (`after=0`, then `after=<last_seq+1>`, …) until a response returns fewer than `limit` items (the end of the journal), then displays that final batch (the most recent ≤200 entries). A "Load earlier" button sets `after` to `<first_seq_of_current_page − limit>` and fetches the preceding batch. The existing SSE stream (`sse.js`) already pushes new events for live reactivity; this page adds the *browsing, filtering, and historical paging* layer the stream alone doesn't provide. Add `api.eventJournal(token, {after, limit, category, device, type})` to `api.js`.
