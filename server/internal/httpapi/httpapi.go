@@ -109,6 +109,10 @@ type Server struct {
 	// setup (A-2) is the first-boot wizard backend; nil = in-memory mode
 	// (the wizard is unavailable, the env admin login is the only one).
 	setup *setup.Service
+	// publicURL (if set) is the configured public operator URL
+	// (RMMWAY_PUBLIC_URL). The Add Device UI reads this via
+	// GET /api/public-url to prefill the server URL field.
+	publicURL string
 }
 
 // Config wires a Server. AdminPassword is hashed with a fresh per-boot salt
@@ -170,6 +174,11 @@ type Config struct {
 	// Setup (A-2) is the first-boot setup wizard backend; nil disables
 	// /api/setup* (in-memory mode: the UI skips the wizard, env admin only).
 	Setup *setup.Service
+	// PublicURL (if set) is the operator's public URL (RMMWAY_PUBLIC_URL).
+	// Exposed via GET /api/public-url so the Add Device UI can prefill the
+	// server URL with the configured public target instead of guessing
+	// window.location.origin (wrong when behind a reverse proxy).
+	PublicURL string
 	// LoginRateLimit (L8) enables the per-IP failed-login limiter on
 	// /api/login. Defaults to true; tests that hammer the login route set
 	// it false.
@@ -232,6 +241,7 @@ func New(cfg Config) *Server {
 		metricSeries:  cfg.MetricSeries,
 		webhooks:      cfg.Webhooks,
 		setup:         cfg.Setup,
+		publicURL:     cfg.PublicURL,
 	}
 }
 
@@ -276,6 +286,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/webhooks/", s.requireOperator(s.handleWebhookSub))
 	mux.HandleFunc("/admin/events", s.requireOperator(s.handleEvents))
 	mux.HandleFunc("/admin/events/stream", s.requireOperatorStream(s.handleEventStream))
+	// Public URL configuration. Open (no auth) — the Add Device UI reads this
+	// to prefill the server URL field so agents enroll to the correct target.
+	mux.HandleFunc("/api/public-url", s.handlePublicURL)
 	// A-2: first-boot setup wizard. /api/setup/status is always open (the UI
 	// needs it to decide between wizard and login, pre-auth); the POST routes
 	// are open only while the server is uninitialized, then operator-gated.

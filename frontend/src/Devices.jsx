@@ -841,14 +841,36 @@ function windowsInstallCmd(server, token) {
 
 // AddDeviceModal is the operator's "Add a device" action. It mints a one-time
 // enrollment token (POST /api/bootstrap) and hands the operator a single
-// copy-paste command per OS, with the server URL pre-filled from the current
-// origin (editable). The device appears in the list the moment the agent
-// connects — no raw curl to /admin/bootstrap, no copying a token by hand.
+// copy-paste command per OS, with the server URL pre-filled from the configured
+// public URL (GET /api/public-url, falling back to the current origin). The
+// device appears in the list the moment the agent connects — no raw curl to
+// /admin/bootstrap, no copying a token by hand.
 function AddDeviceModal({ token, onUnauthorized, onClose }) {
   const [mint, setMint] = useState(null); // {bootstrap_token, device_id}
   const [error, setError] = useState(null);
   const [server, setServer] = useState(window.location.origin);
+  const [publicUrl, setPublicUrl] = useState(null); // from /api/public-url
   const [copied, setCopied] = useState(null); // which block was last copied
+
+  // Fetch the configured public URL and prefill the server field.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/public-url")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive) return;
+        if (d.url && d.url !== "") {
+          setPublicUrl(d.url);
+          setServer(d.url);
+        }
+      })
+      .catch(() => {
+        // /api/public-url not available — stick with window.location.origin.
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -910,6 +932,12 @@ function AddDeviceModal({ token, onUnauthorized, onClose }) {
             title="The operator's public URL. The host + mTLS gRPC port (default 50052) must be reachable from the device."
           />
         </label>
+        {publicUrl && server !== window.location.origin && (
+          <p className="muted adddev-origin-note">
+            Prefilled with your configured public URL ({publicUrl}). Agents
+            will dial this host on port 50052.
+          </p>
+        )}
         {error && <div className="banner err">{error}</div>}
         {mint === null && !error && (
           <div className="empty">Minting a one-time enrollment token…</div>

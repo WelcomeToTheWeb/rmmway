@@ -137,8 +137,11 @@ that issues TLS automatically (Let's Encrypt for a public domain; Caddy's
 internal CA for `localhost`).
 
 **1. Configure:** copy `.env.prod.example` to `.env.prod` and set
-`RMMWAY_DOMAIN` (your public hostname) plus the required secrets (JWT secret,
-admin credentials, Meilisearch master key, …).
+`RMMWAY_PUBLIC_URL` (your public URL, e.g. `https://rmm.example.com`) plus
+the required secrets (JWT secret, admin credentials, Meilisearch master key, …).
+The public URL is used by the Add Device UI to prefill the server URL field and
+is seeded into the mTLS server cert's SANs so remote agents' hostname
+verification passes when they dial `<host>:50052`.
 
 **2. Boot:**
 
@@ -171,10 +174,11 @@ Docker network with no host ports.
 Hardening: pinned image tags, `restart: unless-stopped`,
 `no-new-privileges`, capabilities dropped to the minimum per service, and
 secrets passed only via the git-ignored `.env.prod` (never baked into
-images). The mTLS server certificate's SANs include `RMMWAY_DOMAIN`, so
-remote agents' hostname verification passes when they dial
-`<domain>:50052`. (For a public IP without a DNS name, Caddy ≥ 2.8 can issue
-a Let's Encrypt cert for the bare IP; a real hostname is still recommended.)
+images). The mTLS server certificate's SANs are seeded from `RMMWAY_PUBLIC_URL`
+(or the legacy `RMMWAY_DOMAIN` / bind addresses), so remote agents' hostname
+verification passes when they dial `<host>:50052`. (For a public IP without a
+DNS name, Caddy ≥ 2.8 can issue a Let's Encrypt cert for the bare IP; a real
+hostname is still recommended.)
 
 Manage the stack with `make prod-down` (stop, keep data),
 `make prod-clean` (stop + delete volumes — destructive), and

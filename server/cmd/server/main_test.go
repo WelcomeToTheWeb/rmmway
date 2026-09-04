@@ -47,6 +47,48 @@ func TestMtlsSANs_NamedBindStripsPort(t *testing.T) {
 	}
 }
 
+// RMMWAY_PUBLIC_URL is the authoritative public dial target: its host is
+// ALWAYS included in the mTLS SANs (no need to also set
+// RMMWAY_GRPC_MTLS_SANs or RMMWAY_DOMAIN).
+func TestMtlsSANs_PublicURLEnvarSeedsSANs(t *testing.T) {
+	t.Setenv("RMMWAY_PUBLIC_URL", "https://rmm.example.com")
+	sans := mtlsSANs(":50052")
+	if !containsString(sans, "rmm.example.com") {
+		t.Errorf("mtlsSANs = %v; missing the RMMWAY_PUBLIC_URL host rmm.example.com", sans)
+	}
+}
+
+// RMMWAY_PUBLIC_URL with an IP address also works.
+func TestMtlsSANs_PublicURLIP(t *testing.T) {
+	t.Setenv("RMMWAY_PUBLIC_URL", "https://203.0.113.10")
+	sans := mtlsSANs(":50052")
+	if !containsString(sans, "203.0.113.10") {
+		t.Errorf("mtlsSANs = %v; missing the RMMWAY_PUBLIC_URL IP 203.0.113.10", sans)
+	}
+}
+
+// publicURLHost extracts the host from a URL (stripping scheme and port).
+func TestPublicURLHost(t *testing.T) {
+	tests := []struct {
+		url    string
+		expect string
+	}{
+		{"", ""},
+		{"https://rmm.example.com", "rmm.example.com"},
+		{"http://rmm.example.com:8080", "rmm.example.com"},
+		{"https://203.0.113.10", "203.0.113.10"},
+		{"https://203.0.113.10:443", "203.0.113.10"},
+		{"rmm.example.com", "rmm.example.com"},
+		{"rmm.example.com:8080", "rmm.example.com"},
+		{" https://rmm.example.com ", "rmm.example.com"},
+	}
+	for _, tc := range tests {
+		if got := publicURLHost(tc.url); got != tc.expect {
+			t.Errorf("publicURLHost(%q) = %q, want %q", tc.url, got, tc.expect)
+		}
+	}
+}
+
 func containsString(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

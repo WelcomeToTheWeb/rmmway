@@ -27,6 +27,7 @@ globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const ORIGIN = "http://rmm.example.com";
+const PUBLIC_URL = "https://rmm.public.example.com";
 const TOKEN = "bt-smoketoken12345";
 const DEVICE_ID = "dev-smokedevice01";
 
@@ -54,6 +55,7 @@ async function fakeFetch(path, init = {}) {
       },
     ]);
   }
+  if (path === "/api/public-url") return json({ url: PUBLIC_URL });
   if (path === "/api/alerts/counts") return json({ open: 0, acked: 0, resolved: 0 });
   if (path === "/api/bootstrap") {
     // The operator "Add a device" mint (auth-gated).
@@ -127,24 +129,32 @@ for (const needle of [DEVICE_ID, TOKEN]) {
     throw new Error(`modal is missing ${needle}: ${modalText.slice(0, 400)}`);
   }
 }
-// Linux command: curl|bash with the origin + the token embedded.
-const linuxTail = `bash -s -- --server ${ORIGIN} --bootstrap ${TOKEN}`;
+// Linux command: curl|bash with the PUBLIC URL + the token embedded.
+const linuxTail = `bash -s -- --server ${PUBLIC_URL} --bootstrap ${TOKEN}`;
 if (!modalText.includes(linuxTail) || !modalText.includes("install.sh | bash")) {
-  throw new Error("Linux install command missing or wrong (origin/token not embedded): " + modalText.slice(0, 600));
+  throw new Error("Linux install command missing or wrong (public URL/token not embedded): " + modalText.slice(0, 600));
 }
-// Windows command: iwr|powershell with the origin + the token embedded.
-const winTail = `-File install.ps1 -Server ${ORIGIN} -Bootstrap ${TOKEN}`;
+// Windows command: iwr|powershell with the PUBLIC URL + the token embedded.
+const winTail = `-File install.ps1 -Server ${PUBLIC_URL} -Bootstrap ${TOKEN}`;
 if (!modalText.includes(winTail) || !modalText.includes("-ExecutionPolicy Bypass")) {
-  throw new Error("Windows install command missing or wrong (origin/token not embedded): " + modalText.slice(0, 600));
+  throw new Error("Windows install command missing or wrong (public URL/token not embedded): " + modalText.slice(0, 600));
 }
 console.log("ok 5: the modal shows ready-to-paste Linux + Windows commands with the origin + token + device id");
 
-// The server URL is pre-filled from the current origin (and editable).
-const serverInput = container.querySelector(".adddev-server");
-if (!serverInput || serverInput.value !== ORIGIN) {
-  throw new Error("server URL input not pre-filled with the origin: " + (serverInput && serverInput.value));
+// The server URL is pre-filled from GET /api/public-url (the configured public
+// URL) — NOT from window.location.origin. This matters when the UI is behind
+// a reverse proxy (e.g. localhost:8080) but the agents need to dial the real
+// public hostname.
+if (!calls.includes("GET /api/public-url")) {
+  throw new Error("expected the Add Device modal to call GET /api/public-url");
 }
-console.log("ok 6: the server URL is pre-filled with the current origin (editable)");
+const serverInput = container.querySelector(".adddev-server");
+if (!serverInput || serverInput.value !== PUBLIC_URL) {
+  throw new Error(
+    `expected Server URL prefilled with ${PUBLIC_URL} (from /api/public-url), got ${serverInput && serverInput.value}`
+  );
+}
+console.log("ok 6: the server URL is pre-filled from GET /api/public-url (configured public URL)");
 
 console.log("\nAdd-device frontend smoke PASS: login -> Devices -> Add a device -> mint + copy-paste commands.");
 process.exit(0);

@@ -153,12 +153,15 @@ services:
       RMMWAY_ADDR: ":8080"
       RMMWAY_GRPC_ADDR: ":50051"
       RMMWAY_GRPC_MTLS_ADDR: ":50052"
-      # A-1: the public hostname goes into the mTLS server cert's SANs so
-      # remote agents' hostname verification passes when they dial
-      # https://<domain>/... -> <domain>:50052. Set RMMWAY_GRPC_MTLS_SANs
-      # directly (comma-separated DNS names / IPs) to override — e.g. when
-      # agents dial the host's LAN IP rather than RMMWAY_DOMAIN.
-      RMMWAY_GRPC_MTLS_SANs: ${RMMWAY_GRPC_MTLS_SANs:-${RMMWAY_DOMAIN:-localhost}}
+      # The operator's public URL (https://rmm.example.com). The Add Device
+      # UI reads this via GET /api/public-url to prefill the server URL
+      # field, and the mTLS server cert's SANs are seeded from its host so
+      # remote agents' x509 hostname verification passes.
+      RMMWAY_PUBLIC_URL: ${RMMWAY_PUBLIC_URL:-}
+      # Legacy: still honored for the Caddy reverse proxy site name. Set
+      # RMMWAY_PUBLIC_URL instead — it is the single authoritative source
+      # for the public dial target.
+      RMMWAY_DOMAIN: ${RMMWAY_DOMAIN:-localhost}
       # C2: selects the boot-time env; non-dev refuses the built-in dev
       # defaults (JWT secret / admin creds / Meili master key).
       RMMWAY_ENV: ${RMMWAY_ENV:-prod}

@@ -134,3 +134,65 @@ func TestBootstrapMintAuthGate(t *testing.T) {
 		t.Fatalf("mint = %v/%v, want bt-minted/dev-minted", body["bootstrap_token"], body["device_id"])
 	}
 }
+
+// TestPublicURLEndpoint proves the open GET /api/public-url endpoint:
+// returns the configured PublicURL (from env, via New(...)) or an empty
+// string when unset. No auth required — the Add Device UI reads this to
+// prefill the server URL field.
+func TestPublicURLEndpoint(t *testing.T) {
+	// With a configured public URL.
+	s := New(Config{
+		JWTSecret:     []byte("test-secret"),
+		AdminUser:     "admin",
+		AdminPassword: "s3cret",
+		PublicURL:     "https://rmm.example.com",
+	})
+	mux := http.NewServeMux()
+	s.Register(mux)
+	req := httptest.NewRequest(http.MethodGet, "/api/public-url", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200", rec.Code)
+	}
+	var body map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&body)
+	if body["url"] != "https://rmm.example.com" {
+		t.Fatalf("url = %v, want https://rmm.example.com", body["url"])
+	}
+
+	// Without a configured public URL (returns empty string).
+	s2 := New(Config{
+		JWTSecret:     []byte("test-secret"),
+		AdminUser:     "admin",
+		AdminPassword: "s3cret",
+	})
+	mux2 := http.NewServeMux()
+	s2.Register(mux2)
+	rec2 := httptest.NewRecorder()
+	mux2.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/api/public-url", nil))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("unconfigured: got %d, want 200", rec2.Code)
+	}
+	var body2 map[string]any
+	_ = json.NewDecoder(rec2.Body).Decode(&body2)
+	if body2["url"] != "" {
+		t.Fatalf("unconfigured: url = %v, want empty", body2["url"])
+	}
+}
+
+// TestPublicURLEndpointMethod proves only GET is accepted on /api/public-url.
+func TestPublicURLEndpointMethod(t *testing.T) {
+	s := New(Config{
+		JWTSecret:     []byte("test-secret"),
+		AdminUser:     "admin",
+		AdminPassword: "s3cret",
+	})
+	mux := http.NewServeMux()
+	s.Register(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/public-url", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/public-url: got %d, want 405", rec.Code)
+	}
+}

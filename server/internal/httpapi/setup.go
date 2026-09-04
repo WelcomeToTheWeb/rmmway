@@ -176,3 +176,18 @@ func (s *Server) handleSetupSMTPTest(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "to": to})
 }
+
+// handlePublicURL returns the configured public operator URL (RMMWAY_PUBLIC_URL).
+// Open (no auth) — the Add Device UI reads this to prefill the server URL field.
+//
+// GET /api/public-url
+//
+//	200 {url: "https://rmm.example.com"} when set
+//	200 {url: ""} when unset (UI falls back to window.location.origin)
+func (s *Server) handlePublicURL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": s.publicURL})
+}

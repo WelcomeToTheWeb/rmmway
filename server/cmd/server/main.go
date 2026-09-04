@@ -75,6 +75,33 @@ func hostIPv4s() []string {
 	return out
 }
 
+// publicURL returns the configured public operator URL (RMMWAY_PUBLIC_URL).
+// If set, its host is used as the authoritative dial target for agents and
+// seeded into the mTLS server cert's SANs so remote agents' x509 verification
+// passes. Returns "" when unset.
+func publicURL() string {
+	return strings.TrimSpace(os.Getenv("RMMWAY_PUBLIC_URL"))
+}
+
+// publicURLHost extracts the host from a URL (stripping scheme and port), or
+// the whole string if it's already a bare host. Returns "" for empty input.
+func publicURLHost(url string) string {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return ""
+	}
+	// Strip scheme if present.
+	if i := strings.Index(url, "://"); i >= 0 {
+		url = url[i+3:]
+	}
+	// host:port -> host.
+	host, _, err := net.SplitHostPort(url)
+	if err != nil {
+		return url // no host:port separator — treat the whole thing as the host.
+	}
+	return host
+}
+
 // mtlsSANs derives the SAN names for the mTLS server cert from the listen
 // addresses: whatever hosts the server is reachable on. Agents typically
 // dial by the RMMWAY_SERVER hostname or by loopback, so we cover both the
@@ -89,6 +116,10 @@ func hostIPv4s() []string {
 // hostname, but LAN agents dial the machine's IP — those are seeded into
 // the cert too, so "server on the LAN, agent dials by IP" works without
 // configuring the env var.
+//
+// RMMWAY_PUBLIC_URL (if set) is the authoritative public dial target: its
+// host is ALWAYS included (no need to also set RMMWAY_GRPC_MTLS_SANs or
+// RMMWAY_DOMAIN).
 func mtlsSANs(listenAddrs ...string) []string {
 	seen := map[string]bool{}
 	sans := []string{}
@@ -103,6 +134,10 @@ func mtlsSANs(listenAddrs ...string) []string {
 	// Common local dial names, always.
 	add("localhost")
 	add("127.0.0.1")
+	// RMMWAY_PUBLIC_URL's host (the authoritative public dial target).
+	if h := publicURLHost(publicURL()); h != "" {
+		add(h)
+	}
 	for _, l := range listenAddrs {
 		// Strip a leading scheme if an http(s) URL was passed.
 		if i := strings.Index(l, "://"); i >= 0 {
@@ -617,6 +652,11 @@ func main() {
 	}
 	log.Printf("org CA ready (cert sha256:%s; leaf TTL %s)", sha256Short(caMgr.RootCertPEM()), caMgr.LeafTTL())
 
+	if pub := publicURL(); pub != "" {
+		log.Printf("public URL: %s (mTLS cert includes %s; the Add Device UI will prefill this)",
+			pub, publicURLHost(pub))
+	}
+
 	// W3-3: per-action capability tokens. Every dispatched command carries a
 	// short-lived token signed by the org root, bound to (device, capability,
 	// command id); the agent verifies it against its pinned root before
@@ -835,7 +875,9 @@ func main() {
 	// RMMWAY_GRPC_MTLS_ADDR=off disables it (plain-listener deployments).
 	var mtlsServer *grpc.Server
 	if grpcMTLSAddr != "off" && grpcMTLSAddr != "" {
-		mtlsCfg, err := caMgr.TLSConfig(mtlsSANs(grpcMTLSAddr, grpcAddr, httpAddr))
+		sans := mtlsSANs(grpcMTLSAddr, grpcAddr, httpAddr)
+		log.Printf("grpc mTLS SANs: %s", strings.Join(sans, " "))
+		mtlsCfg, err := caMgr.TLSConfig(sans)
 		if err != nil {
 			log.Fatalf("grpc mTLS: %v", err)
 		}
@@ -1035,6 +1077,7 @@ func main() {
 		Export:    exportSvc,
 		Webhooks:  webhookSvc,
 		Setup:     setupSvc,
+		PublicURL: publicURL(),
 	})
 	apiSrv.Register(mux)
 
