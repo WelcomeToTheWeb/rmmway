@@ -148,12 +148,17 @@ try {
 # The agent is a real Windows service (it reports the SCM handshake on start),
 # so Start-Service succeeds even before the agent has enrolled/connected.
 $svc = "RmmWayAgent"
-# binPath is written DIRECTLY to the registry (not via sc.exe): sc.exe +
-# PowerShell native-argument quoting mangles the embedded quotes (the path
-# "C:\Program Files\..." loses its quotes and the SCM cannot find the exe,
-# so Start-Service fails with a generic "Cannot start service" error). The
-# registry value is the source of truth - set it verbatim, then verify it
-# round-trips before we let the SCM use it.
+# binPath is set in TWO steps because neither tool alone is sufficient:
+#   1. Set-SvcBinPath writes the registry value DIRECTLY (not via sc.exe):
+#      sc.exe + PowerShell native-argument quoting mangles the embedded quotes
+#      (the path "C:\Program Files\..." loses its quotes and the SCM cannot
+#      find the exe, so Start-Service fails with a generic "Cannot start
+#      service" error). The registry value is verified to round-trip.
+#   2. Push-SvcBinPath pushes that value THROUGH the SCM (sc config binpath=,
+#      run via cmd.exe for the same quoting reason) so the SCM's in-memory
+#      record matches the registry. A bare `sc config <svc> start=` does the
+#      opposite: it re-applies the SCM's CACHED binPath and clobbers the
+#      registry edit, leaving the service launching the placeholder forever.
 $binPath = "`"$bin`" run --config `"$cfg`""
 $svcKey  = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
 function Set-SvcBinPath {
@@ -164,6 +169,26 @@ function Set-SvcBinPath {
         Die "binPath round-trip mismatch - stored [$stored], want [$Value]"
     }
     Log "binPath set + verified: $stored"
+}
+# Push-SvcBinPath syncs the SCM's in-memory record with the registry value.
+# `sc.exe config binpath= <v>` sends the NEW value to ChangeServiceConfig,
+# updating cache + registry together; it is the only way (short of a reboot)
+# to make the SCM see a binPath written straight to the registry. The
+# backslash-escaped quotes are for cmd.exe's parser - sc.exe keeps the outer
+# quotes that a path with spaces needs.
+function Push-SvcBinPath {
+    param([string]$Svc, [string]$Value)
+    $escaped = $Value -replace '"', '\"'
+    & cmd /c ('sc.exe config ' + $Svc + ' binpath= "' + $escaped + '"')
+    if ($LASTEXITCODE -ne 0) {
+        Die "sc.exe config binpath failed for $Svc (exit $LASTEXITCODE)"
+    }
+    $stored = (sc.exe qc $Svc 2>$null | Select-String 'BINARY_PATH_NAME').Line
+    $stored = ($stored -replace '^\s*BINARY_PATH_NAME\s+:\s*', '').Trim()
+    if ($stored -cne $Value) {
+        Die "binPath mismatch after SCM push - stored [$stored], want [$Value]"
+    }
+    Log "SCM binPath synced + verified: $stored"
 }
 # Dump-StartFailure surfaces what the SCM actually saw: Start-Service swallows
 # the real error code (1053 timeout / 1066 bad binPath / 1067 process died
@@ -196,23 +221,23 @@ if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
     # Re-run with a new binary/config path: update binPath, not just restart,
     # or the change never takes effect.
     Set-SvcBinPath $binPath
-    # Any `sc config` call forces the SCM to re-read the service record from
-    # the registry - without it the SCM can keep using the CACHED (stale)
-    # binPath it loaded when the service was first registered, which is a
-    # classic cause of "Cannot start service" after a registry-level update.
-    & sc.exe config $svc start= auto | Out-Null
+    # Sync the SCM's in-memory record (see Push-SvcBinPath) - a bare
+    # `sc config <svc> start=` would re-apply the SCM's CACHED binPath and
+    # silently clobber the registry edit above.
+    Push-SvcBinPath $svc $binPath
     Log "service $svc already exists - updating binPath + restarting"
     try { Restart-Service $svc -ErrorAction Stop } catch { Dump-StartFailure $svc; Log "WARNING: restart failed: $($_.Exception.Message)" }
 } else {
-    # Register with a placeholder binPath (no spaces -> no quoting involved),
-    # set the real quoted binPath via the registry, then enable auto-start.
+    # Register with a placeholder binPath (no spaces -> no quoting involved);
+    # the real quoted binPath goes in via the registry (Set-SvcBinPath) and is
+    # then pushed through the SCM (Push-SvcBinPath), which also sets start= auto.
     & sc.exe create $svc binPath= C:\Windows\system32\cmd.exe start= disabled | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Die "sc.exe create failed (re-run as Administrator)"
     }
     Log "service $svc registered"
     Set-SvcBinPath $binPath
-    & sc.exe config $svc start= auto | Out-Null
+    Push-SvcBinPath $svc $binPath
     try {
         Start-Service $svc -ErrorAction Stop
     } catch {

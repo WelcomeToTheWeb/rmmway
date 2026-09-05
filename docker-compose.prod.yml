@@ -64,7 +64,16 @@ services:
 
   redis:
     image: redis:7
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "512mb",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
     volumes:
       - redis-data:/data
     healthcheck:
@@ -158,6 +167,10 @@ services:
       # field, and the mTLS server cert's SANs are seeded from its host so
       # remote agents' x509 hostname verification passes.
       RMMWAY_PUBLIC_URL: ${RMMWAY_PUBLIC_URL:-}
+      # Explicit SANs for the mTLS server cert (comma-separated DNS names /
+      # IPs). Set it when agents dial an address different from the public
+      # URL — e.g. the host's LAN IP.
+      RMMWAY_GRPC_MTLS_SANs: ${RMMWAY_GRPC_MTLS_SANs:-}
       # Legacy: still honored for the Caddy reverse proxy site name. Set
       # RMMWAY_PUBLIC_URL instead — it is the single authoritative source
       # for the public dial target.
