@@ -26,7 +26,8 @@ function buildGraph(comp) {
     {
       id: "t",
       kind: "trigger",
-      name: trig.name?.trim() || `when ${trig.metric} ${trig.op} ${trig.threshold}`,
+      name:
+        trig.name?.trim() || `when ${trig.metric} ${trig.op} ${trig.threshold}`,
       metric: trig.metric,
       source: trig.source || "",
       op: trig.op,
@@ -38,7 +39,11 @@ function buildGraph(comp) {
     const id = stepId(i);
     const nextId = i + 1 < comp.steps.length ? stepId(i + 1) : "";
     const target = (choice) =>
-      choice === "next" ? nextId : choice === "end" ? "" : stepId(Number(choice));
+      choice === "next"
+        ? nextId
+        : choice === "end"
+          ? ""
+          : stepId(Number(choice));
     if (st.type === "script") {
       nodes.push({
         id,
@@ -105,7 +110,11 @@ function toComposer(flow) {
         else: cur.else || "end",
       });
     } else if (cur.kind === "notify") {
-      steps.push({ type: "notify", name: cur.name || "", message: cur.message || "" });
+      steps.push({
+        type: "notify",
+        name: cur.name || "",
+        message: cur.message || "",
+      });
     }
     const nxt = cur.kind === "check" ? cur.then : cur.next;
     cur = nxt ? byId[nxt] : null;
@@ -164,7 +173,9 @@ function Pipeline({ graph }) {
   }
   // which nodes are jump (else) targets?
   const jumpTargets = new Set(
-    (graph.nodes || []).filter((n) => n.kind === "check" && n.else).map((n) => n.else)
+    (graph.nodes || [])
+      .filter((n) => n.kind === "check" && n.else)
+      .map((n) => n.else),
   );
   return (
     <div className="pipeline">
@@ -176,19 +187,33 @@ function Pipeline({ graph }) {
               n.kind === "script"
                 ? n.script
                 : n.kind === "check"
-                ? `if ${condLabel(n)} → then: ${n.then ? nodeLabel(byId[n.then]) : "end"} · else: ${n.else ? nodeLabel(byId[n.else]) : "end"}`
-                : n.message || ""
+                  ? `if ${condLabel(n)} → then: ${n.then ? nodeLabel(byId[n.then]) : "end"} · else: ${n.else ? nodeLabel(byId[n.else]) : "end"}`
+                  : n.message || ""
             }
           >
             <span className="pipe-kind">{n.kind}</span>
             <span className="pipe-label">{nodeLabel(n)}</span>
             {n.kind === "check" && (
               <span className="pipe-branch">
-                yes → {n.then ? (byId[n.then] ? nodeLabel(byId[n.then]) : "end") : "end"}
-                {" · "}no → {n.else ? (byId[n.else] ? nodeLabel(byId[n.else]) : "end") : "end"}
+                yes →{" "}
+                {n.then
+                  ? byId[n.then]
+                    ? nodeLabel(byId[n.then])
+                    : "end"
+                  : "end"}
+                {" · "}no →{" "}
+                {n.else
+                  ? byId[n.else]
+                    ? nodeLabel(byId[n.else])
+                    : "end"
+                  : "end"}
               </span>
             )}
-            {jumpTargets.has(n.id) && <span className="pipe-jump" title="a check can jump here on 'no'">⇣ else</span>}
+            {jumpTargets.has(n.id) && (
+              <span className="pipe-jump" title="a check can jump here on 'no'">
+                ⇣ else
+              </span>
+            )}
           </span>
           {i < chain.length - 1 && <span className="pipe-arrow">→</span>}
         </span>
@@ -202,7 +227,11 @@ function Pipeline({ graph }) {
 
 function pill(status) {
   const cls =
-    status === "running" ? "pill-run" : status === "succeeded" ? "pill-ok" : "pill-bad";
+    status === "running"
+      ? "pill-run"
+      : status === "succeeded"
+        ? "pill-ok"
+        : "pill-bad";
   return <span className={"pill " + cls}>{status}</span>;
 }
 
@@ -251,7 +280,9 @@ function FlowCard({ token, flow, devices, onUnauthorized, onChanged, onEdit }) {
           id {flow.id} · updated {relTime(flow.updated_at)}
         </span>
       </div>
-      {flow.description && <p className="muted flow-desc">{flow.description}</p>}
+      {flow.description && (
+        <p className="muted flow-desc">{flow.description}</p>
+      )}
       <Pipeline graph={flow.graph} />
       <div className="flow-actions">
         <button
@@ -264,7 +295,11 @@ function FlowCard({ token, flow, devices, onUnauthorized, onChanged, onEdit }) {
         <button
           className="btn ghost"
           title={flow.enabled ? "Disable this flow" : "Enable this flow"}
-          onClick={() => act(() => api.updateFlow(token, flow.id, { enabled: !flow.enabled }))}
+          onClick={() =>
+            act(() =>
+              api.updateFlow(token, flow.id, { enabled: !flow.enabled }),
+            )
+          }
         >
           {flow.enabled ? "disable" : "enable"}
         </button>
@@ -288,7 +323,10 @@ function FlowCard({ token, flow, devices, onUnauthorized, onChanged, onEdit }) {
         <div className="trigger-box">
           <label className="field">
             <span>device</span>
-            <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
+            <select
+              value={deviceId}
+              onChange={(e) => setDeviceId(e.target.value)}
+            >
               <option value="">— pick a device —</option>
               {devices.map((d) => (
                 <option key={d.id} value={d.id}>
@@ -299,7 +337,11 @@ function FlowCard({ token, flow, devices, onUnauthorized, onChanged, onEdit }) {
           </label>
           <label className="field">
             <span>value (optional — empty = measure the live metric)</span>
-            <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="e.g. 95" />
+            <input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="e.g. 95"
+            />
           </label>
           <div className="row-actions">
             <button
@@ -311,7 +353,9 @@ function FlowCard({ token, flow, devices, onUnauthorized, onChanged, onEdit }) {
                     device_id: deviceId,
                     value: value === "" ? null : Number(value),
                   });
-                  setOk("trigger published to the bus — the chain now runs over NATS; watch the runs below");
+                  setOk(
+                    "trigger published to the bus — the chain now runs over NATS; watch the runs below",
+                  );
                   setShowTrigger(false);
                 })
               }
@@ -331,34 +375,58 @@ function FlowCard({ token, flow, devices, onUnauthorized, onChanged, onEdit }) {
 
 function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
   const editing = !!initial;
-  const [comp, setComp] = useState(initial || {
-    name: "",
-    description: "",
-    enabled: true,
-    cooldown_seconds: 0,
-    trigger: { name: "", metric: "", source: "", op: ">", threshold: 90 },
-    steps: [],
-  });
+  const [comp, setComp] = useState(
+    initial || {
+      name: "",
+      description: "",
+      enabled: true,
+      cooldown_seconds: 0,
+      trigger: { name: "", metric: "", source: "", op: ">", threshold: 90 },
+      steps: [],
+    },
+  );
   const [err, setErr] = useState(null);
 
   const set = (patch) => setComp((c) => ({ ...c, ...patch }));
-  const setTrig = (patch) => setComp((c) => ({ ...c, trigger: { ...c.trigger, ...patch } }));
+  const setTrig = (patch) =>
+    setComp((c) => ({ ...c, trigger: { ...c.trigger, ...patch } }));
   const setStep = (i, patch) =>
-    setComp((c) => ({ ...c, steps: c.steps.map((s, j) => (j === i ? { ...s, ...patch } : s)) }));
+    setComp((c) => ({
+      ...c,
+      steps: c.steps.map((s, j) => (j === i ? { ...s, ...patch } : s)),
+    }));
 
   const addStep = (type) => {
     const base = { name: "", then: "next", else: "end" };
     if (type === "script")
       setComp((c) => ({
         ...c,
-        steps: [...c.steps, { ...base, type, lang: "sh", script: "", timeout: 300 }],
+        steps: [
+          ...c.steps,
+          { ...base, type, lang: "sh", script: "", timeout: 300 },
+        ],
       }));
     if (type === "check")
       setComp((c) => ({
         ...c,
-        steps: [...c.steps, { ...base, type, metric: c.trigger.metric, source: "", op: c.trigger.op, threshold: c.trigger.threshold, timeout: 300 }],
+        steps: [
+          ...c.steps,
+          {
+            ...base,
+            type,
+            metric: c.trigger.metric,
+            source: "",
+            op: c.trigger.op,
+            threshold: c.trigger.threshold,
+            timeout: 300,
+          },
+        ],
       }));
-    if (type === "notify") setComp((c) => ({ ...c, steps: [...c.steps, { ...base, type, message: "" }]}));
+    if (type === "notify")
+      setComp((c) => ({
+        ...c,
+        steps: [...c.steps, { ...base, type, message: "" }],
+      }));
   };
   const rmStep = (i) =>
     // removing a step invalidates jump targets — reset any "else/then" that
@@ -367,7 +435,13 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
       const steps = c.steps.filter((_, j) => j !== i);
       steps.forEach((s) => {
         ["then", "else"].forEach((k) => {
-          if (s[k] && s[k] !== "next" && s[k] !== "end" && Number(s[k].slice(1)) >= i) s[k] = "end";
+          if (
+            s[k] &&
+            s[k] !== "next" &&
+            s[k] !== "end" &&
+            Number(s[k].slice(1)) >= i
+          )
+            s[k] = "end";
         });
       });
       return { ...c, steps };
@@ -377,10 +451,14 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
   // last) plus jumps to LATER steps (DAG forward edges only — no cycles).
   const targetOptions = (i) => {
     const opts = [];
-    if (i + 1 < comp.steps.length) opts.push({ v: "next", label: "→ next step" });
+    if (i + 1 < comp.steps.length)
+      opts.push({ v: "next", label: "→ next step" });
     opts.push({ v: "end", label: "→ end chain" });
     for (let j = i + 1; j < comp.steps.length; j++) {
-      opts.push({ v: stepId(j), label: `→ step ${j + 1} (${comp.steps[j].type})` });
+      opts.push({
+        v: stepId(j),
+        label: `→ step ${j + 1} (${comp.steps[j].type})`,
+      });
     }
     return opts;
   };
@@ -388,7 +466,8 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
   const save = async () => {
     setErr(null);
     if (!comp.name.trim()) return setErr("name is required");
-    if (!comp.trigger.metric.trim()) return setErr("trigger metric is required");
+    if (!comp.trigger.metric.trim())
+      return setErr("trigger metric is required");
     const body = {
       name: comp.name.trim(),
       description: comp.description,
@@ -416,7 +495,11 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
       <div className="comp-grid">
         <label className="field">
           <span>name</span>
-          <input value={comp.name} onChange={(e) => set({ name: e.target.value })} placeholder="disk-full" />
+          <input
+            value={comp.name}
+            onChange={(e) => set({ name: e.target.value })}
+            placeholder="disk-full"
+          />
         </label>
         <label className="field">
           <span>cooldown (s) between runs for the same device — 0 = none</span>
@@ -442,20 +525,35 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
         <div className="comp-grid">
           <label className="field">
             <span>label (shown in the pipeline)</span>
-            <input value={comp.trigger.name} onChange={(e) => setTrig({ name: e.target.value })} placeholder="disk > 90%" />
+            <input
+              value={comp.trigger.name}
+              onChange={(e) => setTrig({ name: e.target.value })}
+              placeholder="disk > 90%"
+            />
           </label>
           <label className="field">
             <span>metric</span>
-            <input value={comp.trigger.metric} onChange={(e) => setTrig({ metric: e.target.value })} placeholder="disk.used_percent" />
+            <input
+              value={comp.trigger.metric}
+              onChange={(e) => setTrig({ metric: e.target.value })}
+              placeholder="disk.used_percent"
+            />
           </label>
           <label className="field">
             <span>source (empty = any)</span>
-            <input value={comp.trigger.source} onChange={(e) => setTrig({ source: e.target.value })} placeholder="/dev/sda1" />
+            <input
+              value={comp.trigger.source}
+              onChange={(e) => setTrig({ source: e.target.value })}
+              placeholder="/dev/sda1"
+            />
           </label>
           <label className="field">
             <span>condition</span>
             <span className="op-row">
-              <select value={comp.trigger.op} onChange={(e) => setTrig({ op: e.target.value })}>
+              <select
+                value={comp.trigger.op}
+                onChange={(e) => setTrig({ op: e.target.value })}
+              >
                 {OPS.map((o) => (
                   <option key={o}>{o}</option>
                 ))}
@@ -473,13 +571,32 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
       <div className="comp-section">
         <h4>② steps — what happens</h4>
         {comp.steps.length === 0 && (
-          <p className="muted">No steps yet — a trigger-only flow just records the detection.</p>
+          <p className="muted">
+            No steps yet — a trigger-only flow just records the detection.
+          </p>
         )}
         {comp.steps.map((st, i) => (
           <div key={i} className="step-card">
             <div className="step-head">
               <span className="step-idx">{i + 1}</span>
-              <select value={st.type} onChange={(e) => setStep(i, { type: e.target.value, then: "next", else: "end", lang: "sh", script: "", timeout: 300, metric: comp.trigger.metric, op: comp.trigger.op, threshold: comp.trigger.threshold, source: "", message: "" })}>
+              <select
+                value={st.type}
+                onChange={(e) =>
+                  setStep(i, {
+                    type: e.target.value,
+                    then: "next",
+                    else: "end",
+                    lang: "sh",
+                    script: "",
+                    timeout: 300,
+                    metric: comp.trigger.metric,
+                    op: comp.trigger.op,
+                    threshold: comp.trigger.threshold,
+                    source: "",
+                    message: "",
+                  })
+                }
+              >
                 {STEP_TYPES.map((t) => (
                   <option key={t.key} value={t.key}>
                     {t.label}
@@ -492,7 +609,11 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
                 placeholder="label (shown in the pipeline)"
                 onChange={(e) => setStep(i, { name: e.target.value })}
               />
-              <button className="btn ghost" title="Remove step" onClick={() => rmStep(i)}>
+              <button
+                className="btn ghost"
+                title="Remove step"
+                onClick={() => rmStep(i)}
+              >
                 ✕
               </button>
             </div>
@@ -500,7 +621,10 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
               <div className="comp-grid">
                 <label className="field">
                   <span>lang</span>
-                  <select value={st.lang} onChange={(e) => setStep(i, { lang: e.target.value })}>
+                  <select
+                    value={st.lang}
+                    onChange={(e) => setStep(i, { lang: e.target.value })}
+                  >
                     <option>sh</option>
                     <option>powershell</option>
                     <option>python</option>
@@ -508,11 +632,23 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
                 </label>
                 <label className="field">
                   <span>timeout (s)</span>
-                  <input type="number" value={st.timeout} onChange={(e) => setStep(i, { timeout: e.target.value })} />
+                  <input
+                    type="number"
+                    value={st.timeout}
+                    onChange={(e) => setStep(i, { timeout: e.target.value })}
+                  />
                 </label>
                 <label className="field comp-wide">
-                  <span>script ({{source}} is substituted with the triggered series' source)</span>
-                  <textarea rows={4} value={st.script} onChange={(e) => setStep(i, { script: e.target.value })} placeholder={"#!/bin/sh\ndf -h {{source}}"} />
+                  <span>
+                    script ({{ source }} is substituted with the triggered
+                    series' source)
+                  </span>
+                  <textarea
+                    rows={4}
+                    value={st.script}
+                    onChange={(e) => setStep(i, { script: e.target.value })}
+                    placeholder={"#!/bin/sh\ndf -h {{source}}"}
+                  />
                 </label>
               </div>
             )}
@@ -520,26 +656,44 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
               <div className="comp-grid">
                 <label className="field">
                   <span>metric</span>
-                  <input value={st.metric} onChange={(e) => setStep(i, { metric: e.target.value })} />
+                  <input
+                    value={st.metric}
+                    onChange={(e) => setStep(i, { metric: e.target.value })}
+                  />
                 </label>
                 <label className="field">
                   <span>source (empty = any)</span>
-                  <input value={st.source} onChange={(e) => setStep(i, { source: e.target.value })} />
+                  <input
+                    value={st.source}
+                    onChange={(e) => setStep(i, { source: e.target.value })}
+                  />
                 </label>
                 <label className="field">
                   <span>condition (re-measured after the previous step)</span>
                   <span className="op-row">
-                    <select value={st.op} onChange={(e) => setStep(i, { op: e.target.value })}>
+                    <select
+                      value={st.op}
+                      onChange={(e) => setStep(i, { op: e.target.value })}
+                    >
                       {OPS.map((o) => (
                         <option key={o}>{o}</option>
                       ))}
                     </select>
-                    <input type="number" value={st.threshold} onChange={(e) => setStep(i, { threshold: e.target.value })} />
+                    <input
+                      type="number"
+                      value={st.threshold}
+                      onChange={(e) =>
+                        setStep(i, { threshold: e.target.value })
+                      }
+                    />
                   </span>
                 </label>
                 <label className="field">
                   <span>if condition HOLDS →</span>
-                  <select value={st.then} onChange={(e) => setStep(i, { then: e.target.value })}>
+                  <select
+                    value={st.then}
+                    onChange={(e) => setStep(i, { then: e.target.value })}
+                  >
                     {targetOptions(i).map((o) => (
                       <option key={o.v} value={o.v}>
                         {o.label}
@@ -549,7 +703,10 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
                 </label>
                 <label className="field">
                   <span>otherwise →</span>
-                  <select value={st.else} onChange={(e) => setStep(i, { else: e.target.value })}>
+                  <select
+                    value={st.else}
+                    onChange={(e) => setStep(i, { else: e.target.value })}
+                  >
                     {targetOptions(i).map((o) => (
                       <option key={o.v} value={o.v}>
                         {o.label}
@@ -559,21 +716,33 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
                 </label>
                 <label className="field">
                   <span>timeout (s) waiting for a fresh sample</span>
-                  <input type="number" value={st.timeout} onChange={(e) => setStep(i, { timeout: e.target.value })} />
+                  <input
+                    type="number"
+                    value={st.timeout}
+                    onChange={(e) => setStep(i, { timeout: e.target.value })}
+                  />
                 </label>
               </div>
             )}
             {st.type === "notify" && (
               <label className="field comp-wide">
-                <span>message (fired through the notification seam; W6-2 adds webhooks)</span>
-                <input value={st.message} onChange={(e) => setStep(i, { message: e.target.value })} placeholder="disk still full after cleanup — needs a human" />
+                <span>message (sent to operators and webhook endpoints)</span>
+                <input
+                  value={st.message}
+                  onChange={(e) => setStep(i, { message: e.target.value })}
+                  placeholder="disk still full after cleanup — needs a human"
+                />
               </label>
             )}
           </div>
         ))}
         <div className="row-actions">
           {STEP_TYPES.map((t) => (
-            <button key={t.key} className="btn ghost" onClick={() => addStep(t.key)}>
+            <button
+              key={t.key}
+              className="btn ghost"
+              onClick={() => addStep(t.key)}
+            >
               + {t.label}
             </button>
           ))}
@@ -583,7 +752,11 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
       {err && <div className="banner err">{err}</div>}
       <div className="row-actions comp-foot">
         <label className="field check">
-          <input type="checkbox" checked={comp.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+          <input
+            type="checkbox"
+            checked={comp.enabled}
+            onChange={(e) => set({ enabled: e.target.checked })}
+          />
           enabled
         </label>
         <span style={{ flex: 1 }} />
@@ -646,7 +819,8 @@ function RunsTable({ token, onUnauthorized, pollKey }) {
         <p>No runs yet.</p>
         <p className="muted">
           A run starts when a flow's trigger fires — from a fresh metric sample
-          (the sampler) or a synthetic trigger (the "test trigger" button above).
+          (the sampler) or a synthetic trigger (the "test trigger" button
+          above).
         </p>
       </div>
     );
@@ -674,7 +848,9 @@ function RunsTable({ token, onUnauthorized, pollKey }) {
               <td className="id">{r.device_id}</td>
               <td>{pill(r.status)}</td>
               <td className="mono">{r.current_node}</td>
-              <td className="mono">{r.trigger_value != null ? String(r.trigger_value) : "—"}</td>
+              <td className="mono">
+                {r.trigger_value != null ? String(r.trigger_value) : "—"}
+              </td>
               <td className="muted">{relTime(r.started_at)}</td>
               <td className="muted run-reason">{r.reason || "—"}</td>
               <td className="muted">{open === r.id ? "▾" : "▸"}</td>
@@ -685,7 +861,8 @@ function RunsTable({ token, onUnauthorized, pollKey }) {
       {open !== null && detail && (
         <div className="run-detail">
           <div className="muted tiny">
-            run {detail.run.id} · {detail.run.flow_name} · {detail.run.device_id} · {detail.run.status}
+            run {detail.run.id} · {detail.run.flow_name} ·{" "}
+            {detail.run.device_id} · {detail.run.status}
           </div>
           <table className="events">
             <thead>
@@ -702,7 +879,9 @@ function RunsTable({ token, onUnauthorized, pollKey }) {
                   <td className="mono">{e.node}</td>
                   <td>{pill2(e.status)}</td>
                   <td className="muted">{e.reason || "—"}</td>
-                  <td className="muted">{new Date(e.at).toLocaleTimeString()}</td>
+                  <td className="muted">
+                    {new Date(e.at).toLocaleTimeString()}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -715,7 +894,13 @@ function RunsTable({ token, onUnauthorized, pollKey }) {
 
 function pill2(status) {
   const cls =
-    status === "ok" || status === "branched" ? "pill-ok" : status === "waiting" ? "pill-run" : status === "failed" || status === "timeout" ? "pill-bad" : "pill-mut";
+    status === "ok" || status === "branched"
+      ? "pill-ok"
+      : status === "waiting"
+        ? "pill-run"
+        : status === "failed" || status === "timeout"
+          ? "pill-bad"
+          : "pill-mut";
   return <span className={"pill " + cls}>{status}</span>;
 }
 
@@ -786,8 +971,12 @@ export default function Flows({ token, onUnauthorized }) {
             <div className="empty">
               <p>No flows yet.</p>
               <p className="muted">
-                Compose one — e.g. <code>disk &gt; 90% → free space → if still &gt; 90% → notify</code> —
-                then fire a synthetic trigger to watch the chain run over NATS.
+                Compose one — e.g.{" "}
+                <code>
+                  disk &gt; 90% → free space → if still &gt; 90% → notify
+                </code>{" "}
+                — then fire a synthetic trigger to watch the chain run over
+                NATS.
               </p>
             </div>
           )}
@@ -823,7 +1012,11 @@ export default function Flows({ token, onUnauthorized }) {
           sweep
         </button>
       </div>
-      <RunsTable token={token} onUnauthorized={onUnauthorized} pollKey={pollKey} />
+      <RunsTable
+        token={token}
+        onUnauthorized={onUnauthorized}
+        pollKey={pollKey}
+      />
     </section>
   );
 }

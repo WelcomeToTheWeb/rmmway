@@ -30,9 +30,11 @@ function fmtAt(iso) {
 // (best-effort), then from the bus event payload, then the raw id.
 function hostnameOf(env, hostnames) {
   if (env.device_id) {
-    return hostnames[env.device_id] ||
+    return (
+      hostnames[env.device_id] ||
       (env.event && env.event.data && env.event.data.hostname) ||
-      env.device_id;
+      env.device_id
+    );
   }
   return (env.event && env.event.data && env.event.data.hostname) || "—";
 }
@@ -45,19 +47,23 @@ function summarize(env, hostnames) {
   if (env.category === "alert") {
     const what = d.name || ev.source || "metric";
     if (action) {
-      const score = d.score != null ? ` (score ${d.score})` : "";
+      const score = d.score == null ? "" : ` (score ${d.score})`;
       return `${what} ${action}${score}`;
     }
     return `${what}${action ? ` — ${action}` : ""}`;
   }
   if (env.category === "inventory") {
     const host = (d.hostname && d.hostname) || hostnameOf(env, hostnames);
-    return action ? `${host} ${action}` : `${host} — ${env.type || "device event"}`;
+    return action
+      ? `${host} ${action}`
+      : `${host} — ${env.type || "device event"}`;
   }
   if (env.category === "automation") {
-    if (ev.command_id) return `${ev.command_id}${ev.status ? " " + ev.status : ""}`;
+    if (ev.command_id)
+      return `${ev.command_id}${ev.status ? " " + ev.status : ""}`;
     if (ev.message) return ev.message;
-    if (ev.node_id) return `flow ${ev.node_id}${ev.run_id ? ` (run ${ev.run_id})` : ""}`;
+    if (ev.node_id)
+      return `flow ${ev.node_id}${ev.run_id ? ` (run ${ev.run_id})` : ""}`;
     return action || env.type || "automation event";
   }
   return ev.message || action || env.type || "event";
@@ -73,7 +79,11 @@ function EventRow({ env, hostnames, open, onToggle, onGoToDevice }) {
         onClick={onToggle}
       >
         <td className="journal-time">{fmtAt(env.at)}</td>
-        <td><span className={"pill cat cat-" + (env.category || "other")}>{env.category || "other"}</span></td>
+        <td>
+          <span className={"pill cat cat-" + (env.category || "other")}>
+            {env.category || "other"}
+          </span>
+        </td>
         <td>{host}</td>
         <td className="journal-type">{env.type}</td>
         <td className="journal-summary">{summarize(env, hostnames)}</td>
@@ -102,13 +112,22 @@ function EventRow({ env, hostnames, open, onToggle, onGoToDevice }) {
   );
 }
 
-export default function Events({ token, onUnauthorized, onGoToDevice, lastEvent }) {
+export default function Events({
+  token,
+  onUnauthorized,
+  onGoToDevice,
+  lastEvent,
+}) {
   const [devices, setDevices] = useState([]);
   const [category, setCategory] = useState("");
   const [device, setDevice] = useState("");
   const [type, setType] = useState("");
   // The filters actually sent to the server (applied on demand).
-  const [applied, setApplied] = useState({ category: "", device: "", type: "" });
+  const [applied, setApplied] = useState({
+    category: "",
+    device: "",
+    type: "",
+  });
   const [page, setPage] = useState(null); // null = loading; server order (oldest first)
   const [atLatest, setAtLatest] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -117,7 +136,7 @@ export default function Events({ token, onUnauthorized, onGoToDevice, lastEvent 
 
   const hostnames = useMemo(
     () => Object.fromEntries((devices || []).map((d) => [d.id, d.hostname])),
-    [devices]
+    [devices],
   );
 
   useEffect(() => {
@@ -140,7 +159,7 @@ export default function Events({ token, onUnauthorized, onGoToDevice, lastEvent 
         device: f.device,
         type: f.type,
       }),
-    [token]
+    [token],
   );
 
   // Walk forward to the end of the journal, then show the final batch.
@@ -168,7 +187,7 @@ export default function Events({ token, onUnauthorized, onGoToDevice, lastEvent 
         setLoading(false);
       }
     },
-    [fetchPage, onUnauthorized]
+    [fetchPage, onUnauthorized],
   );
 
   useEffect(() => {
@@ -229,7 +248,7 @@ export default function Events({ token, onUnauthorized, onGoToDevice, lastEvent 
           <p className="muted">
             The global event journal — every alert, inventory change, and
             automation event, newest first. Filter, page back through history,
-            and open a row for the full envelope.
+            and open a row for its full event details.
           </p>
         </div>
         <div className="view-actions">
@@ -249,10 +268,7 @@ export default function Events({ token, onUnauthorized, onGoToDevice, lastEvent 
           </label>
           <label className="events-filter">
             <span>Device</span>
-            <select
-              value={device}
-              onChange={(e) => setDevice(e.target.value)}
-            >
+            <select value={device} onChange={(e) => setDevice(e.target.value)}>
               <option value="">all</option>
               {(devices || []).map((d) => (
                 <option key={d.id} value={d.id}>
@@ -279,10 +295,10 @@ export default function Events({ token, onUnauthorized, onGoToDevice, lastEvent 
       <div className="view-head events-paging">
         <div className="muted">
           {rows
-            ? `${rows.length} entries · seq ${page[0].id}–${page[page.length - 1].id}${atLatest ? " (latest)" : ""}`
+            ? `${rows.length} entries · event # ${page[0].id}–${page[page.length - 1].id}${atLatest ? " (latest)" : ""}`
             : loading
-            ? "loading journal…"
-            : ""}
+              ? "loading journal…"
+              : ""}
         </div>
         <div className="row-actions">
           <button
@@ -306,9 +322,13 @@ export default function Events({ token, onUnauthorized, onGoToDevice, lastEvent 
       </div>
 
       {error && <div className="banner err">{error}</div>}
-      {!rows && !error && <div className="empty">Loading the event journal…</div>}
+      {!rows && !error && (
+        <div className="empty">Loading the event journal…</div>
+      )}
       {rows && rows.length === 0 && (
-        <div className="empty">No journal entries match the current filter.</div>
+        <div className="empty">
+          No journal entries match the current filter.
+        </div>
       )}
       {rows && rows.length > 0 && (
         <div className="table-wrap">

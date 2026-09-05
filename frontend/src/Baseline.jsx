@@ -19,7 +19,8 @@ const fmtAt = (s) => {
   return Number.isNaN(d.getTime()) ? String(s) : d.toLocaleString();
 };
 const fmtZ = (z) => (z == null ? "—" : z.toFixed(1) + "σ");
-const band = (score) => (score >= 6 ? "severe" : score >= 3 ? "elevated" : "calm");
+const band = (score) =>
+  score >= 6 ? "severe" : score >= 3 ? "elevated" : "calm";
 
 export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
   const [devices, setDevices] = useState([]);
@@ -34,18 +35,24 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
 
   const hostnames = useMemo(
     () => Object.fromEntries((devices || []).map((d) => [d.id, d.hostname])),
-    [devices]
+    [devices],
   );
 
   useEffect(() => {
     let alive = true;
-    api.devices(token).then((list) => alive && setDevices(list || [])).catch(() => {});
-    return () => { alive = false; };
+    api
+      .devices(token)
+      .then((list) => alive && setDevices(list || []))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [token]);
 
   const load = useCallback(
     (dev, met, min) => {
-      api.baselineAnomalies(token, { device_id: dev, name: met, min_score: min })
+      api
+        .baselineAnomalies(token, { device_id: dev, name: met, min_score: min })
         .then((list) => {
           setAnomalies(list || []);
           setNotWired(false);
@@ -56,7 +63,7 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
           else setError(e.message);
         });
     },
-    [token, onUnauthorized]
+    [token, onUnauthorized],
   );
 
   useEffect(() => {
@@ -72,7 +79,7 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
         (a) =>
           (!deviceId || a.device_id === deviceId) &&
           (!metric || a.name === metric) &&
-          (min == null || Number.isNaN(min) || a.score >= min)
+          (min == null || Number.isNaN(min) || a.score >= min),
       )
       .sort((x, y) => y.score - x.score || new Date(y.at) - new Date(x.at));
   }, [anomalies, deviceId, metric, minScore]);
@@ -97,8 +104,8 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
       <div className="view">
         <h2>Baseline</h2>
         <div className="empty">
-          The baseline engine is not wired on this server (in-memory mode) —
-          start with Postgres to enable per-device baselines.
+          Per-device baselines need the full server stack (database) to run —
+          start the production stack to enable them.
         </div>
       </div>
     );
@@ -133,7 +140,9 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
         <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
           <option value="">all devices</option>
           {(devices || []).map((d) => (
-            <option key={d.id} value={d.id}>{d.hostname || d.id}</option>
+            <option key={d.id} value={d.id}>
+              {d.hostname || d.id}
+            </option>
           ))}
         </select>
         <input
@@ -176,7 +185,11 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
                       href="#/devices"
                       onClick={(e) => {
                         e.preventDefault();
-                        if (onGoToDevice) onGoToDevice(a.device_id, hostnames[a.device_id] || a.device_id);
+                        if (onGoToDevice)
+                          onGoToDevice(
+                            a.device_id,
+                            hostnames[a.device_id] || a.device_id,
+                          );
                       }}
                     >
                       {hostnames[a.device_id] || a.device_id}

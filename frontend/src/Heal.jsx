@@ -25,7 +25,12 @@ const RUN_STATUSES = [
   "failed",
   "skipped",
 ];
-const ACTIVE_STATUSES = new Set(["detected", "verifying", "remediating", "confirming"]);
+const ACTIVE_STATUSES = new Set([
+  "detected",
+  "verifying",
+  "remediating",
+  "confirming",
+]);
 
 function fmtAt(iso) {
   if (!iso) return "";
@@ -39,7 +44,9 @@ function fmtDuration(run) {
   const end =
     run.confirmed_at ||
     run.escalated_at ||
-    (run.status === "failed" || run.status === "skipped" ? run.updated_at : null);
+    (run.status === "failed" || run.status === "skipped"
+      ? run.updated_at
+      : null);
   if (!run.created_at || !end) return null;
   const ms = new Date(end) - new Date(run.created_at);
   if (Number.isNaN(ms) || ms < 0) return null;
@@ -67,13 +74,21 @@ function actionOf(pb) {
 }
 
 function StatusPill({ status }) {
-  return (
-    <span className={"pill hs hs-" + status}>{status}</span>
-  );
+  return <span className={"pill hs hs-" + status}>{status}</span>;
 }
 
 // One panel: the declarative playbooks + the create form.
-function PlaybooksPanel({ playbooks, lastRuns, busy, onToggle, onCreate, creating, error, onOpenForm, form }) {
+function PlaybooksPanel({
+  playbooks,
+  lastRuns,
+  busy,
+  onToggle,
+  onCreate,
+  creating,
+  error,
+  onOpenForm,
+  form,
+}) {
   return (
     <section className="heal-panel">
       <div className="heal-panel-head">
@@ -110,14 +125,22 @@ function PlaybooksPanel({ playbooks, lastRuns, busy, onToggle, onCreate, creatin
             {(playbooks || []).map((pb) => {
               const last = lastRuns[pb.key];
               return (
-                <tr key={pb.key} className={"heal-pb-row" + (pb.enabled ? "" : " off")}>
+                <tr
+                  key={pb.key}
+                  className={"heal-pb-row" + (pb.enabled ? "" : " off")}
+                >
                   <td>
                     <strong>{pb.name || pb.key}</strong>
                     <div className="muted heal-key">{pb.key}</div>
-                    {pb.description && <div className="muted">{pb.description}</div>}
+                    {pb.description && (
+                      <div className="muted">{pb.description}</div>
+                    )}
                   </td>
                   <td className="heal-trigger">{triggerOf(pb)}</td>
-                  <td>{pb.os_filter || "all OS"}{pb.source ? ` · ${pb.source}` : ""}</td>
+                  <td>
+                    {pb.os_filter || "all OS"}
+                    {pb.source ? ` · ${pb.source}` : ""}
+                  </td>
                   <td className="heal-action">{actionOf(pb)}</td>
                   <td className="muted">
                     {last
@@ -125,7 +148,10 @@ function PlaybooksPanel({ playbooks, lastRuns, busy, onToggle, onCreate, creatin
                       : "never"}
                   </td>
                   <td>
-                    <label className="switch" title={pb.enabled ? "Disable" : "Enable"}>
+                    <label
+                      className="switch"
+                      title={pb.enabled ? "Disable" : "Enable"}
+                    >
                       <input
                         type="checkbox"
                         className="pb-toggle"
@@ -181,7 +207,8 @@ function CreatePlaybookForm({ onCancel, onSubmit }) {
         detect_op: f.detect_op,
         detect_threshold: Number(f.detect_threshold),
         confirm_op: f.confirm_op,
-        confirm_threshold: f.confirm_threshold === "" ? undefined : Number(f.confirm_threshold),
+        confirm_threshold:
+          f.confirm_threshold === "" ? undefined : Number(f.confirm_threshold),
         os_filter: f.os_filter || undefined,
         cooldown_seconds: Number(f.cooldown_seconds) || undefined,
         remediate_sh: f.remediate_sh || undefined,
@@ -200,18 +227,30 @@ function CreatePlaybookForm({ onCancel, onSubmit }) {
       <div className="heal-form-grid">
         <label>
           Name
-          <input value={f.name} onChange={set("name")} placeholder="CPU saturation" required />
+          <input
+            value={f.name}
+            onChange={set("name")}
+            placeholder="CPU saturation"
+            required
+          />
         </label>
         <label>
           Metric
-          <input value={f.metric} onChange={set("metric")} placeholder="cpu.utilization_percent" required />
+          <input
+            value={f.metric}
+            onChange={set("metric")}
+            placeholder="cpu.utilization_percent"
+            required
+          />
         </label>
         <label>
           Detect when
           <span className="heal-form-row">
             <select value={f.detect_op} onChange={set("detect_op")}>
               {[">", ">=", "==", "<", "<="].map((op) => (
-                <option key={op} value={op}>{op}</option>
+                <option key={op} value={op}>
+                  {op}
+                </option>
               ))}
             </select>
             <input
@@ -229,7 +268,9 @@ function CreatePlaybookForm({ onCancel, onSubmit }) {
           <span className="heal-form-row">
             <select value={f.confirm_op} onChange={set("confirm_op")}>
               {["<", "<=", "==", ">", ">="].map((op) => (
-                <option key={op} value={op}>{op}</option>
+                <option key={op} value={op}>
+                  {op}
+                </option>
               ))}
             </select>
             <input
@@ -243,11 +284,19 @@ function CreatePlaybookForm({ onCancel, onSubmit }) {
         </label>
         <label>
           OS filter (comma list; empty = all)
-          <input value={f.os_filter} onChange={set("os_filter")} placeholder="linux, windows" />
+          <input
+            value={f.os_filter}
+            onChange={set("os_filter")}
+            placeholder="linux, windows"
+          />
         </label>
         <label>
           Cooldown (seconds)
-          <input type="number" value={f.cooldown_seconds} onChange={set("cooldown_seconds")} />
+          <input
+            type="number"
+            value={f.cooldown_seconds}
+            onChange={set("cooldown_seconds")}
+          />
         </label>
         <label className="heal-form-wide">
           Remediation script (sh — Linux/macOS)
@@ -271,7 +320,11 @@ function CreatePlaybookForm({ onCancel, onSubmit }) {
         </label>
       </div>
       <div className="row-actions">
-        <button type="submit" className="btn" disabled={busy || !f.name || !f.metric || f.detect_threshold === ""}>
+        <button
+          type="submit"
+          className="btn"
+          disabled={busy || !f.name || !f.metric || f.detect_threshold === ""}
+        >
           {busy ? "Saving…" : "Create playbook"}
         </button>
         <button type="button" className="btn ghost" onClick={onCancel}>
@@ -283,7 +336,15 @@ function CreatePlaybookForm({ onCancel, onSubmit }) {
 }
 
 // The second panel: the runs audit trail + the per-run stage trace.
-function RunsPanel({ runs, devices, hostnames, selectedRun, onSelect, onFilter, error }) {
+function RunsPanel({
+  runs,
+  devices,
+  hostnames,
+  selectedRun,
+  onSelect,
+  onFilter,
+  error,
+}) {
   const [status, setStatus] = useState("");
   const [deviceId, setDeviceId] = useState("");
   return (
@@ -301,7 +362,9 @@ function RunsPanel({ runs, devices, hostnames, selectedRun, onSelect, onFilter, 
           >
             <option value="">all statuses</option>
             {RUN_STATUSES.map((s) => (
-              <option key={s} value={s}>{s}</option>
+              <option key={s} value={s}>
+                {s}
+              </option>
             ))}
           </select>
           <select
@@ -314,14 +377,21 @@ function RunsPanel({ runs, devices, hostnames, selectedRun, onSelect, onFilter, 
           >
             <option value="">all devices</option>
             {(devices || []).map((d) => (
-              <option key={d.id} value={d.id}>{d.hostname || d.id}</option>
+              <option key={d.id} value={d.id}>
+                {d.hostname || d.id}
+              </option>
             ))}
           </select>
         </div>
       </div>
       {error && <div className="banner err">{error}</div>}
       {selectedRun ? (
-        <RunDetail run={selectedRun.run} events={selectedRun.events} hostnames={hostnames} onBack={() => onSelect(null)} />
+        <RunDetail
+          run={selectedRun.run}
+          events={selectedRun.events}
+          hostnames={hostnames}
+          onBack={() => onSelect(null)}
+        />
       ) : (
         <div className="table-wrap">
           <table className="heal-runs">
@@ -345,9 +415,13 @@ function RunsPanel({ runs, devices, hostnames, selectedRun, onSelect, onFilter, 
                   <td className="muted mono">{fmtAt(r.created_at)}</td>
                   <td>{r.playbook_key}</td>
                   <td>{hostnames[r.device_id] || r.device_id}</td>
-                  <td><StatusPill status={r.status} /></td>
+                  <td>
+                    <StatusPill status={r.status} />
+                  </td>
                   <td className="muted">
-                    {ACTIVE_STATUSES.has(r.status) ? "in flight…" : (fmtDuration(r) || "—")}
+                    {ACTIVE_STATUSES.has(r.status)
+                      ? "in flight…"
+                      : fmtDuration(r) || "—"}
                   </td>
                 </tr>
               ))}
@@ -369,7 +443,9 @@ function RunDetail({ run, events, hostnames, onBack }) {
   return (
     <div className="heal-run-detail">
       <div className="heal-run-detail-head">
-        <button className="btn ghost" onClick={onBack}>← All runs</button>
+        <button className="btn ghost" onClick={onBack}>
+          ← All runs
+        </button>
         <div>
           <strong>{run.playbook_key}</strong>
           <StatusPill status={run.status} />
@@ -411,14 +487,19 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
 
   const hostnames = useMemo(
     () => Object.fromEntries((devices || []).map((d) => [d.id, d.hostname])),
-    [devices]
+    [devices],
   );
 
   // Best-effort hostname map for the run rows.
   useEffect(() => {
     let alive = true;
-    api.devices(token).then((list) => alive && setDevices(list || [])).catch(() => {});
-    return () => { alive = false; };
+    api
+      .devices(token)
+      .then((list) => alive && setDevices(list || []))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [token]);
 
   const loadPlaybooks = useCallback(async () => {
@@ -445,7 +526,7 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
         else setError(e.message);
       }
     },
-    [token, onUnauthorized]
+    [token, onUnauthorized],
   );
 
   useEffect(() => {
@@ -456,7 +537,10 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
   const lastRuns = useMemo(() => {
     const m = {};
     for (const r of runs || []) {
-      if (!m[r.playbook_key] || new Date(r.created_at) > new Date(m[r.playbook_key].created_at)) {
+      if (
+        !m[r.playbook_key] ||
+        new Date(r.created_at) > new Date(m[r.playbook_key].created_at)
+      ) {
         m[r.playbook_key] = r;
       }
     }
@@ -478,7 +562,7 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
         else setError(e.message);
       }
     },
-    [token, onUnauthorized]
+    [token, onUnauthorized],
   );
 
   const togglePlaybook = useCallback(
@@ -486,9 +570,13 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
       setBusy(true);
       setError(null);
       try {
-        const updated = await api.healUpdatePlaybook(token, pb.key, { enabled: !pb.enabled });
+        const updated = await api.healUpdatePlaybook(token, pb.key, {
+          enabled: !pb.enabled,
+        });
         setPlaybooks((list) =>
-          (list || []).map((p) => (p.key === pb.key ? { ...p, ...updated } : p))
+          (list || []).map((p) =>
+            p.key === pb.key ? { ...p, ...updated } : p,
+          ),
         );
       } catch (e) {
         if (e.unauthorized) onUnauthorized();
@@ -497,7 +585,7 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
         setBusy(false);
       }
     },
-    [token, onUnauthorized]
+    [token, onUnauthorized],
   );
 
   const createPlaybook = useCallback(
@@ -516,7 +604,14 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
         setBusy(false);
       }
     },
-    [token, onUnauthorized, loadPlaybooks, loadRuns, statusFilter, deviceFilter]
+    [
+      token,
+      onUnauthorized,
+      loadPlaybooks,
+      loadRuns,
+      statusFilter,
+      deviceFilter,
+    ],
   );
 
   const runPass = useCallback(async () => {
@@ -525,22 +620,32 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
     try {
       const p = await api.healPass(token);
       setPassSummary(p);
-      await Promise.all([loadPlaybooks(), loadRuns(statusFilter, deviceFilter)]);
+      await Promise.all([
+        loadPlaybooks(),
+        loadRuns(statusFilter, deviceFilter),
+      ]);
     } catch (e) {
       if (e.unauthorized) onUnauthorized();
       else setError(e.message);
     } finally {
       setPassBusy(false);
     }
-  }, [token, onUnauthorized, loadPlaybooks, loadRuns, statusFilter, deviceFilter]);
+  }, [
+    token,
+    onUnauthorized,
+    loadPlaybooks,
+    loadRuns,
+    statusFilter,
+    deviceFilter,
+  ]);
 
   if (notWired) {
     return (
       <div className="view">
         <h2>Heal</h2>
         <div className="empty">
-          The heal engine is not wired on this server (in-memory mode) — start
-          with Postgres to enable playbooks.
+          Self-healing playbooks need the full server stack (database) to run —
+          start the production stack to enable them.
         </div>
       </div>
     );
@@ -552,17 +657,18 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
         <div>
           <h2>Heal</h2>
           <p className="muted">
-            Self-healing playbooks: detect a failing metric, verify it's safe
-            to act, remediate on the device, confirm the fix — or escalate to
-            a human.
+            Self-healing playbooks: detect a failing metric, verify it's safe to
+            act, remediate on the device, confirm the fix — or escalate to a
+            human.
           </p>
         </div>
         <div className="row-actions">
           {passSummary && (
             <span className="heal-pass-summary muted">
-              last pass: {passSummary.detections} detected · {passSummary.started} started ·{" "}
-              {passSummary.confirmed} confirmed · {passSummary.escalated} escalated ·{" "}
-              {passSummary.failed} failed · {passSummary.active_runs} in flight
+              last pass: {passSummary.detections} detected ·{" "}
+              {passSummary.started} started · {passSummary.confirmed} confirmed
+              · {passSummary.escalated} escalated · {passSummary.failed} failed
+              · {passSummary.active_runs} in flight
             </span>
           )}
           <button className="btn" onClick={runPass} disabled={passBusy}>

@@ -82,7 +82,12 @@ function WebhookForm({ initial, onSubmit, onCancel, busy }) {
       <div className="webhook-form-grid">
         <label>
           Name
-          <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="slack-ops" required />
+          <input
+            value={f.name}
+            onChange={(e) => setF({ ...f, name: e.target.value })}
+            placeholder="slack-ops"
+            required
+          />
         </label>
         <label>
           Request URL
@@ -99,7 +104,9 @@ function WebhookForm({ initial, onSubmit, onCancel, busy }) {
             type="password"
             value={f.secret}
             onChange={(e) => setF({ ...f, secret: e.target.value })}
-            placeholder={isEdit ? "set at creation — not changeable here" : "whsec_…"}
+            placeholder={
+              isEdit ? "set at creation — not changeable here" : "whsec_…"
+            }
             disabled={isEdit}
             required={!isEdit}
           />
@@ -129,7 +136,11 @@ function WebhookForm({ initial, onSubmit, onCancel, busy }) {
         </label>
       </div>
       <div className="row-actions">
-        <button type="submit" className="btn" disabled={busy || !f.name || !f.url || (!isEdit && !f.secret)}>
+        <button
+          type="submit"
+          className="btn"
+          disabled={busy || !f.name || !f.url || (!isEdit && !f.secret)}
+        >
           {busy ? "Saving…" : isEdit ? "Save changes" : "Add webhook"}
         </button>
         <button type="button" className="btn ghost" onClick={onCancel}>
@@ -142,13 +153,23 @@ function WebhookForm({ initial, onSubmit, onCancel, busy }) {
 
 // The per-endpoint delivery journal: everything this endpoint is subscribed
 // to, with each seq colored against the endpoint's delivery cursor.
-function DeliveriesPanel({ ep, events, hostnames, onBack, onReplay, replayMsg, replayBusy }) {
+function DeliveriesPanel({
+  ep,
+  events,
+  hostnames,
+  onBack,
+  onReplay,
+  replayMsg,
+  replayBusy,
+}) {
   const rows = useMemo(() => [...(events || [])].reverse(), [events]);
   const pending = (events || []).filter((e) => e.id > ep.last_seq).length;
   return (
     <section className="webhook-panel">
       <div className="webhook-panel-head">
-        <button className="btn ghost" onClick={onBack}>← All webhooks</button>
+        <button className="btn ghost" onClick={onBack}>
+          ← All webhooks
+        </button>
         <div>
           <strong>{ep.name}</strong>
           <span className="muted mono webhook-url"> {ep.url}</span>
@@ -160,20 +181,20 @@ function DeliveriesPanel({ ep, events, hostnames, onBack, onReplay, replayMsg, r
       {replayMsg && (
         <div className="banner ok">
           Cursor reset confirmed — from_seq={replayMsg.from_seq}, last_seq=
-          {replayMsg.last_seq}, status {replayMsg.status}. The sweeper now
-          re-delivers from sequence {replayMsg.from_seq} forward.
+          {replayMsg.last_seq}, status {replayMsg.status}. Deliveries from event
+          # {replayMsg.from_seq} forward will be re-sent.
         </div>
       )}
       <div className="webhook-journal-meta muted">
-        {rows.length} journaled event{rows.length === 1 ? "" : "s"} in this
-        endpoint's categories · cursor at seq {ep.last_seq} · {pending}{" "}
+        {rows.length} recorded event{rows.length === 1 ? "" : "s"} in this
+        endpoint's categories · cursor at event # {ep.last_seq} · {pending}{" "}
         pending
       </div>
       <div className="table-wrap">
         <table className="journal">
           <thead>
             <tr>
-              <th>Seq</th>
+              <th>Event #</th>
               <th>Category</th>
               <th>Type</th>
               <th>Device</th>
@@ -185,9 +206,13 @@ function DeliveriesPanel({ ep, events, hostnames, onBack, onReplay, replayMsg, r
             {rows.map((ev) => (
               <tr key={ev.id} className="journal-row">
                 <td className="mono">{ev.id}</td>
-                <td><span className={catClass(ev.category)}>{ev.category}</span></td>
+                <td>
+                  <span className={catClass(ev.category)}>{ev.category}</span>
+                </td>
                 <td>{ev.type}</td>
-                <td>{ev.device_id ? hostnames[ev.device_id] || ev.device_id : "—"}</td>
+                <td>
+                  {ev.device_id ? hostnames[ev.device_id] || ev.device_id : "—"}
+                </td>
                 <td className="muted mono">{fmtAt(ev.at)}</td>
                 <td>
                   {ev.id <= ep.last_seq ? (
@@ -201,7 +226,9 @@ function DeliveriesPanel({ ep, events, hostnames, onBack, onReplay, replayMsg, r
           </tbody>
         </table>
         {events && rows.length === 0 && (
-          <div className="empty">No journaled events in this endpoint's categories.</div>
+          <div className="empty">
+            No recorded events in this endpoint's categories.
+          </div>
         )}
       </div>
     </section>
@@ -225,16 +252,28 @@ function ReplayControls({ ep, onReplay, busy }) {
       </button>
       {confirming ? (
         <span className="webhook-replay-confirm">
-          Resend the ENTIRE journal from seq 0?
-          <button className="btn" disabled={busy} onClick={() => onReplay(0, null)}>
+          Resend the ENTIRE journal from event # 0?
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={() => onReplay(0, null)}
+          >
             Yes, replay all
           </button>
-          <button className="btn ghost" disabled={busy} onClick={() => setConfirming(false)}>
+          <button
+            className="btn ghost"
+            disabled={busy}
+            onClick={() => setConfirming(false)}
+          >
             Cancel
           </button>
         </span>
       ) : (
-        <button className="btn ghost" disabled={busy} onClick={() => setConfirming(true)}>
+        <button
+          className="btn ghost"
+          disabled={busy}
+          onClick={() => setConfirming(true)}
+        >
           Replay all
         </button>
       )}
@@ -256,13 +295,18 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
 
   const hostnames = useMemo(
     () => Object.fromEntries((devices || []).map((d) => [d.id, d.hostname])),
-    [devices]
+    [devices],
   );
 
   useEffect(() => {
     let alive = true;
-    api.devices(token).then((list) => alive && setDevices(list || [])).catch(() => {});
-    return () => { alive = false; };
+    api
+      .devices(token)
+      .then((list) => alive && setDevices(list || []))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [token]);
 
   const loadHooks = useCallback(async () => {
@@ -303,7 +347,7 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
         else setError(e.message);
       }
     },
-    [token, onUnauthorized]
+    [token, onUnauthorized],
   );
 
   const toggle = useCallback(
@@ -311,8 +355,12 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
       setBusy(true);
       setError(null);
       try {
-        const updated = await api.webhookUpdate(token, ep.id, { enabled: !ep.enabled });
-        setHooks((list) => (list || []).map((h) => (h.id === ep.id ? { ...h, ...updated } : h)));
+        const updated = await api.webhookUpdate(token, ep.id, {
+          enabled: !ep.enabled,
+        });
+        setHooks((list) =>
+          (list || []).map((h) => (h.id === ep.id ? { ...h, ...updated } : h)),
+        );
         setViewing((v) => (v && v.id === ep.id ? { ...v, ...updated } : v));
       } catch (e) {
         if (e.unauthorized) onUnauthorized();
@@ -321,7 +369,7 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
         setBusy(false);
       }
     },
-    [token, onUnauthorized]
+    [token, onUnauthorized],
   );
 
   const save = useCallback(
@@ -331,7 +379,11 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
       try {
         if (form && form.id != null) {
           const updated = await api.webhookUpdate(token, form.id, body);
-          setHooks((list) => (list || []).map((h) => (h.id === form.id ? { ...h, ...updated } : h)));
+          setHooks((list) =>
+            (list || []).map((h) =>
+              h.id === form.id ? { ...h, ...updated } : h,
+            ),
+          );
           setViewing((v) => (v && v.id === form.id ? { ...v, ...updated } : v));
         } else {
           await api.webhookCreate(token, body);
@@ -345,7 +397,7 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
         setBusy(false);
       }
     },
-    [token, onUnauthorized, form, loadHooks]
+    [token, onUnauthorized, form, loadHooks],
   );
 
   const remove = useCallback(
@@ -363,7 +415,7 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
         setBusy(false);
       }
     },
-    [token, onUnauthorized, loadHooks]
+    [token, onUnauthorized, loadHooks],
   );
 
   const replay = useCallback(
@@ -372,7 +424,9 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
       setReplayBusy(true);
       setError(null);
       try {
-        const r = await api.webhookReplay(token, viewing.id, { from_seq: fromSeq });
+        const r = await api.webhookReplay(token, viewing.id, {
+          from_seq: fromSeq,
+        });
         await openDeliveries({ ...viewing, last_seq: r.last_seq ?? fromSeq });
         setReplayMsg(r); // openDeliveries clears it — restore the confirmation
       } catch (e) {
@@ -382,7 +436,7 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
         setReplayBusy(false);
       }
     },
-    [token, onUnauthorized, viewing, openDeliveries]
+    [token, onUnauthorized, viewing, openDeliveries],
   );
 
   if (notWired) {
@@ -390,8 +444,8 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
       <div className="view">
         <h2>Webhooks</h2>
         <div className="empty">
-          The webhook framework is not wired on this server (in-memory
-          mode) — start with Postgres to enable signed webhook delivery.
+          The webhook framework needs the full server stack (database) to run —
+          start the production stack to enable signed webhook delivery.
         </div>
       </div>
     );
@@ -403,12 +457,14 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
         <div>
           <h2>Webhooks</h2>
           <p className="muted">
-            HMAC-signed deliveries of journaled events, with retry,
+            HMAC-signed deliveries of recorded events, with retry,
             dead-lettering, and replay from the journal.
           </p>
         </div>
         {!form && !viewing && (
-          <button className="btn" onClick={() => setForm({})}>+ Add webhook</button>
+          <button className="btn" onClick={() => setForm({})}>
+            + Add webhook
+          </button>
         )}
       </div>
 
@@ -449,10 +505,13 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
               </thead>
               <tbody>
                 {(hooks || []).map((ep) => (
-                  <tr key={ep.id} className={"webhook-row" + (ep.enabled ? "" : " off")}>
+                  <tr
+                    key={ep.id}
+                    className={"webhook-row" + (ep.enabled ? "" : " off")}
+                  >
                     <td>
                       <strong>{ep.name}</strong>
-                      <div className="muted mono">seq {ep.last_seq}</div>
+                      <div className="muted mono">event # {ep.last_seq}</div>
                     </td>
                     <td className="mono webhook-url">{ep.url}</td>
                     <td>
@@ -460,7 +519,12 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
                         ? ep.categories
                         : ["all"]
                       ).map((c) => (
-                        <span key={c} className={c === "all" ? "cat cat-other" : catClass(c)}>
+                        <span
+                          key={c}
+                          className={
+                            c === "all" ? "cat cat-other" : catClass(c)
+                          }
+                        >
                           {c}
                         </span>
                       ))}
@@ -477,7 +541,10 @@ export default function Webhooks({ token, onUnauthorized, onGoToDevice }) {
                       )}
                     </td>
                     <td>
-                      <label className="switch" title={ep.enabled ? "Disable" : "Enable"}>
+                      <label
+                        className="switch"
+                        title={ep.enabled ? "Disable" : "Enable"}
+                      >
                         <input
                           type="checkbox"
                           checked={!!ep.enabled}

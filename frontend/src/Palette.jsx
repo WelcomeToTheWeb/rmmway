@@ -10,9 +10,24 @@ import { api } from "./api.js";
 // Static "action" rows that appear above the device hits when the query
 // is empty or matches an action name.
 const ACTIONS = [
-  { kind: "action", id: "reboot", label: "Reboot selected device", hint: "Action" },
-  { kind: "action", id: "run-script", label: "Run script on selected device", hint: "Action" },
-  { kind: "action", id: "all-devices", label: "Go to all devices", hint: "Navigate" },
+  {
+    kind: "action",
+    id: "reboot",
+    label: "Reboot selected device",
+    hint: "Action",
+  },
+  {
+    kind: "action",
+    id: "run-script",
+    label: "Run script on selected device",
+    hint: "Action",
+  },
+  {
+    kind: "action",
+    id: "all-devices",
+    label: "Go to all devices",
+    hint: "Navigate",
+  },
 ];
 
 function b64(s) {
@@ -20,7 +35,13 @@ function b64(s) {
   return btoa(unescape(encodeURIComponent(s)));
 }
 
-export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoToTag }) {
+export default function Palette({
+  open,
+  onClose,
+  onGoToDevice,
+  onGoToAll,
+  onGoToTag,
+}) {
   const { token } = useAuth();
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState([]);
@@ -77,7 +98,10 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoTo
   const items = [];
   if (!query.trim() || query.trim().length <= 3) {
     for (const a of ACTIONS) {
-      if (!query.trim() || a.label.toLowerCase().includes(query.trim().toLowerCase())) {
+      if (
+        !query.trim() ||
+        a.label.toLowerCase().includes(query.trim().toLowerCase())
+      ) {
         items.push(a);
       }
     }
@@ -91,7 +115,7 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoTo
       kind: "tag",
       id: tagMatch[1].trim(),
       label: `Go to devices tagged "${tagMatch[1].trim()}"`,
-      hint: "Navigate (B-2 group)",
+      hint: "Navigate (tag group)",
     });
   }
   for (const h of hits) {
@@ -108,7 +132,8 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoTo
 
   // Reset selection when items change.
   useEffect(() => {
-    if (selected >= items.length && items.length > 0) setSelected(items.length - 1);
+    if (selected >= items.length && items.length > 0)
+      setSelected(items.length - 1);
     if (items.length === 0) setSelected(0);
   }, [items.length, selected]);
 
@@ -147,7 +172,8 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoTo
             // keep open briefly so user sees success
             setTimeout(onClose, 400);
           } else if (item.id === "run-script") {
-            const script = "#!/bin/sh\necho hello from RMMWay W2-2\necho $(date -u +%FT%TZ)";
+            const script =
+              "#!/bin/sh\necho rmmway-ping $(hostname) $(date -u +%FT%TZ)";
             await api.dispatch(token, target.id, {
               action: "run_script",
               lang: "sh",
@@ -170,7 +196,7 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoTo
         onGoToDevice(item.id, item.hostname);
       }
     },
-    [items, selected, onClose, onGoToDevice, onGoToAll, onGoToTag, token]
+    [items, selected, onClose, onGoToDevice, onGoToAll, onGoToTag, token],
   );
 
   // Keyboard handling: attach when open.
@@ -212,7 +238,11 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoTo
             disabled={busy !== null}
             autoFocus
           />
-          <button className="palette-close" onClick={onClose} title="Close (Esc)">
+          <button
+            className="palette-close"
+            onClick={onClose}
+            title="Close (Esc)"
+          >
             ×
           </button>
         </div>
@@ -228,12 +258,16 @@ export default function Palette({ open, onClose, onGoToDevice, onGoToAll, onGoTo
                 <li
                   key={item.kind + ":" + item.id}
                   className={
-                    "palette-item" + (i === selected ? " selected" : "") + (item.kind === "action" ? " action" : "")
+                    "palette-item" +
+                    (i === selected ? " selected" : "") +
+                    (item.kind === "action" ? " action" : "")
                   }
                   onMouseEnter={() => setSelected(i)}
                   onClick={() => runAction(item)}
                 >
-                  <span className="palette-item-label">{item.label || item.hostname}</span>
+                  <span className="palette-item-label">
+                    {item.label || item.hostname}
+                  </span>
                   <span className="palette-item-hint">
                     {item.kind === "device" ? (
                       <>

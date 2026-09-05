@@ -17,11 +17,17 @@ function evtTime(ms) {
   if (Number.isNaN(d.getTime())) return "—";
   return (
     d.toLocaleTimeString([], { hour12: false }) +
-    "." + String(d.getMilliseconds()).padStart(3, "0")
+    "." +
+    String(d.getMilliseconds()).padStart(3, "0")
   );
 }
 
-const LEVEL_CLASS = { debug: "lvl-debug", info: "lvl-info", warn: "lvl-warn", error: "lvl-error" };
+const LEVEL_CLASS = {
+  debug: "lvl-debug",
+  info: "lvl-info",
+  warn: "lvl-warn",
+  error: "lvl-error",
+};
 
 // W6-1: the expandable per-device "recent indexed events" panel. Polls
 // every 3s while open so a live agent's log lines appear as they index.
@@ -50,7 +56,9 @@ function DeviceEvents({ token, deviceId, onUnauthorized }) {
   return (
     <div className="device-events">
       <div className="device-events-head">
-        <span className="muted">Recent indexed events (W6-1 · also shipped to Loki)</span>
+        <span className="muted">
+          Agent log — recent entries (also shipped to Loki)
+        </span>
         <select
           className="search"
           value={level}
@@ -69,7 +77,7 @@ function DeviceEvents({ token, deviceId, onUnauthorized }) {
         <div className="empty">Loading events…</div>
       ) : events.length === 0 ? (
         <div className="empty muted">
-          No indexed events yet (the agent ships its structured log lines here).
+          No log entries yet (the agent ships its log lines here).
         </div>
       ) : (
         <table className="events">
@@ -83,7 +91,9 @@ function DeviceEvents({ token, deviceId, onUnauthorized }) {
           <tbody>
             {events.map((ev) => {
               const attrs = ev.attrs
-                ? Object.entries(ev.attrs).map(([k, v]) => `${k}=${v}`).join(" ")
+                ? Object.entries(ev.attrs)
+                    .map(([k, v]) => `${k}=${v}`)
+                    .join(" ")
                 : "";
               return (
                 <tr key={ev.id}>
@@ -95,7 +105,9 @@ function DeviceEvents({ token, deviceId, onUnauthorized }) {
                   </td>
                   <td className="evt-msg">
                     <span className="mono">{ev.msg}</span>
-                    {attrs && <span className="muted mono evt-attrs"> {attrs}</span>}
+                    {attrs && (
+                      <span className="muted mono evt-attrs"> {attrs}</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -208,7 +220,9 @@ function DeviceCommands({ token, deviceId, onUnauthorized, liveTick }) {
   return (
     <div className="device-commands">
       <div className="device-commands-head">
-        <span className="muted">Commands (D-1 · newest first, live over the event stream)</span>
+        <span className="muted">
+          Commands — newest first, updates live as agents report
+        </span>
         <button className="btn" onClick={load} title="Refresh now">
           ↻ refresh
         </button>
@@ -230,7 +244,12 @@ function DeviceCommands({ token, deviceId, onUnauthorized, liveTick }) {
           </thead>
           <tbody>
             {rows.map((row) => {
-              const [label, cls] = row.result ? CMD_STATUS[row.result.status] || [String(row.result.status), "pill-mut"] : CMD_PENDING;
+              const [label, cls] = row.result
+                ? CMD_STATUS[row.result.status] || [
+                    String(row.result.status),
+                    "pill-mut",
+                  ]
+                : CMD_PENDING;
               const open = openCmd === row.id;
               const out = row.result;
               return (
@@ -253,17 +272,26 @@ function DeviceCommands({ token, deviceId, onUnauthorized, liveTick }) {
                     <tr className="detail-row">
                       <td colSpan={4} className="detail-cell">
                         <div className="cmd-detail mono">
-                          {out.exit_code !== undefined && out.exit_code !== null && (
-                            <div>exit code: {out.exit_code}</div>
+                          {out.exit_code !== undefined &&
+                            out.exit_code !== null && (
+                              <div>exit code: {out.exit_code}</div>
+                            )}
+                          {out.stdout_tail && (
+                            <pre className="cmd-out">{out.stdout_tail}</pre>
                           )}
-                          {out.stdout_tail && <pre className="cmd-out">{out.stdout_tail}</pre>}
                           {out.stderr_tail && (
                             <pre className="cmd-out err">{out.stderr_tail}</pre>
                           )}
-                          {out.error && <div className="banner err">error: {out.error}</div>}
-                          {!out.stdout_tail && !out.stderr_tail && !out.error && (
-                            <div className="muted">The agent reported {label} with no output.</div>
+                          {out.error && (
+                            <div className="banner err">error: {out.error}</div>
                           )}
+                          {!out.stdout_tail &&
+                            !out.stderr_tail &&
+                            !out.error && (
+                              <div className="muted">
+                                The agent reported {label} with no output.
+                              </div>
+                            )}
                         </div>
                       </td>
                     </tr>
@@ -314,8 +342,8 @@ function DeviceExport({ token, device, onUnauthorized }) {
       if (e.unauthorized) return onUnauthorized();
       setErr(
         e.status === 503
-          ? "Export is not wired on this server (in-memory mode) — start with Postgres to enable client exports."
-          : e.message
+          ? "Device export needs the full server stack (database) to run — start the production stack to enable it."
+          : e.message,
       );
       setPhase("error");
     }
@@ -325,32 +353,55 @@ function DeviceExport({ token, device, onUnauthorized }) {
     <div className="device-export">
       <div className="device-export-row row-actions">
         <span className="muted">
-          Client export (D-6) — one self-verifying ZIP: inventory, raw
-          metrics + 1-min rollups (Parquet), full alert history, manifest.
+          Export this device's full data as one self-verifying ZIP — inventory,
+          metrics (Parquet), full alert history.
         </span>
         {phase === "idle" && (
-          <button className="btn" onClick={() => setPhase("confirm")}>Export</button>
+          <button className="btn" onClick={() => setPhase("confirm")}>
+            Export
+          </button>
         )}
-        {phase === "preparing" && <button className="btn" disabled>Preparing…</button>}
+        {phase === "preparing" && (
+          <button className="btn" disabled>
+            Preparing…
+          </button>
+        )}
         {phase === "done" && (
-          <button className="btn ghost" onClick={() => { setResult(null); setPhase("confirm"); }}>
+          <button
+            className="btn ghost"
+            onClick={() => {
+              setResult(null);
+              setPhase("confirm");
+            }}
+          >
             Export again
           </button>
         )}
         {phase === "error" && (
-          <button className="btn ghost" onClick={() => { setErr(""); setPhase("confirm"); }}>Retry</button>
+          <button
+            className="btn ghost"
+            onClick={() => {
+              setErr("");
+              setPhase("confirm");
+            }}
+          >
+            Retry
+          </button>
         )}
       </div>
       {phase === "confirm" && (
         <div className="export-confirm">
           <span>
-            Export all data for <strong>{host}</strong>? Includes inventory,
-            raw metrics (Parquet), 1-min rollups (Parquet), and full alert
-            history.
+            Export all data for <strong>{host}</strong>? Includes inventory, raw
+            metrics (Parquet), 1-min rollups (Parquet), and full alert history.
           </span>
           <span className="row-actions">
-            <button className="btn" onClick={run}>Yes, export</button>
-            <button className="btn ghost" onClick={() => setPhase("idle")}>Cancel</button>
+            <button className="btn" onClick={run}>
+              Yes, export
+            </button>
+            <button className="btn ghost" onClick={() => setPhase("idle")}>
+              Cancel
+            </button>
           </span>
         </div>
       )}
@@ -432,7 +483,12 @@ function MetricChart({ data }) {
           {data.count} samples · {data.range} · {data.bucket_s}s buckets
         </span>
       </div>
-      <svg className="metrics-chart" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`${data.name} over ${data.range}`}>
+      <svg
+        className="metrics-chart"
+        viewBox={`0 0 ${W} ${H}`}
+        role="img"
+        aria-label={`${data.name} over ${data.range}`}
+      >
         <rect
           x={PL}
           y={PT}
@@ -477,9 +533,13 @@ function DeviceMetrics({ token, device, onUnauthorized }) {
       // Keep the current selection if it is still offered; otherwise
       // default to the host-wide CPU series when present.
       const cur = list.findIndex(
-        (m) => m.name === selRef.current?.name && m.source === selRef.current?.source
+        (m) =>
+          m.name === selRef.current?.name &&
+          m.source === selRef.current?.source,
       );
-      const cpu = list.findIndex((m) => m.name === "cpu.utilization_percent" && !m.source);
+      const cpu = list.findIndex(
+        (m) => m.name === "cpu.utilization_percent" && !m.source,
+      );
       const pick = cur >= 0 ? cur : cpu >= 0 ? cpu : 0;
       selRef.current = list[pick];
       setSelIdx(pick);
@@ -497,7 +557,13 @@ function DeviceMetrics({ token, device, onUnauthorized }) {
       return;
     }
     try {
-      const res = await api.metricsSeries(token, device.id, sel.name, sel.source, range);
+      const res = await api.metricsSeries(
+        token,
+        device.id,
+        sel.name,
+        sel.source,
+        range,
+      );
       setData(res);
       setError(null);
     } catch (e) {
@@ -559,12 +625,12 @@ function DeviceMetrics({ token, device, onUnauthorized }) {
       {error && <div className="banner err">{error}</div>}
       {data && data.points && data.points.length ? (
         <MetricChart data={data} />
-      ) : !error ? (
+      ) : error ? null : (
         <div className="empty muted">
           No samples in this window yet (the agent ships metrics every few
           seconds once online).
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -614,7 +680,7 @@ function TagEditor({ token, device, onUnauthorized, onSaved }) {
 
   return (
     <div className="tag-editor">
-      <span className="tag-editor-label muted">Tags (B-2)</span>
+      <span className="tag-editor-label muted">Tags</span>
       <div className="tags">
         {(device.tags || []).map((t) => (
           <span key={t} className="tag editable" title={t}>
@@ -711,9 +777,8 @@ function GroupDispatchModal({ token, initialTag, onUnauthorized, onClose }) {
           </button>
         </div>
         <p className="muted">
-          One command, every device carrying the tag — each push carries its
-          own per-device capability token (the server gates the session's
-          capability first; the fan-out is capped at 500 devices).
+          One command, every device carrying the tag — each push is authorized
+          for that device. The dispatch is capped at 500 devices.
         </p>
         <label className="field">
           <span>Tag (group)</span>
@@ -728,7 +793,12 @@ function GroupDispatchModal({ token, initialTag, onUnauthorized, onClose }) {
         </label>
         <label className="field">
           <span>Action</span>
-          <select className="search bulk-action" value={action} disabled={busy} onChange={(e) => setAction(e.target.value)}>
+          <select
+            className="search bulk-action"
+            value={action}
+            disabled={busy}
+            onChange={(e) => setAction(e.target.value)}
+          >
             <option value="run_script">run script</option>
             <option value="reboot">reboot</option>
           </select>
@@ -737,7 +807,12 @@ function GroupDispatchModal({ token, initialTag, onUnauthorized, onClose }) {
           <>
             <label className="field">
               <span>Language</span>
-              <select className="search bulk-lang" value={lang} disabled={busy} onChange={(e) => setLang(e.target.value)}>
+              <select
+                className="search bulk-lang"
+                value={lang}
+                disabled={busy}
+                onChange={(e) => setLang(e.target.value)}
+              >
                 <option value="sh">sh</option>
                 <option value="powershell">powershell</option>
                 <option value="python">python</option>
@@ -769,14 +844,19 @@ function GroupDispatchModal({ token, initialTag, onUnauthorized, onClose }) {
         )}
         {error && <div className="banner err">{error}</div>}
         <div className="bulk-actions">
-          <button className="btn primary" disabled={busy || !tag.trim()} onClick={send}>
+          <button
+            className="btn primary"
+            disabled={busy || !tag.trim()}
+            onClick={send}
+          >
             {busy ? "dispatching…" : "Dispatch to whole group"}
           </button>
         </div>
         {result && (
           <div className="bulk-result">
             <p>
-              <strong>{result.requested}</strong> matched · {pushed.length} pushed
+              <strong>{result.requested}</strong> matched · {pushed.length}{" "}
+              pushed
               {offline.length > 0 && <> · {offline.length} offline</>}
               {Object.keys(failed).length > 0 && (
                 <> · {Object.keys(failed).length} failed</>
@@ -786,13 +866,16 @@ function GroupDispatchModal({ token, initialTag, onUnauthorized, onClose }) {
               <ul className="bulk-result-list mono">
                 {pushed.map((p) => (
                   <li key={p.device_id}>
-                    <span className="muted">{p.device_id}</span> → {p.command_id}
+                    <span className="muted">{p.device_id}</span> →{" "}
+                    {p.command_id}
                   </li>
                 ))}
               </ul>
             )}
             {offline.length > 0 && (
-              <p className="muted mono">offline (no live stream): {offline.join(", ")}</p>
+              <p className="muted mono">
+                offline (no live stream): {offline.join(", ")}
+              </p>
             )}
             {Object.keys(failed).length > 0 && (
               <ul className="bulk-result-list mono">
@@ -911,7 +994,12 @@ function AddDeviceModal({ token, onUnauthorized, onClose }) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal adddev" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Add a device">
+      <div
+        className="modal adddev"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label="Add a device"
+      >
         <div className="modal-head">
           <h3>Add a device</h3>
           <button className="btn ghost" onClick={onClose} title="Close">
@@ -934,8 +1022,8 @@ function AddDeviceModal({ token, onUnauthorized, onClose }) {
         </label>
         {publicUrl && server !== window.location.origin && (
           <p className="muted adddev-origin-note">
-            Prefilled with your configured public URL ({publicUrl}). Agents
-            will dial this host on port 50052.
+            Prefilled with your configured public URL ({publicUrl}). Agents will
+            dial this host on port 50052.
           </p>
         )}
         {error && <div className="banner err">{error}</div>}
@@ -949,7 +1037,8 @@ function AddDeviceModal({ token, onUnauthorized, onClose }) {
                 <span className="muted">Device ID</span> {mint.device_id}
               </div>
               <div>
-                <span className="muted">Token</span> {mint.bootstrap_token} <span className="muted">(one-time, ~30 min)</span>
+                <span className="muted">Token</span> {mint.bootstrap_token}{" "}
+                <span className="muted">(one-time, ~30 min)</span>
               </div>
             </div>
             <div className="adddev-block">
@@ -987,7 +1076,7 @@ function DeviceRow({ d, open, onToggle }) {
     <tr
       className={(d.online ? "row-on" : "row-off") + (open ? " row-open" : "")}
       onClick={() => onToggle(d.id)}
-      title="Show/hide recent indexed events (W6-1)"
+      title="Show/hide recent agent log entries"
       style={{ cursor: "pointer" }}
     >
       <td>
@@ -996,24 +1085,40 @@ function DeviceRow({ d, open, onToggle }) {
         </div>
         <div className="id">{d.id}</div>
       </td>
-      <td className="mono">{d.os}/{d.arch}</td>
+      <td className="mono">
+        {d.os}/{d.arch}
+      </td>
       <td className="mono">{d.agent_version || "—"}</td>
       <td className="mono ips">
         {d.interfaces && d.interfaces.length ? d.interfaces.join(", ") : "—"}
       </td>
       <td>
         {d.tags && d.tags.length ? (
-          <span className="tags">{d.tags.map((t) => <span key={t} className="tag">{t}</span>)}</span>
+          <span className="tags">
+            {d.tags.map((t) => (
+              <span key={t} className="tag">
+                {t}
+              </span>
+            ))}
+          </span>
         ) : (
           <span className="muted">—</span>
         )}
       </td>
-      <td><StatusPill online={d.online} lastSeen={d.last_seen} /></td>
+      <td>
+        <StatusPill online={d.online} lastSeen={d.last_seen} />
+      </td>
     </tr>
   );
 }
 
-export default function Devices({ token, onUnauthorized, focusFilter, focusKey, liveTick }) {
+export default function Devices({
+  token,
+  onUnauthorized,
+  focusFilter,
+  focusKey,
+  liveTick,
+}) {
   const [devices, setDevices] = useState(null);
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
@@ -1026,7 +1131,9 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
   const [bulkOpen, setBulkOpen] = useState(false);
   // B-2: a tag editor save replaces the device row in local state.
   const saveDevice = useCallback((d) => {
-    setDevices((list) => (list ? list.map((x) => (x.id === d.id ? d : x)) : list));
+    setDevices((list) =>
+      list ? list.map((x) => (x.id === d.id ? d : x)) : list,
+    );
   }, []);
 
   // When the palette triggers "go to device", the parent bumps focusKey and
@@ -1080,7 +1187,7 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
         d.hostname.toLowerCase().includes(needle) ||
         d.id.toLowerCase().includes(needle) ||
         (d.interfaces || []).some((ip) => ip.includes(needle)) ||
-        (d.tags || []).some((t) => t.toLowerCase().includes(needle))
+        (d.tags || []).some((t) => t.toLowerCase().includes(needle)),
   );
   const onlineCount = (devices || []).filter((d) => d.online).length;
   const total = (devices || []).length;
@@ -1108,7 +1215,7 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
           <button
             className="btn"
             onClick={() => setBulkOpen(true)}
-            title="Fan one capability-gated command out to every device carrying a tag (B-2)"
+            title="Send one command to every device carrying a tag"
           >
             ⚡ Dispatch to group
           </button>
@@ -1143,7 +1250,9 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
               </button>
             </div>
           ) : (
-            <p>No devices match <em>{q}</em>.</p>
+            <p>
+              No devices match <em>{q}</em>.
+            </p>
           )}
         </div>
       ) : (
@@ -1193,7 +1302,11 @@ export default function Devices({ token, onUnauthorized, focusFilter, focusKey, 
                             onUnauthorized={onUnauthorized}
                             liveTick={liveTick}
                           />
-                          <DeviceEvents token={token} deviceId={d.id} onUnauthorized={onUnauthorized} />
+                          <DeviceEvents
+                            token={token}
+                            deviceId={d.id}
+                            onUnauthorized={onUnauthorized}
+                          />
                         </div>
                       </td>
                     </tr>
