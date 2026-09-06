@@ -1,0 +1,31 @@
+/* Login view (#/ or unauthenticated shell). */
+
+.login-wrap {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background:
+    radial-gradient(
+      1200px 600px at 50% -10%,
+      rgba(79, 140, 255, 0.1),
+      transparent 60%
+    ),
+    var(--bg);
+}
+.login {
+  width: 100%;
+  max-width: 360px;
+}
+.login-head {
+  text-align: center;
+  margin-bottom: 22px;
+}
+.login-head .brand {
+  font-size: 20px;
+}
+.login .btn.primary {
+  width: 100%;
+  margin-top: 4px;
+  padding: 11px;
+}

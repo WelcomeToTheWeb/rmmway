@@ -1,0 +1,131 @@
+/* Shell: top bar, nav, content column, health chip, theme toggle. */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: 0 var(--space-5);
+  height: 54px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-elev), var(--bg));
+}
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  font-size: 16px;
+}
+.brand::before {
+  content: "◈";
+  color: var(--accent);
+  margin-right: 8px;
+}
+.nav {
+  display: flex;
+  gap: var(--space-1);
+  flex: 1;
+}
+.nav-item {
+  color: var(--muted);
+  text-decoration: none;
+  padding: var(--space-2) 14px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+.nav-item:hover:not(.disabled):not(.active) {
+  color: var(--fg);
+  background: var(--bg-elev2);
+  transform: translateX(2px);
+}
+.nav-item.active {
+  color: var(--fg);
+  background: var(--bg-elev2);
+  font-weight: 600;
+  position: relative;
+}
+.nav-item.active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.nav-item.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.health {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* theme toggle in the top bar */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+.theme-toggle:hover {
+  color: var(--fg);
+  background: var(--bg-elev2);
+  border-color: var(--border);
+}
+.theme-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---- content / view ----------------------------------------------------- */
+.content {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: var(--space-6);
+}
+.view {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.view-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.view-head h2 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-lg);
+}
+.view-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}

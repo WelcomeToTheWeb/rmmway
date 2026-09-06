@@ -1,0 +1,4 @@
+/* Alerts inbox (Alerts.jsx). */
+
+.alert-resolved { opacity: 0.62; }
+.alert-acked    { opacity: 0.85; }

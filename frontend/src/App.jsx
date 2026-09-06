@@ -12,6 +12,7 @@ import Heal from "./Heal.jsx";
 import Webhooks from "./Webhooks.jsx";
 import Baseline from "./Baseline.jsx";
 import Palette from "./Palette.jsx";
+import { ThemeToggle } from "./ui/theme.jsx";
 
 // ---- tiny hash router: #/devices (default), #/alerts, #/flows, #/events,
 // ---- #/heal
@@ -24,6 +25,27 @@ function parseRoute() {
   if (h.startsWith("#/webhooks")) return "webhooks";
   if (h.startsWith("#/baseline")) return "baseline";
   return "devices";
+}
+
+// probeTitle renders /healthz probes as a human-readable tooltip string.
+// Handles the real server shape (array of {service, ok, latency, detail})
+// and object-shaped probes alike.
+function probeTitle(probes) {
+  if (!probes) return "";
+  const entries = Array.isArray(probes)
+    ? probes
+    : Object.keys(probes).map((k) => [k, probes[k]]);
+  return entries
+    .map(([name, p]) => {
+      if (typeof p === "string" || typeof p === "number")
+        return `${name}: ${p}`;
+      if (typeof p === "boolean") return `${name}: ${p ? "ok" : "down"}`;
+      if (!p || typeof p !== "object") return String(name);
+      const label = p.service || String(name);
+      if (p.ok) return p.latency ? `${label} ok (${p.latency})` : `${label} ok`;
+      return p.detail ? `${label} down: ${p.detail}` : `${label} down`;
+    })
+    .join(" · ");
 }
 
 function Header({ route, openCount, onOpenPalette }) {
@@ -42,7 +64,10 @@ function Header({ route, openCount, onOpenPalette }) {
     };
     tick();
     const id = setInterval(tick, 10000);
-    return () => { alive = false; clearInterval(id); };
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, []);
 
   const ok = health ? health.ok : null;
@@ -50,7 +75,10 @@ function Header({ route, openCount, onOpenPalette }) {
     <header className="topbar">
       <div className="brand">RMMWay</div>
       <nav className="nav">
-        <a className={"nav-item" + (route === "devices" ? " active" : "")} href="#/devices">
+        <a
+          className={"nav-item" + (route === "devices" ? " active" : "")}
+          href="#/devices"
+        >
           Devices
         </a>
         <a
@@ -94,7 +122,10 @@ function Header({ route, openCount, onOpenPalette }) {
           className="nav-item"
           href="#/search"
           role="button"
-          onClick={(e) => { e.preventDefault(); onOpenPalette(); }}
+          onClick={(e) => {
+            e.preventDefault();
+            onOpenPalette();
+          }}
           title="Search devices & run actions (Ctrl+K)"
         >
           Search <kbd className="kbd">⌘K</kbd>
@@ -102,16 +133,24 @@ function Header({ route, openCount, onOpenPalette }) {
       </nav>
       <div className="topbar-right">
         {health && (
-          <span className={"health " + (ok ? "ok" : "bad")} title={JSON.stringify(health.probes)}>
+          <span
+            className={"health " + (ok ? "ok" : "bad")}
+            title={probeTitle(health.probes)}
+          >
             <span className={"dot " + (ok ? "on" : "off")} />
             {ok ? "all services ok" : "degraded"}
           </span>
         )}
+        <ThemeToggle />
         <button className="btn ghost" onClick={logout} title="Sign out">
           sign out
         </button>
       </div>
-      {token && <span className="sr-only" aria-hidden>session active</span>}
+      {token && (
+        <span className="sr-only" aria-hidden>
+          session active
+        </span>
+      )}
     </header>
   );
 }
@@ -132,7 +171,9 @@ function Shell() {
       .setupStatus()
       .then((s) => alive && setSetupState(s))
       .catch(() => alive && setSetupState({ available: false, setup: true }));
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // Route follows the location hash (back/forward + nav links).
@@ -154,7 +195,10 @@ function Shell() {
     }
   }, [token]);
   useEffect(() => {
-    if (!token) { setOpenCount(0); return; }
+    if (!token) {
+      setOpenCount(0);
+      return;
+    }
     refreshAlerts();
     const id = setInterval(refreshAlerts, 15000);
     return () => clearInterval(id);
@@ -184,7 +228,11 @@ function Shell() {
         // Command results are journaled under the "automation" category
         // (rmmway.events.command.result); "command" is kept for streams that
         // still label them that way.
-        if (env.category === "inventory" || env.category === "command" || env.category === "automation") {
+        if (
+          env.category === "inventory" ||
+          env.category === "command" ||
+          env.category === "automation"
+        ) {
           setDeviceTick((t) => t + 1);
         } else if (env.category === "alert") {
           refreshAlerts();
@@ -235,7 +283,9 @@ function Shell() {
     );
   }
   if (setupState.available && !setupState.setup) {
-    return <Setup onDone={() => setSetupState((s) => ({ ...s, setup: true }))} />;
+    return (
+      <Setup onDone={() => setSetupState((s) => ({ ...s, setup: true }))} />
+    );
   }
   if (!token) return <Login />;
   return (
@@ -254,11 +304,23 @@ function Shell() {
             lastEvent={lastEvent}
           />
         ) : route === "heal" ? (
-          <Heal token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
+          <Heal
+            token={token}
+            onUnauthorized={logout}
+            onGoToDevice={goToDevice}
+          />
         ) : route === "webhooks" ? (
-          <Webhooks token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
+          <Webhooks
+            token={token}
+            onUnauthorized={logout}
+            onGoToDevice={goToDevice}
+          />
         ) : route === "baseline" ? (
-          <Baseline token={token} onUnauthorized={logout} onGoToDevice={goToDevice} />
+          <Baseline
+            token={token}
+            onUnauthorized={logout}
+            onGoToDevice={goToDevice}
+          />
         ) : (
           <Devices
             token={token}

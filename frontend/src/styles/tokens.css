@@ -1,0 +1,189 @@
+/* Design tokens. Dark is the default palette (the current production
+   look); [data-theme="light"] overrides the same custom properties so
+   every view themes off tokens alone.
+   Values for the status tokens reproduce the pre-revamp dark colors
+   exactly (no visual regression); the light values are tuned for
+   contrast on white. */
+
+:root {
+  /* ---- surface palette (dark default) --------------------------------- */
+  --bg: #0b0e14;
+  --bg-elev: #12161f;
+  --bg-elev2: #171c27;
+  --fg: #e6e9ef;
+  --muted: #8a94a6;
+  --border: #232a37;
+
+  /* ---- brand + semantic state colors ----------------------------------- */
+  --accent: #4f8cff;
+  --accent-2: #6ea0ff;
+  --on: #34d399;
+  --off: #f59e0b;
+  --err: #ef4444;
+
+  /* ---- type scale (operator console: 14px base, 13px table data) ------- */
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 20px;
+  --text-sm: 13px;
+  --text-xs: 12px;
+  --text-2xs: 11px;
+  --leading: 1.5;
+  --font:
+    "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  /* ---- spacing scale (4px base) ---------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ---- radius / elevation / motion ------------------------------------- */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-xs: 6px;
+  --radius-pill: 999px;
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.4);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-fast: 120ms var(--ease);
+  --transition-normal: 200ms var(--ease);
+  --transition-slow: 300ms var(--ease);
+
+  /* ---- overlays --------------------------------------------------------- */
+  --backdrop: rgba(4, 6, 10, 0.66);
+  --backdrop-soft: rgba(0, 0, 0, 0.55);
+
+  /* ---- status tokens: (fg, bg, border) per tone -------------------------
+     Dark values match the pre-revamp hard-coded colors 1:1. */
+  --st-red-fg: #fecaca;
+  --st-red-bg: rgba(239, 68, 68, 0.16);
+  --st-red-bd: rgba(239, 68, 68, 0.4);
+  --st-amber-fg: #fde68a;
+  --st-amber-bg: rgba(245, 158, 11, 0.15);
+  --st-amber-bd: rgba(245, 158, 11, 0.38);
+  --st-green-fg: #a7f3d0;
+  --st-green-bg: rgba(52, 211, 153, 0.14);
+  --st-green-bd: rgba(52, 211, 153, 0.38);
+  --st-blue-fg: #bfdbfe;
+  --st-blue-bg: rgba(79, 140, 255, 0.16);
+  --st-blue-bd: rgba(79, 140, 255, 0.42);
+  --st-sky-fg: #bae6fd;
+  --st-sky-bg: rgba(56, 189, 248, 0.14);
+  --st-sky-bd: rgba(56, 189, 248, 0.35);
+  --st-violet-fg: #e9d5ff;
+  --st-violet-bg: rgba(167, 139, 250, 0.16);
+  --st-violet-bd: rgba(167, 139, 250, 0.42);
+  --st-orange-fg: #fdba74;
+  --st-orange-bg: rgba(251, 146, 60, 0.16);
+  --st-orange-bd: rgba(251, 146, 60, 0.45);
+  --st-orange-strong-bg: rgba(251, 146, 60, 0.22);
+  --st-orange-strong-bd: rgba(251, 146, 60, 0.6);
+  --st-yellow-fg: #fde68a;
+  --st-yellow-bg: rgba(250, 204, 21, 0.14);
+  --st-yellow-bd: rgba(250, 204, 21, 0.4);
+  --st-slate-fg: #94a3b8;
+  --st-slate-bg: rgba(148, 163, 184, 0.14);
+  --st-slate-bd: transparent;
+
+  /* ---- banner tokens ----------------------------------------------------- */
+  --banner-err-bg: rgba(239, 68, 68, 0.12);
+  --banner-err-bd: rgba(239, 68, 68, 0.4);
+  --banner-err-fg: #fca5a5;
+  --banner-ok-bg: rgba(52, 211, 153, 0.12);
+  --banner-ok-bd: rgba(52, 211, 153, 0.4);
+  --banner-ok-fg: #a7f3d0;
+  --banner-info-bg: rgba(79, 140, 255, 0.12);
+  --banner-info-bd: rgba(79, 140, 255, 0.4);
+  --banner-info-fg: #bfdbfe;
+
+  /* ---- misc --------------------------------------------------------------- */
+  --badge-bg: var(--err);
+  --badge-fg: #fff;
+  --badge-glow: 0 0 8px rgba(239, 68, 68, 0.5);
+  --switch-on-bg: rgba(34, 197, 94, 0.25);
+  --switch-on-bd: rgba(34, 197, 94, 0.5);
+  --switch-on-thumb: #4ade80;
+  --chart-fill: rgba(110, 160, 255, 0.07);
+  --gridline: rgba(138, 148, 166, 0.16);
+}
+
+/* ---- light theme ---------------------------------------------------------- */
+[data-theme="light"] {
+  --bg: #f4f6fa;
+  --bg-elev: #ffffff;
+  --bg-elev2: #eceff5;
+  --fg: #1c2430;
+  --muted: #5c6675;
+  --border: #d9dfe8;
+
+  --accent: #2e6fe0;
+  --accent-2: #4f8cff;
+  --on: #0e9f6e;
+  --off: #b7791f;
+  --err: #d64545;
+
+  --shadow-sm: 0 2px 8px rgba(16, 24, 40, 0.08);
+  --shadow-md: 0 8px 24px rgba(16, 24, 40, 0.12);
+  --shadow-lg: 0 20px 60px rgba(16, 24, 40, 0.18);
+
+  --backdrop: rgba(15, 23, 42, 0.45);
+  --backdrop-soft: rgba(15, 23, 42, 0.35);
+
+  --st-red-fg: #b3261e;
+  --st-red-bg: rgba(214, 69, 69, 0.1);
+  --st-red-bd: rgba(214, 69, 69, 0.35);
+  --st-amber-fg: #92600a;
+  --st-amber-bg: rgba(217, 119, 6, 0.12);
+  --st-amber-bd: rgba(217, 119, 6, 0.35);
+  --st-green-fg: #116b4a;
+  --st-green-bg: rgba(5, 150, 105, 0.1);
+  --st-green-bd: rgba(5, 150, 105, 0.3);
+  --st-blue-fg: #1d4fbc;
+  --st-blue-bg: rgba(46, 111, 224, 0.1);
+  --st-blue-bd: rgba(46, 111, 224, 0.35);
+  --st-sky-fg: #075e8c;
+  --st-sky-bg: rgba(2, 132, 199, 0.1);
+  --st-sky-bd: rgba(2, 132, 199, 0.3);
+  --st-violet-fg: #6d3fc0;
+  --st-violet-bg: rgba(139, 92, 246, 0.1);
+  --st-violet-bd: rgba(139, 92, 246, 0.35);
+  --st-orange-fg: #9a4d12;
+  --st-orange-bg: rgba(234, 88, 12, 0.12);
+  --st-orange-bd: rgba(234, 88, 12, 0.4);
+  --st-orange-strong-bg: rgba(234, 88, 12, 0.16);
+  --st-orange-strong-bd: rgba(234, 88, 12, 0.5);
+  --st-yellow-fg: #92600a;
+  --st-yellow-bg: rgba(234, 179, 8, 0.14);
+  --st-yellow-bd: rgba(234, 179, 8, 0.4);
+  --st-slate-fg: #475569;
+  --st-slate-bg: rgba(100, 116, 139, 0.1);
+  --st-slate-bd: rgba(100, 116, 139, 0.3);
+
+  --banner-err-bg: rgba(214, 69, 69, 0.08);
+  --banner-err-bd: rgba(214, 69, 69, 0.35);
+  --banner-err-fg: #b3261e;
+  --banner-ok-bg: rgba(5, 150, 105, 0.08);
+  --banner-ok-bd: rgba(5, 150, 105, 0.3);
+  --banner-ok-fg: #116b4a;
+  --banner-info-bg: rgba(46, 111, 224, 0.08);
+  --banner-info-bd: rgba(46, 111, 224, 0.35);
+  --banner-info-fg: #1d4fbc;
+
+  --badge-bg: var(--err);
+  --badge-fg: #fff;
+  --badge-glow: 0 0 8px rgba(214, 69, 69, 0.35);
+  --switch-on-bg: rgba(5, 150, 105, 0.18);
+  --switch-on-bd: rgba(5, 150, 105, 0.45);
+  --switch-on-thumb: #059669;
+  --chart-fill: rgba(46, 111, 224, 0.08);
+  --gridline: rgba(28, 36, 48, 0.1);
+}
