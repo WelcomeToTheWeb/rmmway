@@ -13,6 +13,7 @@ import Webhooks from "./Webhooks.jsx";
 import Baseline from "./Baseline.jsx";
 import Palette from "./Palette.jsx";
 import { ThemeToggle } from "./ui/theme.jsx";
+import { ErrorBoundary } from "./ui/index.js";
 
 // ---- tiny hash router: #/devices (default), #/alerts, #/flows, #/events,
 // ---- #/heal
@@ -53,6 +54,7 @@ function Header({ route, openCount, onOpenPalette }) {
   const [health, setHealth] = useState(null);
   useEffect(() => {
     let alive = true;
+    let id = null;
     const tick = async () => {
       try {
         const res = await fetch("/healthz");
@@ -62,62 +64,106 @@ function Header({ route, openCount, onOpenPalette }) {
         if (alive) setHealth(null);
       }
     };
+    const start = () => {
+      if (id === null) id = setInterval(tick, 10000);
+    };
+    const stop = () => {
+      if (id !== null) {
+        clearInterval(id);
+        id = null;
+      }
+    };
+    // Phase 4: a hidden tab has no operator to serve — pause the health
+    // poll while document.hidden, refresh immediately when it returns.
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else {
+        tick();
+        start();
+      }
+    };
     tick();
-    const id = setInterval(tick, 10000);
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
       alive = false;
-      clearInterval(id);
     };
   }, []);
 
   const ok = health ? health.ok : null;
   return (
     <header className="topbar">
-      <div className="brand">RMMWay</div>
+      <div className="brand">
+        RMMWay
+        {health && health.version && (
+          <span className="brand-version" title={`RMMWay ${health.version}`}>
+            {health.version}
+          </span>
+        )}
+      </div>
       <nav className="nav">
+        <span className="nav-sep first" aria-hidden="true">
+          Fleet
+        </span>
         <a
           className={"nav-item" + (route === "devices" ? " active" : "")}
           href="#/devices"
+          aria-current={route === "devices" ? "page" : undefined}
         >
           Devices
         </a>
         <a
           className={"nav-item" + (route === "alerts" ? " active" : "")}
           href="#/alerts"
+          aria-current={route === "alerts" ? "page" : undefined}
         >
           Alerts
           {openCount > 0 && <span className="badge">{openCount}</span>}
         </a>
+        <span className="nav-sep" aria-hidden="true">
+          Ops
+        </span>
         <a
           className={"nav-item" + (route === "flows" ? " active" : "")}
           href="#/flows"
+          aria-current={route === "flows" ? "page" : undefined}
         >
           Flows
         </a>
         <a
           className={"nav-item" + (route === "events" ? " active" : "")}
           href="#/events"
+          aria-current={route === "events" ? "page" : undefined}
         >
           Events
         </a>
         <a
           className={"nav-item" + (route === "heal" ? " active" : "")}
           href="#/heal"
+          aria-current={route === "heal" ? "page" : undefined}
         >
           Heal
         </a>
+        <span className="nav-sep" aria-hidden="true">
+          System
+        </span>
         <a
           className={"nav-item" + (route === "webhooks" ? " active" : "")}
           href="#/webhooks"
+          aria-current={route === "webhooks" ? "page" : undefined}
         >
           Webhooks
         </a>
         <a
           className={"nav-item" + (route === "baseline" ? " active" : "")}
           href="#/baseline"
+          aria-current={route === "baseline" ? "page" : undefined}
         >
           Baseline
         </a>
+        <span className="nav-sep" aria-hidden="true" />
         <a
           className="nav-item"
           href="#/search"
@@ -292,44 +338,52 @@ function Shell() {
     <div className="shell">
       <Header route={route} openCount={openCount} onOpenPalette={openPalette} />
       <main className="content">
-        {route === "alerts" ? (
-          <Alerts token={token} onUnauthorized={logout} liveTick={alertTick} />
-        ) : route === "flows" ? (
-          <Flows token={token} onUnauthorized={logout} />
-        ) : route === "events" ? (
-          <Events
-            token={token}
-            onUnauthorized={logout}
-            onGoToDevice={goToDevice}
-            lastEvent={lastEvent}
-          />
-        ) : route === "heal" ? (
-          <Heal
-            token={token}
-            onUnauthorized={logout}
-            onGoToDevice={goToDevice}
-          />
-        ) : route === "webhooks" ? (
-          <Webhooks
-            token={token}
-            onUnauthorized={logout}
-            onGoToDevice={goToDevice}
-          />
-        ) : route === "baseline" ? (
-          <Baseline
-            token={token}
-            onUnauthorized={logout}
-            onGoToDevice={goToDevice}
-          />
-        ) : (
-          <Devices
-            token={token}
-            onUnauthorized={logout}
-            focusFilter={focusFilter}
-            focusKey={focusKey}
-            liveTick={deviceTick}
-          />
-        )}
+        {/* One boundary per route: a caught error panels that view but
+            never blocks navigating to the rest of the app. */}
+        <ErrorBoundary key={route}>
+          {route === "alerts" ? (
+            <Alerts
+              token={token}
+              onUnauthorized={logout}
+              liveTick={alertTick}
+            />
+          ) : route === "flows" ? (
+            <Flows token={token} onUnauthorized={logout} />
+          ) : route === "events" ? (
+            <Events
+              token={token}
+              onUnauthorized={logout}
+              onGoToDevice={goToDevice}
+              lastEvent={lastEvent}
+            />
+          ) : route === "heal" ? (
+            <Heal
+              token={token}
+              onUnauthorized={logout}
+              onGoToDevice={goToDevice}
+            />
+          ) : route === "webhooks" ? (
+            <Webhooks
+              token={token}
+              onUnauthorized={logout}
+              onGoToDevice={goToDevice}
+            />
+          ) : route === "baseline" ? (
+            <Baseline
+              token={token}
+              onUnauthorized={logout}
+              onGoToDevice={goToDevice}
+            />
+          ) : (
+            <Devices
+              token={token}
+              onUnauthorized={logout}
+              focusFilter={focusFilter}
+              focusKey={focusKey}
+              liveTick={deviceTick}
+            />
+          )}
+        </ErrorBoundary>
       </main>
       <Palette
         open={paletteOpen}
