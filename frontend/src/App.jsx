@@ -37,7 +37,21 @@ function probeTitle(probes) {
     ? probes
     : Object.keys(probes).map((k) => [k, probes[k]]);
   return entries
-    .map(([name, p]) => {
+    .map((entry) => {
+      // The real server sends an ARRAY OF PROBE OBJECTS
+      // ({service, ok, latency, detail}); normalize both that and legacy
+      // [name, probe] pairs to (name, probe). Destructuring the object
+      // directly as [name, p] threw "(destructured parameter) is not
+      // iterable" and blanked the whole app (Header is outside the
+      // per-route boundary).
+      let name;
+      let p;
+      if (Array.isArray(entry)) {
+        [name, p] = entry;
+      } else {
+        name = entry && entry.service ? entry.service : "probe";
+        p = entry;
+      }
       if (typeof p === "string" || typeof p === "number")
         return `${name}: ${p}`;
       if (typeof p === "boolean") return `${name}: ${p ? "ok" : "down"}`;
@@ -398,8 +412,10 @@ function Shell() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Shell />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <Shell />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
