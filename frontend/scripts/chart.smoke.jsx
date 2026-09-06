@@ -126,7 +126,10 @@ async function fakeFetch(path, init = {}) {
       series: state.series[decodeURIComponent(names[1])] || [],
     });
   }
-  if (/^\/api\/devices\/([^/]+)\/metrics\/series/.test(path) && method === "GET") {
+  if (
+    /^\/api\/devices\/([^/]+)\/metrics\/series/.test(path) &&
+    method === "GET"
+  ) {
     return json({
       device_id: "dev-alpha",
       name: "cpu.utilization_percent",
@@ -177,7 +180,9 @@ function setVal(el, v) {
 }
 const click = (el) =>
   act(async () => {
-    el.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(
+      new dom.window.Event("click", { bubbles: true, cancelable: true }),
+    );
   });
 const rows = () =>
   container.querySelectorAll("table.devices tbody tr:not(.detail-row)");
@@ -188,10 +193,14 @@ await waitUntil(
   "the login screen",
 );
 const form = container.querySelector("form");
-const pass = [...container.querySelectorAll("input")].find((i) => i.type === "password");
+const pass = [...container.querySelectorAll("input")].find(
+  (i) => i.type === "password",
+);
 setVal(pass, "smokepass");
 await act(async () => {
-  form.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true }));
+  form.dispatchEvent(
+    new dom.window.Event("submit", { bubbles: true, cancelable: true }),
+  );
 });
 await waitUntil(() => rows().length === 1, "the device list");
 
@@ -236,7 +245,9 @@ for (const needle of ["now", "min", "max", "40 samples", "24h"])
     throw new Error("stats row missing '" + needle + "': " + stats);
 if (!/%/.test(stats))
   throw new Error("percent metric stats not unit-aware (%): " + stats);
-console.log("ok 2: stats row shows now/min/max (unit-aware %) + '40 samples · 24h · 600s buckets'");
+console.log(
+  "ok 2: stats row shows now/min/max (unit-aware %) + '40 samples · 24h · 600s buckets'",
+);
 
 // ---- 4. grouped human picker + humanized title ------------------------------
 const picker = detail.querySelector(".device-metrics select");
@@ -259,12 +270,20 @@ await waitUntil(
 const rawName = detail.querySelector(".metrics-rawname");
 if (!rawName || rawName.textContent !== "cpu.utilization_percent")
   throw new Error("raw metric name not shown as context");
-console.log("ok 3: series picker groups by category (CPU optgroup) and the title humanizes to 'CPU utilization' with the raw name as context");
+console.log(
+  "ok 3: series picker groups by category (CPU optgroup) and the title humanizes to 'CPU utilization' with the raw name as context",
+);
 
 // ---- 5. hover: crosshair + snapped tooltip, then clears on leave ------------
 const live = detail.querySelector(".metrics-live");
-if (!live || !/live/.test(live.textContent) || !/updated/.test(live.textContent))
-  throw new Error("live/updated affordance missing: " + (live && live.textContent));
+if (
+  !live ||
+  !/live/.test(live.textContent) ||
+  !/updated/.test(live.textContent)
+)
+  throw new Error(
+    "live/updated affordance missing: " + (live && live.textContent),
+  );
 console.log("ok 4: 'live · updated Ns ago' affordance present");
 
 // jsdom's getBoundingClientRect has zero width, so the chart maps clientX
@@ -294,12 +313,16 @@ const tip = detail.querySelector(".metrics-tooltip");
 if (!tip.textContent.includes("CPU utilization"))
   throw new Error("tooltip missing human label: " + tip.textContent);
 if (!/%/.test(tip.textContent) || !/ago/.test(tip.textContent))
-  throw new Error("tooltip missing unit value / relative time: " + tip.textContent);
+  throw new Error(
+    "tooltip missing unit value / relative time: " + tip.textContent,
+  );
 const ch = detail.querySelector("line.metrics-crosshair");
 const x1 = Number(ch.getAttribute("x1"));
 if (!(x1 >= 56 && x1 <= 744))
   throw new Error("crosshair outside plot area: " + x1);
-console.log("ok 5: hover shows crosshair + tooltip snapped to the nearest sample (value + relative/absolute time)");
+console.log(
+  "ok 5: hover shows crosshair + tooltip snapped to the nearest sample (value + relative/absolute time)",
+);
 
 await fire("mouseout", 380);
 await waitUntil(

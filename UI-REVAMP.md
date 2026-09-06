@@ -16,6 +16,23 @@ craft). The two complaints this plan answers first:
 
 ---
 
+## Status — executed 2026-07-19 (all phases shipped)
+
+| Phase | Commit(s) | Result |
+| --- | --- | --- |
+| 0 — Design foundation | `3fab65c` | tokens (dark default + light), self-hosted Inter/JetBrains Mono, 17-component kit (`src/ui/`), kit-rebuilt topbar, theme toggle, human-readable health chip, `styles/` split; summary in `frontend/PHASE0-SUMMARY.md` |
+| 1 — Copy cleanup | `5b1f07f` | all operator-visible task IDs + jargon removed (9 spots incl. the W2-2 default script → `rmmway-ping` probe) |
+| 2+3 — Chart revamp & device detail | `3203907` | `src/ui/TimeSeriesChart.jsx` (nice ticks, gridlines, human time axis, hover crosshair/tooltip, unit-aware stats, live affordance, grouped human picker); device-detail extraction to `src/views/devices/DeviceDetail.jsx`; new `chart` smoke (`make chart-ui-smoke`); summary in `frontend/CHART-SUMMARY.md` |
+| 4 — Shell & hardening | `d9fbd8b` | per-route error boundary, FLEET/OPS/SYSTEM nav grouping (anchor order untouched), `aria-current`, favicon/meta, real `/healthz` version chip, 768px responsive shell, visibility-aware health poll; summary in `frontend/PHASE4-SHELL-SUMMARY.md` |
+| build chores | `e4ecbf5` | `chart-ui-smoke` Makefile target; Makefile CRLF→LF |
+| 5 — Sign-off | this commit | full matrix 12/12 smokes green; headless-browser visual pass dark+light; before/after screenshot set in `docs/ui-revamp/evidence/` (regenerable via `docs/ui-revamp/rig/`) |
+
+Verification at sign-off: `npm run build` green; 12/12 jsdom UI smokes pass
+(11 pre-existing + chart); zero runtime deps added (`package.json` untouched);
+all immutable smoke selectors preserved.
+
+---
+
 ## 1. Current-state audit
 
 Frontend: Vite + React 18, **zero runtime deps beyond react/react-dom**,
@@ -303,7 +320,8 @@ detail as a **tabbed panel** (Overview · Metrics · Logs · Commands) with
   both modals + palette: §1.1 table entries gone, chart readable, tabs
   working, no console errors, fonts loading offline.
 - Screenshot set (before/after per page) committed under
-  `docs/ui-revamp-shots/` for the release notes.
+  `docs/ui-revamp-shots/` for the release notes. (Delivered as
+  `docs/ui-revamp/evidence/` — before = `347d1ea`, after = sign-off commit.)
 - README updated (self-hosted fonts, theme toggle).
 
 **Effort summary:** ~10–14 working days total (12–15 with the baseline-band
