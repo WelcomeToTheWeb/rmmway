@@ -1,4 +1,4 @@
-// Package collectors implements the W1-2 core collectors: the five metric
+// Package collectors implements the W1-2 core collectors: the metric
 // families the agent emits over the wire.
 //
 //	Family                     source
@@ -8,15 +8,21 @@
 //	net.bytes_total            <iface> (total rx+tx bytes since boot, per
 //	                           interface — loopback excluded)
 //	system.uptime_seconds      ""
+//	service.status             <service name> (per RMMWAY_SERVICES entry:
+//	                           1.0 = running, 0.0 = stopped)
 //
 // Implementation: gopsutil/v4 (pure-Go on Linux — reads /proc directly, so
 // the static-binary property from W1-1 is preserved). CPU utilization is
 // measured over a short blocking window (cpu.Percent(interval)), which is
-// deterministic and free of per-core summation drift.
+// deterministic and free of per-core summation drift. service.status uses
+// per-OS probes (systemctl / launchctl exec on unix, gopsutil winservices
+// on Windows) behind the same no-cgo constraint.
 package collectors
 
 import (
 	"context"
+	"errors"
+	"os"
 	"strings"
 	"time"
 
@@ -29,7 +35,7 @@ import (
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 )
 
-// Collector samples all five metric families once.
+// Collector samples all core metric families once.
 type Collector interface {
 	Collect(ctx context.Context) (*agentv1.MetricBatch, error)
 }
@@ -38,19 +44,51 @@ type Collector interface {
 // inject a fake without sleeping.
 type cpuMeasure func(interval time.Duration, percpu bool) ([]float64, error)
 
+// ErrServiceUnknown is returned by a ServiceSampler for a name the host has
+// no such service under. It is NOT a probe failure: the sample is simply
+// omitted, so an allowlist entry that references a since-removed service
+// does not read as a per-push collection error.
+var ErrServiceUnknown = errors.New("service unknown")
+
+// ServiceSampler reports one monitored service's status: 1 (running) or
+// 0 (stopped), or ErrServiceUnknown when the host has no such service.
+// The default sampler is per-OS (see service_<os>.go); tests inject a fake.
+type ServiceSampler func(ctx context.Context, name string) (float64, error)
+
+// maxMonitoredServices caps the RMMWAY_SERVICES allowlist so one
+// misspelled "a,b,c,d" is not a way to mint an unbounded sample fan-out
+// into the metrics hypertable.
+const maxMonitoredServices = 50
+
 type defaultCollector struct {
-	cpu cpuMeasure
+	cpu      cpuMeasure
+	services []string
+	service  ServiceSampler
 }
 
-// NewCollector returns the production collector (real gopsutil CPU window).
+// NewCollector returns the production collector (real gopsutil CPU window;
+// the RMMWAY_SERVICES allowlist read from the environment drives the
+// service.status family). Every call site that builds a collector (the
+// heartbeat push and the one-shot "collect" command) goes through here, so
+// the env var is honored in both.
 func NewCollector() Collector {
-	return &defaultCollector{cpu: cpu.Percent}
+	return &defaultCollector{
+		cpu:      cpu.Percent,
+		services: parseServiceList(os.Getenv("RMMWAY_SERVICES")),
+		service:  defaultServiceSampler,
+	}
 }
 
 // NewCollectorWithCPU returns a collector with an injected CPU sampler
 // (used by tests to avoid the real sleep window).
 func NewCollectorWithCPU(sample cpuMeasure) Collector {
 	return &defaultCollector{cpu: sample}
+}
+
+// NewCollectorWithCPUServices returns a collector with injected CPU and
+// service samplers (tests: no real CPU window, no host service manager).
+func NewCollectorWithCPUServices(cpu cpuMeasure, services []string, svc ServiceSampler) Collector {
+	return &defaultCollector{cpu: cpu, services: services, service: svc}
 }
 
 // Collect samples every family and packages them as one MetricBatch.
@@ -127,10 +165,51 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 		add("system.uptime_seconds", "", float64(secs))
 	}
 
+	// 6. Service status — per allowlisted service (RMMWAY_SERVICES):
+	// 1.0 running / 0.0 stopped, source = service name (the wire shape the
+	// seeded "service.down" playbook detects on: metric service.status,
+	// == 0, source = the service the restart script targets).
+	if c.service != nil {
+		for _, name := range c.services {
+			v, err := c.service(ctx, name)
+			if err != nil {
+				if errors.Is(err, ErrServiceUnknown) {
+					continue // allowlist entry for an absent service: no sample
+				}
+				errs = append(errs, "service["+name+"]: "+err.Error())
+				continue
+			}
+			add("service.status", name, v)
+		}
+	}
+
 	if len(errs) > 0 {
 		return batch, &partialError{errs: errs}
 	}
 	return batch, nil
+}
+
+// parseServiceList normalizes the RMMWAY_SERVICES value: comma-separated,
+// lenient on whitespace, empties dropped, order-preserving dedupe, capped
+// at maxMonitoredServices. Unset/blank input yields nil (no samples).
+func parseServiceList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+		if len(out) == maxMonitoredServices {
+			break
+		}
+	}
+	return out
 }
 
 // isLoopback reports whether a NIC name is the host's loopback interface:
