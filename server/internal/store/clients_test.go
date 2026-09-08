@@ -218,6 +218,10 @@ func TestPostgresClientsLive(t *testing.T) {
 	if _, err := s.Create(ctx, "Acme Corp", "dup"); !errors.Is(err, ErrClientNameExists) {
 		t.Fatalf("duplicate create: want ErrClientNameExists, got %v", err)
 	}
+	// Uniqueness is case-insensitive (memory store + API contract).
+	if _, err := s.Create(ctx, "ACME corp", "case dup"); !errors.Is(err, ErrClientNameExists) {
+		t.Fatalf("case-variant duplicate create: want ErrClientNameExists, got %v", err)
+	}
 
 	got, err := s.Get(ctx, acme.ID)
 	if err != nil {

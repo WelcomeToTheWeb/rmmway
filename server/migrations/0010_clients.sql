@@ -15,7 +15,12 @@ CREATE TABLE IF NOT EXISTS clients (
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_name ON clients (name);
+-- Case-INSENSITIVE name uniqueness (the API and the in-memory store both
+-- treat "Acme" and "ACME" as the same client). Re-asserted with a DROP so
+-- dev databases that ran an earlier draft of this migration (plain
+-- (name)) upgrade in place; idempotent on fresh installs.
+DROP INDEX IF EXISTS uq_clients_name;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_name ON clients (lower(name));
 COMMENT ON TABLE clients IS 'gap #2: MSP client/tenant registry (wave 1, lane B)';
 
 ALTER TABLE devices
