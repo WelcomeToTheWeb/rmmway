@@ -1,9 +1,7 @@
 # RMMWay — Developer Guide
 
 Deployment and usage docs live in [`README.md`](README.md). This file is for
-people who build, test, or extend RMMWay. Coordination happens on the shared
-task board — [`TASKS.md`](TASKS.md) (claim a task before coding); see also
-[`DEBUG.md`](DEBUG.md) for engineering review notes.
+people who build, test, or extend RMMWay. Coordination happens in the gap-closure plan — [`TEAM-PLAN.md`](TEAM-PLAN.md) (claim a lane/wave before coding).
 
 ## Repo layout
 
@@ -26,6 +24,7 @@ Requires Docker + Go 1.24+ + Node 18+.
 make dev        # boots TimescaleDB, NATS (JetStream), Redis, MinIO, Meilisearch,
                 # Loki; blocks until all 6 report healthy
 make run-server # Go backend on :8080 (curl localhost:8080/healthz)
+make seed-dev   # (dev only) synthetic fleet + 3-day metric history — after `make migrate`
 make frontend   # React dev server on :5173 (proxies /api/* → :8080)
 make down       # stop the stack (volumes kept)
 make clean      # stop + delete volumes (destructive)
@@ -151,9 +150,47 @@ release. The signer is a thin CLI over go-minisign (interop with
 self-verification. The server image is signed keyless with cosign
 (Sigstore TUF) in CI.
 
+## Ownership — gap-closure plan
+
+The top-10 gap-closure work is delivered by **three lanes** that never edit
+another lane's files. Full plan, lane scopes, waves, and milestones:
+[TEAM-PLAN.md](TEAM-PLAN.md). The rule that makes parallel work safe:
+**you only write the paths your lane owns; everyone else reviews.**
+
+### Who writes what
+
+| Lane | Owns (write) | Never edits |
+| ---- | ------------ | ----------- |
+| **A — Agent & Edge** | `proto/` (sole proto writer), `agent/`, `server/internal/{ingest,caps,releases}`, `httpapi/domain_commands.go` + `domain_enroll.go`, `frontend/src/views/devices/DeviceDetail.jsx`, `styles/views/devices.css` | B's domain packages, C's shell/UI |
+| **B — People & MSP** | `server/internal/{clients,users,tickets,notify,heal,ca,setup,smtp}`, `httpapi/domain_{clients,users,tickets,notify}.go`, `wire_{notify,tickets,clients}.go`, frontend `Clients/Users/Tickets/Notify/Heal.jsx` | `proto/`, `agent/`, C's shell/UI |
+| **C — Surfaces & Ops** | `frontend/src/App.jsx`, `ui/`, global `styles/` (+ `views/*.css` for non-A/B views), `httpapi/domain_{reports,settings,maintenance}.go`, `server/internal/{flow,baseline,webhook,export}`, `scripts/install.{sh,ps1}`, frontend `Devices/Alerts/Dashboard/Settings/Reports/SessionViewer.jsx` | `proto/`, `agent/`, B's domain packages |
+
+### Shared-artifact rules
+
+- **`httpapi/httpapi.go`** (shared helpers + `Register`) is **frozen** — C may
+  touch it additively only. New domain routes go in a new `domain_<x>.go`
+  (new file = new owner).
+- **`server/cmd/server/main.go`** is C-additive; new wiring goes in a
+  `wire_<subsystem>.go` owned by that subsystem's lane.
+- **`server/migrations/*`** — claim the number in [MIGRATIONS.md](server/migrations/MIGRATIONS.md)
+  **before** writing the file (0010–0012 B, 0013 A, 0014–0016 C, 0017+ first-come).
+- **`frontend/src/api.js`** — append-only helper blocks, one per PR, never
+  reformatted.
+- **`server/internal/store/`** — same append-only convention; each lane adds
+  its own `store_<domain>.go`.
+- **`proto/`** — only A commits; B/C review; generated code (agent + server)
+  is regenerated in the same PR.
+- **Nav items** — A/B request them from C via a 1-line PR to `App.jsx`.
+
+### Merge discipline
+
+Rebase-daily on `main`; PRs stay under ~600 lines of core logic (UI polish
+exempt). Lane A is the plan's critical path (remote control); B/C carry
+~1.5 w of float each to absorb slippage.
+
 ## Conventions
 
-- `TASKS.md` is the coordination of record — claim before coding; one task
+- `TEAM-PLAN.md` is the coordination of record — claim before coding; one task
   at a time; commit the claim before code.
 - Generated code (`server/gen`, `agent/gen`) stays out of git; use `make proto`.
 - Production hardening (compose) lives in `docker-compose.prod.yml` +
