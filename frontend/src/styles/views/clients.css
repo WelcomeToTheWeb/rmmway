@@ -1,0 +1,43 @@
+/* Clients / tenant view (Clients.jsx, gap #2 wave 1). */
+
+/* The client list rows are click-through to the per-client device list. */
+.client-row {
+	cursor: pointer;
+}
+.client-row:hover td {
+	background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.clients-desc {
+	max-width: 34ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Per-client device list (the detail pane under the client list). */
+.clients-detail {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+}
+
+.clients-detail-head {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.clients-detail-head h3 {
+	margin: 0;
+}
+
+.clients-detail-desc {
+	margin: 0;
+	max-width: 72ch;
+}
+
+/* The "move to client" select on each device row. */
+.client-move {
+	width: 180px;
+}
