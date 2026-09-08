@@ -225,6 +225,50 @@ func (s *Service) CheckCredentials(ctx context.Context, username, password strin
 	return VerifyAdmin(ctx, s.store, username, password)
 }
 
+// AdminCredentials exposes the store's credential lookup (salt, hash,
+// exists) for login. It lets handleLogin distinguish "no DB row for this
+// user" (the env fallback still applies) from "a row exists but the
+// password is wrong" (only the DB credential may win — otherwise the env
+// pair would bypass a changed password, C #10a).
+func (s *Service) AdminCredentials(ctx context.Context, username string) (salt, hash []byte, exists bool) {
+	if !s.Available() {
+		return nil, nil, false
+	}
+	return s.store.AdminCredentials(ctx, username)
+}
+
+// Load reads back the stored wizard choices (the API's read model). When
+// the service is unavailable (in-memory mode) it returns a zero Stored —
+// the caller then falls back to its env-admin defaults.
+func (s *Service) Load(ctx context.Context) (Stored, error) {
+	if !s.Available() {
+		return Stored{}, nil
+	}
+	return s.store.Load(ctx)
+}
+
+// SaveSMTP persists the outbox config outside the wizard flow (the settings
+// page, C #10a). A zero Host clears the outbox ("not configured").
+func (s *Service) SaveSMTP(ctx context.Context, cfg smtpoutbox.Config) error {
+	if !s.Available() {
+		return fmt.Errorf("setup is unavailable (no database)")
+	}
+	norm, err := cfg.Normalize()
+	if err != nil {
+		return err
+	}
+	return s.store.SaveSMTP(ctx, norm)
+}
+
+// UpdatePassword sets the (salt, hash) of one operator account, minting the
+// row when absent (the settings page, C #10a).
+func (s *Service) UpdatePassword(ctx context.Context, username string, salt, hash []byte) error {
+	if !s.Available() {
+		return fmt.Errorf("setup is unavailable (no database)")
+	}
+	return s.store.UpdatePassword(ctx, username, salt, hash)
+}
+
 // TestSMTP sends the outbox verification mail (the wizard's test button).
 func (s *Service) TestSMTP(ctx context.Context, cfg smtpoutbox.Config, to string) error {
 	cfg, err := cfg.Normalize()

@@ -66,6 +66,14 @@ type Store interface {
 	AdminCredentials(ctx context.Context, username string) (salt, hash []byte, ok bool)
 	// AdminUsernames lists the wizard-minted operator accounts.
 	AdminUsernames(ctx context.Context) ([]string, error)
+	// SaveSMTP persists the outbox config outside the wizard flow (the
+	// settings page, C #10a). The caller passes an already-normalized
+	// config; a zero Host clears the outbox.
+	SaveSMTP(ctx context.Context, cfg smtp.Config) error
+	// UpdatePassword sets the (salt, hash) of one operator account, minting
+	// the row when absent (login checks the DB first, so a minted env-admin
+	// row takes over subsequent logins).
+	UpdatePassword(ctx context.Context, username string, salt, hash []byte) error
 }
 
 // ---- in-memory implementation (tests / degraded mode) -----------------------
@@ -113,6 +121,21 @@ func (m *MemoryStore) AdminUsernames(context.Context) ([]string, error) {
 		return nil, nil
 	}
 	return []string{m.adminUser}, nil
+}
+
+func (m *MemoryStore) SaveSMTP(_ context.Context, cfg smtp.Config) error {
+	m.smtp = cfg
+	return nil
+}
+
+func (m *MemoryStore) UpdatePassword(_ context.Context, username string, salt, hash []byte) error {
+	// The in-memory store tracks one account (the wizard's model); updating
+	// the known account replaces its credential material, anything else
+	// mints that account as the single one.
+	m.done = true
+	m.adminUser = username
+	m.salt, m.hash = salt, hash
+	return nil
 }
 
 // ---- Postgres implementation ------------------------------------------------
@@ -252,6 +275,26 @@ func (p *PostgresStore) AdminUsernames(ctx context.Context) ([]string, error) {
 		out = append(out, u)
 	}
 	return out, rows.Err()
+}
+
+func (p *PostgresStore) SaveSMTP(ctx context.Context, cfg smtp.Config) error {
+	if _, err := p.db.Exec(ctx, `
+		INSERT INTO server_config (key, value) VALUES ('smtp', $1)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		smtpJSON(cfg)); err != nil {
+		return fmt.Errorf("setup smtp save: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresStore) UpdatePassword(ctx context.Context, username string, salt, hash []byte) error {
+	if _, err := p.db.Exec(ctx, `
+		INSERT INTO admin_users (username, salt, pass_hash) VALUES ($1, $2, $3)
+		ON CONFLICT (username) DO UPDATE SET salt = EXCLUDED.salt, pass_hash = EXCLUDED.pass_hash`,
+		username, salt, hash); err != nil {
+		return fmt.Errorf("setup password update: %w", err)
+	}
+	return nil
 }
 
 // smtpJSON marshals the config the way it is persisted in server_config.
