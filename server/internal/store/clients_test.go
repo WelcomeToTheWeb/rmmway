@@ -14,13 +14,7 @@ import (
 // ---- in-memory ClientStore --------------------------------------------------
 
 func seedDefaultClient(s *MemoryClientStore) {
-	// Mirrors the 0010_clients.sql seed (the memory store has no
-	// migration; same-package access to the map is fine in tests).
-	s.clients[DefaultClientID] = &Client{
-		ID:          DefaultClientID,
-		Name:        "Unassigned",
-		Description: "Default client for devices without an explicit assignment",
-	}
+	s.SeedDefaultClient()
 }
 
 func TestMemoryClientStoreCRUD(t *testing.T) {
@@ -309,5 +303,31 @@ func TestPostgresClientsLive(t *testing.T) {
 	unDevs, _ = devices.ListByClient(ctx, DefaultClientID)
 	if len(acmeDevs) != 0 || len(unDevs) != 2 {
 		t.Fatalf("after unassign: acme=%d unassigned=%d", len(acmeDevs), len(unDevs))
+	}
+
+	// Alert scoping (ListClient): one open alert per device, then the
+	// ?client= subqueries must isolate each client's inbox — including
+	// the default client's NULL-client devices.
+	alertsStore := NewAlertStore(db, 3)
+	for _, devID := range []string{"dev-1", "dev-2"} {
+		if _, err := db.Exec(ctx, `INSERT INTO alerts (device_id, name, score, channel, value, first_at, last_at)
+			VALUES ($1, 'cpu.utilization_percent', 5.0, 'trend', 99.0, now(), now())`, devID); err != nil {
+			t.Fatalf("seed alert %s: %v", devID, err)
+		}
+	}
+	if err := devices.SetClient(ctx, "dev-2", acme.ID); err != nil {
+		t.Fatalf("reassign dev-2: %v", err)
+	}
+	acmeAlerts, err := alertsStore.ListClient(ctx, acme.ID, "", "", 100)
+	if err != nil || len(acmeAlerts) != 1 || acmeAlerts[0].DeviceID != "dev-2" {
+		t.Fatalf("listclient acme: got %+v, %v", acmeAlerts, err)
+	}
+	unAlerts, err := alertsStore.ListClient(ctx, DefaultClientID, "", "", 100)
+	if err != nil || len(unAlerts) != 1 || unAlerts[0].DeviceID != "dev-1" {
+		t.Fatalf("listclient default (NULL devices): got %+v, %v", unAlerts, err)
+	}
+	allAlerts, err := alertsStore.List(ctx, "", "", 100)
+	if err != nil || len(allAlerts) != 2 {
+		t.Fatalf("list all: got %+v, %v", allAlerts, err)
 	}
 }

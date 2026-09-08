@@ -24,6 +24,9 @@ type deviceOut struct {
 	Online       bool      `json:"online"`
 	FirstSeen    time.Time `json:"first_seen"`
 	LastSeen     time.Time `json:"last_seen"`
+	// ClientID (gap #2) is the owning MSP client; nil = unassigned
+	// (rendered under the default "Unassigned" client in the UI).
+	ClientID *string `json:"client_id"`
 }
 
 // toDeviceOut maps a store row to its JSON shape (nil slices rendered []).
@@ -34,18 +37,25 @@ func toDeviceOut(d *store.Device) deviceOut {
 	if d.Tags == nil {
 		d.Tags = []string{}
 	}
-	return deviceOut{
+	out := deviceOut{
 		ID: d.ID, Hostname: d.Hostname, OS: d.OS, Arch: d.Arch,
 		AgentVersion: d.AgentVersion, Interfaces: d.Interfaces, Tags: d.Tags,
 		Online: d.Online, FirstSeen: d.FirstSeen, LastSeen: d.LastSeen,
 	}
+	if d.ClientID != "" {
+		cid := d.ClientID
+		out.ClientID = &cid
+	}
+	return out
 }
 
 // deviceList is served at both /api/devices (auth-gated) and /admin/devices
 // (open). It returns every enrolled device with live status.
 func (s *Server) deviceList(w http.ResponseWriter, r *http.Request) {
 	out := []deviceOut{}
-	list, err := s.devices.List(r.Context())
+	// gap #2: ?client=<id> scopes the list to one client's devices
+	// ("unassigned" also matches unassigned devices; "" = all).
+	list, err := s.devices.ListByClient(r.Context(), r.URL.Query().Get("client"))
 	if err != nil {
 		http.Error(w, "device list: "+err.Error(), http.StatusInternalServerError)
 		return

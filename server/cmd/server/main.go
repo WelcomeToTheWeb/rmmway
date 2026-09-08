@@ -812,6 +812,9 @@ func main() {
 	// W4-3: per-client full export (see wire_export.go).
 	exportSvc := wireExport(hasPG, pgPool, devicesStore, version)
 
+	// gap #2: MSP client/tenant registry (see wire_clients.go).
+	clientsStore := wireClients(hasPG, pgPool)
+
 	// Per-device metrics viewer: the operator UI's device-detail charts read
 	// the metric series the agents report (Timescale hypertable).
 	metricsView := store.NewPostgresMetricsView(pgPool)
@@ -847,6 +850,7 @@ func main() {
 		Export:    exportSvc,
 		Webhooks:  webhookSvc,
 		Setup:     setupSvc,
+		Clients:   clientsStore,
 		PublicURL: publicURL(),
 	})
 	apiSrv.Register(mux)

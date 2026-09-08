@@ -97,13 +97,21 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	status := q.Get("status")
 	deviceID := q.Get("device_id")
+	clientID := q.Get("client")
 	limit := 100
 	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			limit = n
 		}
 	}
-	rows, err := s.alerts.List(r.Context(), status, deviceID, limit)
+	var rows []store.Alert
+	var err error
+	if clientID != "" {
+		// gap #2: ?client=<id> scopes the inbox to one client's devices.
+		rows, err = s.alerts.ListClient(r.Context(), clientID, status, deviceID, limit)
+	} else {
+		rows, err = s.alerts.List(r.Context(), status, deviceID, limit)
+	}
 	if err != nil {
 		http.Error(w, "alerts: "+err.Error(), http.StatusBadRequest)
 		return

@@ -182,6 +182,22 @@ func NewMemoryClientStore() *MemoryClientStore {
 	return &MemoryClientStore{clients: make(map[string]*Client)}
 }
 
+// SeedDefaultClient inserts the 0010_clients.sql seed (the "Unassigned"
+// default client) into the memory store — the in-memory world's
+// equivalent of the migration seed, for tests and wired-in-memory mode.
+func (s *MemoryClientStore) SeedDefaultClient() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.clients[DefaultClientID]; ok {
+		return
+	}
+	s.clients[DefaultClientID] = &Client{
+		ID:          DefaultClientID,
+		Name:        "Unassigned",
+		Description: "Default client for devices without an explicit assignment",
+	}
+}
+
 func (s *MemoryClientStore) List(_ context.Context) ([]*Client, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -209,7 +225,7 @@ func (s *MemoryClientStore) Create(_ context.Context, name, description string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, c := range s.clients {
-		if c.Name == name {
+		if strings.EqualFold(c.Name, name) {
 			return nil, ErrClientNameExists
 		}
 	}
@@ -233,7 +249,7 @@ func (s *MemoryClientStore) Update(_ context.Context, id string, name, descripti
 	}
 	if name != nil {
 		for _, other := range s.clients {
-			if other.ID != id && other.Name == *name {
+			if other.ID != id && strings.EqualFold(other.Name, *name) {
 				return nil, ErrClientNameExists
 			}
 		}
