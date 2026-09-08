@@ -133,22 +133,20 @@ func (d *PostgresDevices) Contains(ctx context.Context, id string) (bool, error)
 // Get returns one device by id (W4-3 export); store.ErrNotFound when
 // unknown.
 func (d *PostgresDevices) Get(ctx context.Context, id string) (*Device, error) {
-	var o Device
-	err := d.db.QueryRow(ctx, `
-		SELECT id, hostname, os, arch, agent_version, interfaces, tags,
-		       online, first_seen, last_seen,
-		       metric_interval_s, heartbeat_interval_s
-		FROM devices WHERE id = $1`, id).Scan(
-		&o.ID, &o.Hostname, &o.OS, &o.Arch, &o.AgentVersion,
-		&o.Interfaces, &o.Tags, &o.Online, &o.FirstSeen, &o.LastSeen,
-		&o.MetricIntS, &o.HeartbeatIntS)
+	rows, err := d.db.Query(ctx, `
+		SELECT `+deviceColumns+`
+		FROM devices WHERE id = $1`, id)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, ErrNotFound
-		}
 		return nil, err
 	}
-	return &o, nil
+	out, err := scanDeviceRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, ErrNotFound
+	}
+	return out[0], nil
 }
 
 func (d *PostgresDevices) Touch(ctx context.Context, id string) error {
@@ -200,22 +198,70 @@ func (d *PostgresDevices) SetTags(ctx context.Context, id string, tags []string)
 
 // List returns all devices (W2-1 device list / W1-7 indexing source).
 func (d *PostgresDevices) List(ctx context.Context) ([]*Device, error) {
-	rows, err := d.db.Query(ctx, `
-		SELECT id, hostname, os, arch, agent_version, interfaces, tags,
-		       online, first_seen, last_seen,
-		       metric_interval_s, heartbeat_interval_s
-		FROM devices ORDER BY id`)
+	return d.ListByClient(ctx, "")
+}
+
+// SetClient assigns a device to one client (gap #2); an empty clientID
+// unassigns it (NULL). store.ErrNotFound when the device is unknown.
+func (d *PostgresDevices) SetClient(ctx context.Context, id, clientID string) error {
+	var target any
+	if clientID != "" {
+		target = clientID
+	}
+	res, err := d.db.Exec(ctx, `UPDATE devices SET client_id = $2 WHERE id = $1`, id, target)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListByClient returns the devices assigned to one client (gap #2
+// scoping). clientID "" returns every device; DefaultClientID also
+// matches unassigned (NULL) devices.
+func (d *PostgresDevices) ListByClient(ctx context.Context, clientID string) ([]*Device, error) {
+	q := `SELECT ` + deviceColumns + ` FROM devices`
+	args := make([]any, 0, 1)
+	switch {
+	case clientID == "":
+	case clientID == DefaultClientID:
+		args = append(args, clientID)
+		q += ` WHERE client_id IS NULL OR client_id = $1`
+	default:
+		args = append(args, clientID)
+		q += ` WHERE client_id = $1`
+	}
+	q += ` ORDER BY id`
+	rows, err := d.db.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
+	return scanDeviceRows(rows)
+}
+
+// deviceColumns is the canonical devices SELECT list (gap #2 added
+// client_id — nullable, decoded by scanDeviceRows).
+const deviceColumns = `id, hostname, os, arch, agent_version, interfaces, tags,
+	       online, first_seen, last_seen,
+	       metric_interval_s, heartbeat_interval_s, client_id`
+
+// scanDeviceRows decodes a devices-table scan (shared by Get / List /
+// ListByClient); client_id is NULL for unassigned devices.
+func scanDeviceRows(rows pgx.Rows) ([]*Device, error) {
 	defer rows.Close()
 	var out []*Device
 	for rows.Next() {
 		var o Device
+		var clientID *string
 		if err := rows.Scan(&o.ID, &o.Hostname, &o.OS, &o.Arch, &o.AgentVersion,
 			&o.Interfaces, &o.Tags, &o.Online, &o.FirstSeen, &o.LastSeen,
-			&o.MetricIntS, &o.HeartbeatIntS); err != nil {
+			&o.MetricIntS, &o.HeartbeatIntS, &clientID); err != nil {
 			return nil, err
+		}
+		if clientID != nil {
+			o.ClientID = *clientID
 		}
 		out = append(out, &o)
 	}

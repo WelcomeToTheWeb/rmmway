@@ -32,6 +32,7 @@ parallel lanes (A/B/C) can never collide.
 | 0007 | `0007_log_events.sql` | — | shipped | W6-1: indexed agent log events (Timescale hypertable) |
 | 0008 | `0008_webhooks.sql` | — | shipped | W6-2: signed webhooks + event journal/replay |
 | 0009 | `0009_setup.sql` | — | shipped | A-2: first-boot setup wizard state |
+| 0010 | `0010_clients.sql` | — | shipped | B #2: clients table + devices.client_id + seeded 'unassigned' backfill |
 
 ## Pre-reserved (gap-closure plan — TEAM-PLAN.md §2 F4)
 
@@ -40,7 +41,7 @@ The owning lane writes them during its wave; the claim stays in this table.
 
 | # | Reserved for | Owner (lane) | File (planned) |
 | --- | ------------ | ------------ | -------------- |
-| 0010 | clients (MSP client/tenant model) | B — People & MSP | `0010_clients.sql` |
+
 | 0011 | users + roles + TOTP MFA | B — People & MSP | `0011_users.sql` |
 | 0012 | tickets (helpdesk) | B — People & MSP | `0012_tickets.sql` |
 | 0013 | deep inventory | A — Agent & Edge | `0013_inventory.sql` |

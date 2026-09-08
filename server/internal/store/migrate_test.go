@@ -69,8 +69,8 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if n != 9 {
-		t.Fatalf("expected 9 migrations applied, got %d", n)
+	if n != 10 {
+		t.Fatalf("expected 10 migrations applied, got %d", n)
 	}
 
 	mustScan := func(query string, dst ...any) {
@@ -110,6 +110,22 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	mustScan(`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('webhooks','webhook_events')`, &count)
 	if count != 2 {
 		t.Fatalf("expected webhooks+webhook_events tables, got %d", count)
+	}
+
+	// B #2: the MSP client/tenant model — 0010_clients.sql creates the
+	// clients table with exactly one seeded default client ('unassigned'),
+	// and wires devices.client_id onto the existing devices table.
+	mustScan(`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='clients'`, &count)
+	if count != 1 {
+		t.Fatalf("expected clients table, got %d", count)
+	}
+	mustScan(`SELECT count(*) FROM clients WHERE id = 'unassigned'`, &count)
+	if count != 1 {
+		t.Fatalf("expected exactly 1 seeded 'unassigned' client, got %d", count)
+	}
+	mustScan(`SELECT count(*) FROM information_schema.columns WHERE table_name='devices' AND column_name='client_id'`, &count)
+	if count != 1 {
+		t.Fatalf("expected devices.client_id column, got %d", count)
 	}
 
 	// W5-1: the self-healing tables (playbooks + heal_runs + heal_events)

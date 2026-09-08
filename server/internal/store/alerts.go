@@ -168,6 +168,55 @@ func (s *AlertStore) List(ctx context.Context, status, deviceID string, limit in
 	return out, rows.Err()
 }
 
+// ListClient is List scoped to one MSP client's devices (gap #2, wave 1)
+// — the alert scoping behind GET /api/alerts?client=<id>. Same
+// status/deviceID/limit semantics as List; DefaultClientID also matches
+// unassigned (NULL client_id) devices.
+func (s *AlertStore) ListClient(ctx context.Context, clientID, status, deviceID string, limit int) ([]Alert, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var st string
+	switch status {
+	case "":
+		st = "open"
+	case "acked", "resolved", "open":
+		st = status
+	default:
+		return nil, fmt.Errorf("unknown alert status %q", status)
+	}
+	where := "WHERE a.status = $1"
+	args := []any{st}
+	if deviceID != "" {
+		args = append(args, deviceID)
+		where += fmt.Sprintf(" AND a.device_id = $%d", len(args))
+	}
+	args = append(args, clientID)
+	if clientID == DefaultClientID {
+		where += fmt.Sprintf(" AND a.device_id IN (SELECT id FROM devices WHERE client_id IS NULL OR client_id = $%d)", len(args))
+	} else {
+		where += fmt.Sprintf(" AND a.device_id IN (SELECT id FROM devices WHERE client_id = $%d)", len(args))
+	}
+	args = append(args, limit)
+	rows, err := s.db.Query(ctx, alertSelect+" "+where+
+		" ORDER BY a.last_at DESC, a.id DESC LIMIT $"+fmt.Sprint(len(args)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Alert
+	for rows.Next() {
+		var a Alert
+		if err := rows.Scan(&a.ID, &a.DeviceID, &a.Hostname, &a.Name, &a.Source,
+			&a.Status, &a.Score, &a.Channel, &a.Value, &a.Expected, &a.Events,
+			&a.FirstAt, &a.LastAt, &a.ResolvedAt, &a.AckedAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 // Counts returns alert counts by status (open/acked/resolved) for the
 // inbox badge + tabs.
 func (s *AlertStore) Counts(ctx context.Context) (map[string]int, error) {

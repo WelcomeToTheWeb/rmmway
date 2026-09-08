@@ -428,4 +428,56 @@ export const api = {
       token,
       body: { current_password, new_password },
     }),
+
+  // ---- MSP clients/tenants (gap #2, wave 1, lane B) -----------------------
+  // Every route 503s in in-memory mode (no client registry wired).
+
+  // GET /api/clients -> Client[] {id, name, description, device_count,
+  // created_at, updated_at}, name-ordered. Always includes the seeded
+  // "Unassigned" default client (id "unassigned") that unassigned devices
+  // roll up under.
+  clients: (token) => request("/api/clients", { token }),
+
+  // POST /api/clients {name, description?} -> the created client (201,
+  // server-minted "clt-…" id). 409 = name already taken (case-insensitive).
+  createClient: (token, body) =>
+    request("/api/clients", { method: "POST", token, body }),
+
+  // PATCH /api/clients/{id} {name?, description?} -> the updated client.
+  // 404 unknown client, 409 new name taken.
+  updateClient: (token, id, body) =>
+    request(`/api/clients/${id}`, { method: "PATCH", token, body }),
+
+  // GET /api/clients/{id}/devices -> Device[] owned by the client
+  // ("unassigned" also returns unassigned devices).
+  clientDevices: (token, id) =>
+    request(`/api/clients/${id}/devices`, { token }),
+
+  // PATCH /api/devices/{id}/client {client_id: string|null} -> {device}.
+  // client_id null (or absent) moves the device to the Unassigned client.
+  assignDeviceClient: (token, id, clientId) =>
+    request(`/api/devices/${id}/client`, {
+      method: "PATCH",
+      token,
+      body: { client_id: clientId || null },
+    }),
+
+  // GET /api/devices?client=<id> — the client-scoped device list. ""
+  // returns every device; "unassigned" also matches unassigned devices.
+  clientScopedDevices: (token, client = "") => {
+    const q = new URLSearchParams();
+    if (client) q.set("client", client);
+    const qs = q.toString();
+    return request(`/api/devices${qs ? `?${qs}` : ""}`, { token });
+  },
+
+  // GET /api/alerts?client=<id> — the client-scoped alert inbox (same
+  // status/device_id/limit params as alerts()).
+  clientScopedAlerts: (token, client, { status = "", limit = 200 } = {}) => {
+    const q = new URLSearchParams();
+    q.set("client", client);
+    if (status) q.set("status", status);
+    if (limit) q.set("limit", String(limit));
+    return request(`/api/alerts?${q.toString()}`, { token });
+  },
 };

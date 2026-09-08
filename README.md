@@ -28,6 +28,14 @@ automation all stay under your control.
 - Full-text device search (hostname, ID, IP, tags, OS, agent version) with a
   Cmd-K (Ctrl/⌘+K) command palette from any screen
 
+**Client/tenant organization (MSP)**
+
+- **Client model** — organize the fleet by client (tenant): create clients,
+  assign any device to one, and scope the device list and the alert inbox per
+  client (`?client=` on the API, per-client views in the UI). Devices without
+  an assignment roll up under a seeded "Unassigned" default client, so
+  retrofitting an existing fleet never strands a device
+
 **Remote management**
 
 - **One-click "Add a device"** — the UI mints a one-time enrollment token and

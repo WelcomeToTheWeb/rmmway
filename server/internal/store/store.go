@@ -61,6 +61,14 @@ type DeviceStore interface {
 	// returning the ids it flipped. A device that stops heartbeating must
 	// stop showing as online — without this the online flag is sticky-forever.
 	SweepOffline(ctx context.Context) ([]string, error)
+	// SetClient assigns a device to one MSP client (gap #2); an empty
+	// clientID unassigns it (NULL — surfaced under the default client).
+	// ErrNotFound when the device is unknown.
+	SetClient(ctx context.Context, id, clientID string) error
+	// ListByClient returns the devices assigned to one client (gap #2
+	// scoping). clientID "" returns every device; DefaultClientID also
+	// matches unassigned (NULL) devices.
+	ListByClient(ctx context.Context, clientID string) ([]*Device, error)
 }
 
 // Device is the registry row shape shared by all DeviceStore implementations.
@@ -77,6 +85,9 @@ type Device struct {
 	LastSeen      time.Time
 	MetricIntS    int32
 	HeartbeatIntS int32
+	// ClientID is the owning MSP client (gap #2); "" = unassigned
+	// (NULL in Postgres — surfaced under DefaultClientID).
+	ClientID string
 }
 
 // ---- in-memory implementations (tests / standalone) -------------------------
@@ -210,6 +221,40 @@ func (r *MemoryDeviceStore) SetTags(_ context.Context, id string, tags []string)
 	copy(cp, tags)
 	d.Tags = cp
 	return nil
+}
+
+// SetClient assigns a device to one client (gap #2); "" unassigns (NULL).
+func (r *MemoryDeviceStore) SetClient(_ context.Context, id, clientID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	d, ok := r.devices[id]
+	if !ok {
+		return ErrNotFound
+	}
+	d.ClientID = clientID
+	return nil
+}
+
+// ListByClient returns devices for one client (gap #2). "" = all;
+// DefaultClientID also matches unassigned ("" / NULL) devices.
+func (r *MemoryDeviceStore) ListByClient(_ context.Context, clientID string) ([]*Device, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*Device, 0, len(r.devices))
+	for _, d := range r.devices {
+		switch {
+		case clientID == "":
+		case clientID == DefaultClientID && d.ClientID == "":
+		default:
+			if d.ClientID != clientID {
+				continue
+			}
+		}
+		cp := *d
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
 }
 
 // GetByID is a test helper for the memory store.

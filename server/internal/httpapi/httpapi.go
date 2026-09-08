@@ -102,6 +102,9 @@ type Server struct {
 	// setup (A-2) is the first-boot wizard backend; nil = in-memory mode
 	// (the wizard is unavailable, the env admin login is the only one).
 	setup *setup.Service
+	// clients (gap #2) is the MSP client/tenant registry; nil disables
+	// /{api|admin}/clients* (in-memory-mode deployments).
+	clients store.ClientStore
 	// publicURL (if set) is the configured public operator URL
 	// (RMMWAY_PUBLIC_URL). The Add Device UI reads this via
 	// GET /api/public-url to prefill the server URL field.
@@ -167,6 +170,11 @@ type Config struct {
 	// Setup (A-2) is the first-boot setup wizard backend; nil disables
 	// /api/setup* (in-memory mode: the UI skips the wizard, env admin only).
 	Setup *setup.Service
+	// Clients (gap #2) is the MSP client/tenant registry; nil disables
+	// /{api|admin}/clients* (in-memory-mode deployments). The ?client=
+	// scoping on the device list / alert inbox keeps working — it scopes
+	// the device and alert stores, not this registry.
+	Clients store.ClientStore
 	// PublicURL (if set) is the operator's public URL (RMMWAY_PUBLIC_URL).
 	// Exposed via GET /api/public-url so the Add Device UI can prefill the
 	// server URL with the configured public target instead of guessing
@@ -234,6 +242,7 @@ func New(cfg Config) *Server {
 		metricSeries:  cfg.MetricSeries,
 		webhooks:      cfg.Webhooks,
 		setup:         cfg.Setup,
+		clients:       cfg.Clients,
 		publicURL:     cfg.PublicURL,
 	}
 }
@@ -254,6 +263,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	registerEnroll(s, mux)
 	registerCommands(s, mux)
 	registerSettings(s, mux)
+	registerClients(s, mux)
 }
 
 type loginRequest struct {
