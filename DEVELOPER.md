@@ -84,6 +84,15 @@ curl -fsS -X POST localhost:8080/api/login -d '{"username":"admin","password":"a
 # device list (auth-gated)
 curl -fsS localhost:8080/api/devices -H "Authorization: Bearer $TOKEN"
 
+# clients/tenants (MSP client model; 503 in in-memory mode)
+curl -fsS localhost:8080/api/clients -H "Authorization: Bearer $TOKEN"                    # list + per-client device rollup
+curl -fsS -X POST localhost:8080/api/clients -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"Acme Corp"}'   # 201 created · 409 duplicate name
+curl -fsS -X PATCH localhost:8080/api/devices/dev-…/client \
+  -H "Authorization: Bearer $TOKEN" -d '{"client_id":"clt-…"}'  # "client_id":null = unassign
+curl -fsS "localhost:8080/api/devices?client=unassigned" -H "Authorization: Bearer $TOKEN"
+curl -fsS "localhost:8080/api/alerts?client=clt-…" -H "Authorization: Bearer $TOKEN"
+
 # search (Meilisearch; /admin/search is the JWT-gated mirror)
 curl -fsS "localhost:8080/api/search?q=fileserver" -H "Authorization: Bearer $TOKEN"
 
