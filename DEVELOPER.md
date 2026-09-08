@@ -58,6 +58,7 @@ minted account is the primary login).
 | `RMMWAY_LOKI_URL` (agent) | e.g. `http://localhost:3100` |
 | `RMMWAY_RELEASES_DIR` (server) | unset = no auto-updates served |
 | `RMMWAY_AUTO_UPDATE` / `RMMWAY_UPDATE_INTERVAL` (agent) | `on` / `15m` |
+| `RMMWAY_SERVICES` (agent) | unset = no service monitoring; comma list of OS service names (capped at 50) → per-service `service.status` 0/1 samples, e.g. `nginx,postgresql` |
 
 ## Test & e2e matrix
 

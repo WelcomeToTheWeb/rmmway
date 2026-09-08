@@ -11,6 +11,11 @@ automation all stay under your control.
 **Fleet monitoring**
 - Live device list — online/offline, hostname, OS, IP addresses, last heartbeat, agent version
 - Continuous metrics collection, stored in a TimescaleDB hypertable with 1-minute rollups
+- **Service status monitoring** — set `RMMWAY_SERVICES` (comma list, e.g.
+  `nginx,postgresql`) on an agent and it probes those OS services (systemd /
+  launchd / SCM) and reports `service.status` (1 = running, 0 = stopped) per
+  service — the trigger for the seeded `service.down` self-healing playbook,
+  which restarts a stopped service and re-measures before counting it healed
 - **Dynamic baselining** — every metric is scored against *that device's own*
   seasonal + trend baseline (a robust 45-day day-of-week/hour channel plus a
   same-day trend channel). No thresholds to tune, no ML dependencies.
