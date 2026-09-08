@@ -213,7 +213,7 @@ wk  C                    B                    A
     install.sh mTLS-addr derivation fixed (both case branches now strip the
     scheme first), `scripts/test-install-sh.sh` extracts the REAL derivation
     block and runs a 6-case matrix (all green), CI gains the unit test (lint)
-    + a lean `installer-e2e` job (fresh Timescale → build agent → local
+    - a lean `installer-e2e` job (fresh Timescale → build agent → local
     release dir → real install.sh → assert device online + metrics ≤ 60 s).
   - `server-split` staged only whitespace-normalized copies of httpapi.go/
     main.go (no split) — discarded.
