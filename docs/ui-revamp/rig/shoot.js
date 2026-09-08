@@ -23,7 +23,9 @@ async function session(theme) {
   // sign in
   await page.fill('input[type="password"]', "smokepass");
   await page.press('input[type="password"]', "Enter");
-  await page.waitForSelector("table.devices tbody tr:not(.detail-row)", { timeout: 15000 });
+  await page.waitForSelector("table.devices tbody tr:not(.detail-row)", {
+    timeout: 15000,
+  });
 
   // expand the first device row
   const row = page.locator("table.devices tbody tr:not(.detail-row)").first();
@@ -33,14 +35,19 @@ async function session(theme) {
   await page.waitForTimeout(1600); // let stats/live labels settle
 
   // topbar (full width)
-  await page.locator("header.topbar").screenshot({ path: `${outdir}/${tag}-topbar-${theme}.png` });
+  await page
+    .locator("header.topbar")
+    .screenshot({ path: `${outdir}/${tag}-topbar-${theme}.png` });
 
   // device detail area (the chart surface + panels below)
   const detail = page.locator("tr.detail-row");
   await detail.screenshot({ path: `${outdir}/${tag}-detail-${theme}.png` });
 
   // full page for context (nav grouping / shell)
-  await page.screenshot({ path: `${outdir}/${tag}-page-${theme}.png`, fullPage: true });
+  await page.screenshot({
+    path: `${outdir}/${tag}-page-${theme}.png`,
+    fullPage: true,
+  });
   await ctx.close();
 }
 
