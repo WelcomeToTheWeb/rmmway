@@ -97,7 +97,8 @@ func main() {
 			os.Exit(1)
 		}
 	case "collect":
-		// W1-2: sample all five core metric families once, print as text.
+		// W1-2: sample all core metric families once (service.status included
+		// when RMMWAY_SERVICES is set), print as text.
 		batch, err := collectors.NewCollector().Collect(context.Background())
 		if err != nil && len(batch.Samples) == 0 {
 			fmt.Fprintf(os.Stderr, "collect: %v\n", err)
