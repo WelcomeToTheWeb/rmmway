@@ -240,3 +240,52 @@ wk  C                    B                    A
   F3 `74638b0`+`f200fcf`, F4 `17a8d8a`, F5 `c825561`, F6 `081e75c`,
   F7 `e4c5c1b`.
 - [todo] Wave 1 kickoff: B #2 clients, A #5 service.status, C #10a settings.
+
+### 2026-09-08 — Wave 1 execution session (pi supervisor + 3 parallel worker subagents)
+
+- Setup: 3 workers in isolated git worktrees off `1e2c855` (lane A = agent/edge,
+  lane B = server domain, lane C = surfaces), 60-min budgets, commit-early
+  discipline, additive-only shared-file edits. All three lanes completed after
+  supervised in-place resumes; each verified green before merge.
+- **Lane A — #5 `service.status` collector (shipped):** per-OS collectors
+  (systemd `list-units` / `launchctl` / Windows Services) emitting
+  `service.{name}.up` samples; `RMMWAY_SERVICES` allowlist read centrally in
+  `NewCollector()` (accepted deviation from the brief's per-collector wiring);
+  ingest proof (`c6de643`, `acf95d6`) + heal-lifecycle test proving the seeded
+  `service.down` playbook fires and heals off the new metric (`c3b1a09`);
+  `make agent` + `make verify-agent` static-binary checks green. Merged to main
+  fast-forward → `0a1ce2c`.
+- **Lane B — #2 clients/MSP model (shipped):** `0010_clients.sql` (clients
+  table + fixed-id `unassigned` seed + device backfill + `devices.client_id`),
+  PG + in-memory `ClientStore` (`4af04ac`), clients API + `?client=` scoping on
+  devices/alerts incl. `unassigned` (`9709d28`), `Clients.jsx` + `clients.css`
+  + api.js helpers (`b877527`). Merged `1629bf7` → `1c742e2` (--no-ff; three
+  purely-additive conflicts — api.js, styles.css, httpapi.go — resolved
+  keep-both). Supervisor then wired the Clients nav item + route into
+  `App.jsx` (`4b2414c`), build +8 kB as expected.
+- **Lane C — #10a settings/profile (shipped):** `GET/PATCH /api/settings`
+  (org name read-only; SMTP config + re-test with blank-password carryover;
+  own password change verified against the current password; own 2FA status
+  read-only pre-RBAC) (`32eb2a4`), `Settings.jsx` + `settings.css` + Settings
+  nav/route (`86a5c6e`). Accepted contract change: once an `admin_users` row
+  exists for a username, only the DB password is valid (env fallback blocked —
+  the wizard-minted account wins).
+- **Supervisor fix post-merge:** live smoke on the merged server (:18080)
+  caught a backend mismatch — "Smoke Co" then "smoke co" both created (201),
+  though the memory store + API docs promise case-insensitive names. Fix
+  (`3cffac0`): `uq_clients_name` now on `lower(name)` (idempotent DROP+CREATE
+  so the dev DB upgrades in place), new PG live-test assertion; smoke re-run
+  → 409 as documented.
+- Smoke (merged binary, dev stack): `admin/admin` login 200; clients CRUD +
+  409 duplicate; `?client=` + `?client=unassigned` device/alert scoping;
+  `PATCH /api/devices/{id}/client`; `/api/settings` 200 with expected shape.
+  Note: an inline `"password":"admin"` in tool commands is masked to `***`
+  before execution — the long 401 chase was a harness artifact, not a code
+  bug (PBKDF2 cross-checked in Go + Python all along).
+- **Wave 1 gate PASSED (2026-09-08)** at `3cffac0`: server suite 0 failures
+  (14 pkgs), agent suite 0 failures, `uplink` integration ok, frontend build
+  ok. Pushed `origin/main` (`4477982..3cffac0`).
+- [todo] M1 remainder: device-table ergonomics row (#10a second item: IPS
+  column, column show/hide, sortable headers, client column, URL state —
+  wave 2, lane C); lane A's remaining #5 sub-items (OS event-log tail,
+  load/swap, disk IO/SMART, cert-expiry, top-N processes).
