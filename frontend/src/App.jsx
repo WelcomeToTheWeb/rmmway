@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useState, useCallback } from "react";
 import { AuthProvider, useAuth } from "./auth.jsx";
 import { api } from "./api.js";
 import { openEventStream } from "./sse.js";
@@ -15,16 +15,41 @@ import Palette from "./Palette.jsx";
 import { ThemeToggle } from "./ui/theme.jsx";
 import { ErrorBoundary } from "./ui/index.js";
 
-// ---- tiny hash router: #/devices (default), #/alerts, #/flows, #/events,
-// ---- #/heal
+// ---- data-driven nav (F3, wave 0) -----------------------------------------
+// NAV_ITEMS is the single source of truth for the top-nav. Other lanes add
+// items via a 1-line PR to this array only (see DEVELOPER.md "Ownership").
+// Shape: { label, path, group, kind, badge?, kbd?, title? }
+//   group — section label; a separator renders before the first item of a
+//           new group ("" = unlabeled separator)
+//   kind  — "route" renders a hash link; "palette" renders the ⌘K action
+//   badge — "alerts" renders the open-alert count badge when > 0
+const NAV_ITEMS = [
+  { label: "Devices", path: "devices", group: "Fleet", kind: "route" },
+  { label: "Alerts", path: "alerts", group: "Fleet", kind: "route", badge: "alerts" },
+  { label: "Flows", path: "flows", group: "Ops", kind: "route" },
+  { label: "Events", path: "events", group: "Ops", kind: "route" },
+  { label: "Heal", path: "heal", group: "Ops", kind: "route" },
+  { label: "Webhooks", path: "webhooks", group: "System", kind: "route" },
+  { label: "Baseline", path: "baseline", group: "System", kind: "route" },
+  {
+    label: "Search",
+    path: "search",
+    group: "",
+    kind: "palette",
+    kbd: "⌘K",
+    title: "Search devices & run actions (Ctrl+K)",
+  },
+];
+
+// ---- tiny hash router: #/devices (default) + the NAV_ITEMS routes.
+// ---- Known routes derive from NAV_ITEMS above (one array, one truth).
 function parseRoute() {
   const h = window.location.hash;
-  if (h.startsWith("#/alerts")) return "alerts";
-  if (h.startsWith("#/flows")) return "flows";
-  if (h.startsWith("#/events")) return "events";
-  if (h.startsWith("#/heal")) return "heal";
-  if (h.startsWith("#/webhooks")) return "webhooks";
-  if (h.startsWith("#/baseline")) return "baseline";
+  for (const item of NAV_ITEMS) {
+    if (item.kind === "route" && h.startsWith("#/" + item.path)) {
+      return item.path;
+    }
+  }
   return "devices";
 }
 
@@ -118,78 +143,46 @@ function Header({ route, openCount, onOpenPalette }) {
         )}
       </div>
       <nav className="nav">
-        <span className="nav-sep first" aria-hidden="true">
-          Fleet
-        </span>
-        <a
-          className={"nav-item" + (route === "devices" ? " active" : "")}
-          href="#/devices"
-          aria-current={route === "devices" ? "page" : undefined}
-        >
-          Devices
-        </a>
-        <a
-          className={"nav-item" + (route === "alerts" ? " active" : "")}
-          href="#/alerts"
-          aria-current={route === "alerts" ? "page" : undefined}
-        >
-          Alerts
-          {openCount > 0 && <span className="badge">{openCount}</span>}
-        </a>
-        <span className="nav-sep" aria-hidden="true">
-          Ops
-        </span>
-        <a
-          className={"nav-item" + (route === "flows" ? " active" : "")}
-          href="#/flows"
-          aria-current={route === "flows" ? "page" : undefined}
-        >
-          Flows
-        </a>
-        <a
-          className={"nav-item" + (route === "events" ? " active" : "")}
-          href="#/events"
-          aria-current={route === "events" ? "page" : undefined}
-        >
-          Events
-        </a>
-        <a
-          className={"nav-item" + (route === "heal" ? " active" : "")}
-          href="#/heal"
-          aria-current={route === "heal" ? "page" : undefined}
-        >
-          Heal
-        </a>
-        <span className="nav-sep" aria-hidden="true">
-          System
-        </span>
-        <a
-          className={"nav-item" + (route === "webhooks" ? " active" : "")}
-          href="#/webhooks"
-          aria-current={route === "webhooks" ? "page" : undefined}
-        >
-          Webhooks
-        </a>
-        <a
-          className={"nav-item" + (route === "baseline" ? " active" : "")}
-          href="#/baseline"
-          aria-current={route === "baseline" ? "page" : undefined}
-        >
-          Baseline
-        </a>
-        <span className="nav-sep" aria-hidden="true" />
-        <a
-          className="nav-item"
-          href="#/search"
-          role="button"
-          onClick={(e) => {
-            e.preventDefault();
-            onOpenPalette();
-          }}
-          title="Search devices & run actions (Ctrl+K)"
-        >
-          Search <kbd className="kbd">⌘K</kbd>
-        </a>
+        {NAV_ITEMS.map((item, i) => {
+          const prev = i > 0 ? NAV_ITEMS[i - 1] : null;
+          return (
+            <Fragment key={item.path}>
+              {(!prev || prev.group !== item.group) && (
+                <span
+                  className={"nav-sep" + (i === 0 ? " first" : "")}
+                  aria-hidden="true"
+                >
+                  {item.group}
+                </span>
+              )}
+              {item.kind === "palette" ? (
+                <a
+                  className="nav-item"
+                  href={"#/" + item.path}
+                  role="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onOpenPalette();
+                  }}
+                  title={item.title}
+                >
+                  {item.label} <kbd className="kbd">{item.kbd}</kbd>
+                </a>
+              ) : (
+                <a
+                  className={"nav-item" + (route === item.path ? " active" : "")}
+                  href={"#/" + item.path}
+                  aria-current={route === item.path ? "page" : undefined}
+                >
+                  {item.label}
+                  {item.badge === "alerts" && openCount > 0 && (
+                    <span className="badge">{openCount}</span>
+                  )}
+                </a>
+              )}
+            </Fragment>
+          );
+        })}
       </nav>
       <div className="topbar-right">
         {health && (
