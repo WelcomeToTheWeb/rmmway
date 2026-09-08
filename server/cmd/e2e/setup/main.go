@@ -269,8 +269,8 @@ func main() {
 	defer pool.Close()
 	if n, err := store.Migrate(ctx, pool, "migrations"); err != nil {
 		die("migrate: %v (n=%d)", err, n)
-	} else if n != 9 {
-		die("expected 9 migrations, got %d", n)
+	} else if n != 10 {
+		die("expected 10 migrations, got %d", n)
 	}
 	info("9 migrations applied to scratch db %s", dbName)
 
