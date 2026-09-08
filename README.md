@@ -9,6 +9,7 @@ automation all stay under your control.
 ## Features
 
 **Fleet monitoring**
+
 - Live device list — online/offline, hostname, OS, IP addresses, last heartbeat, agent version
 - Continuous metrics collection, stored in a TimescaleDB hypertable with 1-minute rollups
 - **Service status monitoring** — set `RMMWAY_SERVICES` (comma list, e.g.
@@ -28,6 +29,7 @@ automation all stay under your control.
   Cmd-K (Ctrl/⌘+K) command palette from any screen
 
 **Remote management**
+
 - **One-click "Add a device"** — the UI mints a one-time enrollment token and
   shows a single copy-paste command per OS
 - Dispatch commands to live devices (reboot, run a script) with results reported back
@@ -35,6 +37,7 @@ automation all stay under your control.
   UI immediately
 
 **Agents**
+
 - One static binary per platform — Linux, macOS, and Windows (amd64 + arm64).
   On Windows it runs as a real Windows service with auto-restart
 - Enrollment uses a one-time, short-TTL token over your HTTPS origin; from
@@ -44,6 +47,7 @@ automation all stay under your control.
   inside the agent. A tampered or unsigned build is refused
 
 **Integrations & data ownership**
+
 - **Webhooks** (HMAC-SHA256 signed, Stripe-style) and a public **SSE event
   stream** — every alert, inventory, and automation event is journaled,
   retried with backoff, and replayable
@@ -53,6 +57,7 @@ automation all stay under your control.
   you can open in DuckDB/pandas or re-import anywhere — no lock-in
 
 **Deployment & security**
+
 - One-command hardened production stack behind an automatic-TLS Caddy edge —
   or bring your own reverse proxy (Nginx, Traefik, HAProxy, Caddy)
 - First-boot setup wizard: create your root admin, define your organization's
@@ -371,7 +376,7 @@ One request exports **everything RMMWay knows about a client** into a
 portable ZIP bundle:
 
 | file | what |
-|------|------|
+| ------ | ------ |
 | `manifest.json` | per-file sha256 + size + row count — the bundle verifies itself |
 | `device.json` | inventory + agent configuration |
 | `metrics.parquet` | raw samples (opens in DuckDB / pandas / polars) |
