@@ -27,7 +27,9 @@ async function request(path, { method = "GET", body, token } = {}) {
     try {
       const j = await res.json();
       if (j && j.error) msg = j.error;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     throw new ApiError(msg, res.status);
   }
   if (res.status === 204) return null;
@@ -49,8 +51,7 @@ export const api = {
 
   // POST /api/setup/smtp/test — send the outbox verification mail.
   // body: { smtp: {host, port, from, username, password}, to? }.
-  testSmtp: (body) =>
-    request("/api/setup/smtp/test", { method: "POST", body }),
+  testSmtp: (body) => request("/api/setup/smtp/test", { method: "POST", body }),
 
   // POST /api/login -> { token, expiry }
   login: (username, password) =>
@@ -97,7 +98,7 @@ export const api = {
     q.set("limit", String(limit));
     return request(
       `/api/devices/${encodeURIComponent(deviceId)}/commands?${q.toString()}`,
-      { token }
+      { token },
     );
   },
 
@@ -131,7 +132,10 @@ export const api = {
   // event } where `event` is the full bus event (flow.Event JSON: type,
   // device_id, source?, value?, command_id?, status?, message?, data{...},
   // at). 503 when the webhook framework is unwired (in-memory server).
-  eventJournal: (token, { after = 0, limit = 200, category = "", device = "", type = "" } = {}) => {
+  eventJournal: (
+    token,
+    { after = 0, limit = 200, category = "", device = "", type = "" } = {},
+  ) => {
     const q = new URLSearchParams();
     q.set("after", String(after));
     q.set("limit", String(limit));
@@ -151,7 +155,7 @@ export const api = {
     if (level) q.set("level", level);
     return request(
       `/api/devices/${encodeURIComponent(deviceId)}/events?${q.toString()}`,
-      { token }
+      { token },
     );
   },
 
@@ -161,7 +165,7 @@ export const api = {
   metricsNames: (token, deviceId, range = "7d") =>
     request(
       `/api/devices/${encodeURIComponent(deviceId)}/metrics?range=${range}`,
-      { token }
+      { token },
     ),
 
   // The bucketed samples of one series over a range (the chart). ->
@@ -174,7 +178,7 @@ export const api = {
     q.set("range", range);
     return request(
       `/api/devices/${encodeURIComponent(deviceId)}/metrics/series?${q.toString()}`,
-      { token }
+      { token },
     );
   },
 
@@ -290,7 +294,8 @@ export const api = {
   // confirmed, escalated, failed, active_runs, errors? }. A newly detected
   // series starts a run in `detected`; the same pass then advances every
   // active run one stage, so a fresh heal completes over successive passes.
-  healPass: (token) => request("/api/heal/pass", { method: "POST", token, body: {} }),
+  healPass: (token) =>
+    request("/api/heal/pass", { method: "POST", token, body: {} }),
 
   // ---- D-4: webhook endpoint management (W3-2) ---------------------------
   // GET /api/webhooks -> Endpoint[] (id, name, url, categories — empty =
@@ -324,7 +329,11 @@ export const api = {
   // GET /api/webhooks/{id}/events?after=&limit=&category= -> the journaled
   // events this endpoint is subscribed to (seq > after, oldest first,
   // { id (journal seq), category, type, device_id?, at, event }).
-  webhookEvents: (token, id, { after = 0, limit = 200, category = "" } = {}) => {
+  webhookEvents: (
+    token,
+    id,
+    { after = 0, limit = 200, category = "" } = {},
+  ) => {
     const q = new URLSearchParams();
     q.set("after", String(after));
     q.set("limit", String(limit));
@@ -337,7 +346,11 @@ export const api = {
   // re-delivers every journaled event from that sequence forward (0 = the
   // whole journal). 400 negative from_seq; 404 unknown id.
   webhookReplay: (token, id, { from_seq = 0 } = {}) =>
-    request(`/api/webhooks/${id}/replay`, { method: "POST", token, body: { from_seq } }),
+    request(`/api/webhooks/${id}/replay`, {
+      method: "POST",
+      token,
+      body: { from_seq },
+    }),
 
   // ---- D-5: baseline anomaly explorer (W2-4) --------------------------------
   // GET /api/baseline/anomalies[?limit=] -> StoredAnomaly[] newest first
@@ -346,7 +359,10 @@ export const api = {
   // trend_z?, detected_at). NOTE: the current server honors only `limit`;
   // the device_id/name/min_score params are still sent (per the W2-4
   // contract) and applied client-side until the server filters them.
-  baselineAnomalies: (token, { device_id = "", name = "", min_score = "", limit = 200 } = {}) => {
+  baselineAnomalies: (
+    token,
+    { device_id = "", name = "", min_score = "", limit = 200 } = {},
+  ) => {
     const q = new URLSearchParams();
     if (device_id) q.set("device_id", device_id);
     if (name) q.set("name", name);

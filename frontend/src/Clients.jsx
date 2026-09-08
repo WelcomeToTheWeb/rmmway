@@ -234,9 +234,7 @@ function ClientDevices({
 										disabled={moving === d.id}
 										onChange={(e) => move(d.id, e.target.value)}
 										title={
-											moving === d.id
-												? "moving…"
-												: "move this device to another client"
+											moving === d.id ? "moving…" : "move this device to another client"
 										}
 									>
 										{sorted.map((c) => (
@@ -398,10 +396,11 @@ export default function Clients({ token, onUnauthorized }) {
 									</div>
 									<div className="id mono">{c.id}</div>
 								</td>
-								<td className="muted clients-desc">
-									{c.description || "—"}
-								</td>
-								<td className="mono" title="devices assigned (unassigned devices count under the default client)">
+								<td className="muted clients-desc">{c.description || "—"}</td>
+								<td
+									className="mono"
+									title="devices assigned (unassigned devices count under the default client)"
+								>
 									{c.device_count || 0}
 								</td>
 								<td className="muted">
@@ -423,10 +422,7 @@ export default function Clients({ token, onUnauthorized }) {
 			)}
 
 			{modal === "new" && (
-				<NewClientModal
-					onClose={() => setModal(null)}
-					onCreate={createClient}
-				/>
+				<NewClientModal onClose={() => setModal(null)} onCreate={createClient} />
 			)}
 			{modal && modal !== "new" && (
 				<EditClientModal

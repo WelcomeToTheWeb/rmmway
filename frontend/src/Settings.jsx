@@ -130,7 +130,8 @@ export default function Settings({ token, onUnauthorized }) {
 
   function pwError() {
     if (!pw.current) return "Enter your current password.";
-    if (pw.next.length < 8) return "New password must be at least 8 characters.";
+    if (pw.next.length < 8)
+      return "New password must be at least 8 characters.";
     if (pw.next.length > 128)
       return "New password must be at most 128 characters.";
     if (pw.next !== pw.confirm) return "Passwords do not match.";
@@ -222,8 +223,8 @@ export default function Settings({ token, onUnauthorized }) {
             </h3>
             <p className="muted">
               Where the server sends mail (alert and operator notifications).
-              Port 587 = STARTTLS, 465 = implicit TLS, 25 = plaintext. Leave
-              the host blank to clear the outbox.
+              Port 587 = STARTTLS, 465 = implicit TLS, 25 = plaintext. Leave the
+              host blank to clear the outbox.
             </p>
             <form onSubmit={saveSmtp} noValidate>
               <div className="settings-grid">
@@ -346,7 +347,9 @@ export default function Settings({ token, onUnauthorized }) {
                   label="New password (min 8)"
                   type="password"
                   value={pw.next}
-                  onChange={(e) => setPw((f) => ({ ...f, next: e.target.value }))}
+                  onChange={(e) =>
+                    setPw((f) => ({ ...f, next: e.target.value }))
+                  }
                   autoComplete="new-password"
                 />
                 <Field
