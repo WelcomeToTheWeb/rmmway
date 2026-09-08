@@ -7,7 +7,6 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -23,9 +22,6 @@ import (
 	"syscall"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
@@ -34,15 +30,10 @@ import (
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ca"
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
-	"github.com/welcometotheweb/rmmway/server/internal/export"
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
-	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
-	"github.com/welcometotheweb/rmmway/server/internal/ingest"
-	"github.com/welcometotheweb/rmmway/server/internal/releases"
 	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
-	"github.com/welcometotheweb/rmmway/server/internal/webhook"
 )
 
 // hostIPv4s returns the machine's non-loopback unicast IPv4 addresses —
@@ -298,44 +289,6 @@ func adminCaps() []string {
 		return caps.AllCapabilities
 	}
 	return out
-}
-
-// ---- W6-2: Notifier adapters -----------------------------------------------
-// The flow + heal engines have a Notifier seam (W5-2 "log now; W6-2's
-// NATS/webhook notifier plugs into the same interface"). These adapters
-// implement that seam: they log AND publish an "automation" event to the bus
-// so the webhook / SSE framework journals + delivers it (flow notify, run
-// failures, and self-heal escalations all become automation events).
-
-type busFlowNotifier struct {
-	log *log.Logger
-	pub func(subject, deviceID, message string, data map[string]any)
-}
-
-func (n busFlowNotifier) Notify(ctx context.Context, run *flow.Run, nodeID, reason string) {
-	if n.log != nil {
-		n.log.Printf("flow: NOTIFY run %d (%s) node=%s device=%s: %s", run.ID, run.FlowName, nodeID, run.DeviceID, reason)
-	}
-	n.pub(flow.SubjectNotify, run.DeviceID, "flow "+run.FlowName+" node="+nodeID+": "+reason, map[string]any{
-		"action": "notify", "run_id": run.ID, "flow": run.FlowName,
-		"node": nodeID, "device_id": run.DeviceID, "message": reason,
-	})
-}
-
-type busHealNotifier struct {
-	log *log.Logger
-	pub func(subject, deviceID, message string, data map[string]any)
-}
-
-func (n busHealNotifier) Escalate(run *heal.Run, reason string) {
-	if n.log != nil {
-		n.log.Printf("selfheal: ESCALATED run %d playbook=%s device=%s source=%q: %s (ticket=heal_runs.id=%d)",
-			run.ID, run.PlaybookKey, run.DeviceID, run.Source, reason, run.ID)
-	}
-	n.pub(flow.SubjectNotify, run.DeviceID, "selfheal escalated "+run.PlaybookKey+": "+reason, map[string]any{
-		"action": "escalated", "run_id": run.ID, "playbook": run.PlaybookKey,
-		"device_id": run.DeviceID, "source": run.Source, "reason": reason,
-	})
 }
 
 // retryMeiliSync (M7) retries the boot FullSync every 30s until Meilisearch
@@ -806,20 +759,7 @@ func main() {
 	}()
 
 	// ---- event bus wiring (W5-2) ------------------------------------------
-	// The NATS/JetStream stream that carries every flow hop. Flows are
-	// Postgres-backed (the replay-safe run state), so the engine needs
-	// hasPG; when NATS is down the server degrades to in-memory mode for
-	// the rest of the stack, so the flow engine is disabled too (its whole
-	// point is that the chain runs OVER the bus).
-	if hasPG {
-		fb, err := flow.NewNatsBus(context.Background(), env("RMMWAY_NATS_URL", "nats://localhost:4222"), "RMMWAY_EVENTS", "flow-engine")
-		if err != nil {
-			log.Printf("WARN: nats event bus unavailable (%v) — flow engine disabled", err)
-		} else {
-			flowBus = fb
-			log.Println("nats event bus ready (stream RMMWAY_EVENTS)")
-		}
-	}
+	flowBus = wireFlowBus(hasPG)
 
 	// Alerts (W2-4) surface lifecycle events (fired/updated/resolved) on the
 	// bus so the webhook / SSE framework journals + delivers them.
@@ -831,162 +771,17 @@ func main() {
 	}
 
 	// ---- gRPC ingest (W1-5) + mTLS agent channel (W3-1) ---------------
-	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr, Caps: capsIssuer, Logs: logSink,
-		OnCommandResult: func(res *agentv1.CommandResult) {
-			// W5-2: a FINAL agent command answer becomes a bus event so a
-			// waiting flow script node advances (event-driven chain hop).
-			if flowBus == nil {
-				return
-			}
-			_ = flowBus.Publish(context.Background(), flow.SubjectCommand, &flow.Event{
-				Type:      flow.SubjectCommand,
-				CommandID: res.GetCommandId(),
-				Status:    res.GetStatus().String(),
-				Message:   res.GetError(),
-				At:        time.Now().UTC(),
-			})
-		},
-		OnDeviceEvent: func(action string, payload map[string]any) {
-			// W6-2: inventory events (created / online) onto the bus.
-			devID, _ := payload["device_id"].(string)
-			publishEvent(flow.SubjectDevice, devID, action+" device", payload)
-		},
-	}, metricsSink, devicesStore)
-	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(svc.JWTInterceptor),
-	)
-	agentv1.RegisterAgentServiceServer(grpcServer, svc)
-
-	lis, err := net.Listen("tcp", grpcAddr)
-	if err != nil {
-		log.Fatalf("grpc listen %s: %v", grpcAddr, err)
-	}
-	go func() {
-		log.Printf("rmmway-server %s: gRPC agent ingest on %s", version, grpcAddr)
-		if err := grpcServer.Serve(lis); err != nil {
-			log.Printf("grpc server: %v", err)
-		}
-	}()
-
-	// W3-1: second gRPC listener, mTLS. Same AgentService, but the TLS
-	// layer requires a client leaf signed by the org root before any RPC
-	// is processed (a random cert is rejected at the handshake), and the
-	// server presents a root-signed cert so the agent verifies us too.
-	// RMMWAY_GRPC_MTLS_ADDR=off disables it (plain-listener deployments).
-	var mtlsServer *grpc.Server
-	if grpcMTLSAddr != "off" && grpcMTLSAddr != "" {
-		sans := mtlsSANs(grpcMTLSAddr, grpcAddr, httpAddr)
-		log.Printf("grpc mTLS SANs: %s", strings.Join(sans, " "))
-		mtlsCfg, err := caMgr.TLSConfig(sans)
-		if err != nil {
-			log.Fatalf("grpc mTLS: %v", err)
-		}
-		mtlsServer = grpc.NewServer(
-			grpc.Creds(credentials.NewTLS(mtlsCfg)),
-			grpc.UnaryInterceptor(svc.JWTInterceptor),
-		)
-		agentv1.RegisterAgentServiceServer(mtlsServer, svc)
-		mtlsLis, err := net.Listen("tcp", grpcMTLSAddr)
-		if err != nil {
-			log.Fatalf("grpc mTLS listen %s: %v", grpcMTLSAddr, err)
-		}
-		go func() {
-			log.Printf("rmmway-server %s: gRPC mTLS agent channel on %s (client cert required)", version, grpcMTLSAddr)
-			if err := mtlsServer.Serve(mtlsLis); err != nil {
-				log.Printf("grpc mTLS server: %v", err)
-			}
-		}()
-	}
+	svc, grpcServer, mtlsServer := wireIngest(version, jwtSecret, grpcAddr, grpcMTLSAddr, httpAddr,
+		indexer, caMgr, capsIssuer, logSink, flowBus, publishEvent, metricsSink, devicesStore)
 
 	// ---- self-healing playbook engine (W5-1) ---------------------------
-	// Detect -> verify-safe -> remediate -> confirm (re-measure) -> escalate.
-	// Postgres-backed (the run state machine + replay-safety live in the DB),
-	// so it needs hasPG; remediations go through the same capability-gated
-	// command dispatch as operator-run actions (W3-3 token on every script).
-	var healEngine *heal.Engine
-	if hasPG {
-		if d, on := healInterval(); on {
-			hst := heal.NewStore(pgPool)
-			remediate := func(ctx context.Context, deviceID, lang, script string) (string, error) {
-				return svc.Dispatcher().Dispatch(deviceID, &agentv1.Command_RunScript{
-					RunScript: &agentv1.RunScript{
-						Lang:      lang,
-						ScriptB64: base64.StdEncoding.EncodeToString([]byte(script)),
-					},
-				})
-			}
-			healEngine = heal.New(hst, remediate, svc.Dispatcher().Result, busHealNotifier{
-				log: log.New(os.Stderr, "selfheal: ", 0), pub: publishEvent,
-			})
-			healErrCh := make(chan error, 1)
-			go healEngine.Run(context.Background(), d, healErrCh)
-			go func() {
-				for err := range healErrCh {
-					log.Printf("selfheal: %v", err)
-				}
-			}()
-			log.Printf("selfheal: playbook engine started (interval %s; playbooks seeded by 0005_selfheal.sql)", d)
-		} else {
-			log.Println("selfheal: disabled (RMMWAY_HEAL_INTERVAL=off)")
-		}
-	}
+	healEngine := wireHealEngine(hasPG, pgPool, svc, publishEvent)
 
 	// ---- event-driven automation chains (W5-2) -------------------------
-	// Automations are DAGs of trigger -> script/check/notify nodes executed
-	// OVER the NATS event bus: every hop of every run is a bus event, the
-	// Postgres tables hold only the replay-safe run state. Real triggers
-	// come from the sampler (polls the metrics hypertable); synthetic ones
-	// from POST /api/flows/{id}/trigger.
-	var flowEngine *flow.Engine
-	if hasPG && flowBus != nil {
-		remediate := func(ctx context.Context, deviceID, lang, script string) (string, error) {
-			return svc.Dispatcher().Dispatch(deviceID, &agentv1.Command_RunScript{
-				RunScript: &agentv1.RunScript{
-					Lang:      lang,
-					ScriptB64: base64.StdEncoding.EncodeToString([]byte(script)),
-				},
-			})
-		}
-		flowEngine = flow.New(flow.NewStore(pgPool), flowBus, remediate, svc.Dispatcher().Result,
-			busFlowNotifier{log: log.New(os.Stderr, "flow: ", 0), pub: publishEvent},
-			flowInterval("RMMWAY_FLOW_SWEEP", 5*time.Second), flowInterval("RMMWAY_FLOW_SAMPLE", 60*time.Second))
-		flowEngine = flowEngine.WithLogger(log.New(os.Stderr, "flow: ", 0))
-		if err := flowEngine.Start(context.Background()); err != nil {
-			log.Printf("WARN: flow engine start failed (%v) — flows disabled", err)
-			flowEngine = nil
-		} else {
-			log.Println("flow engine: event-driven chains started (sampler + sweep on the NATS bus)")
-		}
-	} else if hasPG {
-		log.Println("flow engine: disabled (nats event bus unavailable)")
-	}
+	flowEngine := wireFlowEngine(hasPG, flowBus, pgPool, svc, publishEvent)
 
 	// ---- webhook + event-stream framework (W6-2) ------------------------
-	// Journals every bus event, fans it out to live SSE subscribers, and
-	// delivers signed (HMAC) webhooks to user-defined endpoints with
-	// cursor-based retries + replay. Needs hasPG (journal + endpoints) and
-	// the bus (the events to expose); in-memory mode has neither.
-	var webhookSvc *webhook.Service
-	var webhookBus flow.Bus
-	if hasPG && flowBus != nil {
-		// A SEPARATE durable consumer on the same stream: the flow engine
-		// ("flow-engine") and the webhook framework ("webhook-engine") each
-		// must see every event, so they can't share one consumer.
-		whb, err := flow.NewNatsBus(context.Background(), env("RMMWAY_NATS_URL", "nats://localhost:4222"), "RMMWAY_EVENTS", "webhook-engine")
-		if err != nil {
-			log.Printf("WARN: nats webhook bus unavailable (%v) — webhooks disabled", err)
-		} else {
-			webhookBus = whb
-			whs := webhook.NewStore(pgPool)
-			webhookSvc = webhook.New(whs, whb).WithLogger(log.New(os.Stderr, "webhook: ", 0))
-			if err := webhookSvc.Start(context.Background()); err != nil {
-				log.Printf("WARN: webhook framework start failed (%v)", err)
-				webhookSvc = nil
-			} else {
-				log.Println("webhook framework: signed webhooks + SSE event stream live (sweep 2s)")
-			}
-		}
-	}
+	webhookSvc, webhookBus := wireWebhook(hasPG, flowBus, pgPool)
 
 	// ---- HTTP (health + operator API + admin JSON) ---------------------
 	mux := http.NewServeMux()
@@ -1011,42 +806,17 @@ func main() {
 		_ = json.NewEncoder(w).Encode(h)
 	})
 
-	// W2-1: operator login + auth-gated device list + legacy /admin/*.
-	// W2-2: + /api/search (Cmd-K) and /api/devices/{id}/commands (dispatch).
-	// W4-2: signed agent release distribution. When RMMWAY_RELEASES_DIR is set
-	// to a directory holding release.json + signed binaries, the server serves
-	// them at /agent/releases/* for the agents' auto-update. Unset = the routes
-	// 404 and agents treat themselves as up-to-date.
-	var relSrv *releases.Server
-	if releasesDir := env("RMMWAY_RELEASES_DIR", ""); releasesDir != "" {
-		relSrv, err = releases.New(releasesDir)
-		if err != nil {
-			log.Fatalf("releases: %v", err)
-		}
-		log.Printf("agent releases: serving signed releases from %s", relSrv.Dir())
-	}
+	// W4-2: signed agent release distribution (see wire_releases.go).
+	relSrv := wireReleases()
 
-	// W4-3: per-client full export (the no-lock-in promise). One request
-	// builds a self-describing ZIP bundle: device inventory + config,
-	// raw metrics + 1-minute rollups (standard Parquet), complete alert
-	// history, and a manifest that drives verification (export.Verify).
-	// Postgres-backed (the data lives in the hypertable); in-memory mode
-	// has no history to export, so the routes 503.
-	var exportSvc *export.Service
-	if hasPG {
-		exportSvc = export.New(export.Config{
-			Devices: devicesStore,
-			Metrics: export.NewPostgresMetrics(pgPool),
-			Rollups: export.NewPostgresRollups(pgPool),
-			Alerts:  export.NewPostgresAlerts(pgPool),
-			Version: "rmmway-server/" + version,
-		})
-		log.Println("export: per-client full export enabled (GET /api/devices/{id}/export)")
-	}
+	// W4-3: per-client full export (see wire_export.go).
+	exportSvc := wireExport(hasPG, pgPool, devicesStore, version)
 
 	// Per-device metrics viewer: the operator UI's device-detail charts read
 	// the metric series the agents report (Timescale hypertable).
 	metricsView := store.NewPostgresMetricsView(pgPool)
+	// W2-1: operator login + auth-gated device list + legacy /admin/*.
+	// W2-2: + /api/search (Cmd-K) and /api/devices/{id}/commands (dispatch).
 	apiSrv := httpapi.New(httpapi.Config{
 		Devices:       devicesStore,
 		Search:        mSearch,
