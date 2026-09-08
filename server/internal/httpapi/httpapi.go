@@ -253,6 +253,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	registerSetup(s, mux)
 	registerEnroll(s, mux)
 	registerCommands(s, mux)
+	registerSettings(s, mux)
 }
 
 type loginRequest struct {
@@ -310,6 +311,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"capabilities": s.adminCaps,
 		})
 		return
+	}
+	// C #10a: if a DB row exists for this username (the wizard ran, or a
+	// password was changed from the settings page), only that row's
+	// credential is valid — falling back to the env pair would let a stale
+	// env password bypass a changed one. (CheckCredentials above returned
+	// false, so this is the "row exists, wrong password" case.)
+	if s.setup != nil {
+		if _, _, exists := s.setup.AdminCredentials(r.Context(), in.Username); exists {
+			limitFail()
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid username or password"})
+			return
+		}
 	}
 	// Always compute the candidate hash (even on a wrong username) so
 	// response timing doesn't reveal which field was wrong.
