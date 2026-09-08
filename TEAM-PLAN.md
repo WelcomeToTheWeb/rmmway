@@ -185,3 +185,28 @@ wk  C                    B                    A
     #10b maint+cron      #7 escalation hook
     → M5 integration + e2e + release (all three)
 ```
+
+---
+
+## 9. Progress log
+
+### 2026-09-08 — Wave 0 execution session (pi + 2 subagents)
+
+- Baseline state: UI revamp (UI-REVAMP.md) shipped + signed off (`b28f835`);
+  plan doc committed (`fbb8b13`); repo clean at `495a049`.
+- Toolchain: Go 1.27.1 installed to `/usr/local/go` on the dev host (was
+  missing; Makefile PATH already expects it). Dev stack via `make up`
+  (timescale/nats/redis/minio/meili/loki). Baseline suite GREEN:
+  `server` + `agent -tags integration`, with
+  `RMMWAY_TEST_PG_DSN=postgres://rmmway:rmmway@localhost:5432/rmmway`,
+  `RMMWAY_MEILI_TEST_ENDPOINT=http://localhost:7700`,
+  `RMMWAY_MEILI_TEST_KEY=rmmway-dev-master-key`, `RMMWAY_NATS_URL=nats://localhost:4222`.
+- Wave 0 split across 2 parallel subagents in isolated git worktrees:
+  - `server-split` (branch `pi-subagents/server-split-*`): F1 + F2
+    (httpapi.go → domain_*.go; main.go → wire_*.go). Pure moves.
+  - `platform` (branch `pi-subagents/platform-*`): F3 (NAV_ITEMS), F4
+    (MIGRATIONS.md ledger), F5 (ownership in DEVELOPER.md), F6
+    (`make seed-dev`), F7 (install.sh mTLS-addr fix + installer e2e in CI).
+- [todo] merge both branches → M0 gate verification → sync Obsidian
+  `Projects/RMMWay` (plan note + repo mirror).
+- [todo] Wave 1 kickoff: B #2 clients, A #5 service.status, C #10a settings.
