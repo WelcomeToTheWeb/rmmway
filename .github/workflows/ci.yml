@@ -48,6 +48,8 @@ jobs:
         with:
           version: v1.72.0
       - run: buf lint
+      - name: "install.sh unit test (gap #9: mTLS-addr derivation regression)"
+        run: ./scripts/test-install-sh.sh
 
   test:
     name: Test
@@ -87,8 +89,8 @@ jobs:
         image: nats:2.10-alpine
         ports:
           - 4222:4222
-        command: ["nats-server", "--jetstream", "--port", "4222", "--http_port", "8222"]
         options: >-
+          --jetstream --port 4222 --http_port 8222
           --health-cmd "wget -qO- http://localhost:8222/healthz"
           --health-interval 5s
           --health-timeout 5s
@@ -178,6 +180,138 @@ jobs:
           RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
           RMMWAY_NATS_URL: nats://localhost:4222
         run: go run ./cmd/e2e/automation
+
+  # Gap #9 (W0): one-click onboarding e2e — the REAL installer against a REAL
+  # server on a fresh Timescale: build the agent, publish it as a local
+  # "release" (binary + SHA256SUMS), run scripts/install.sh (which installs
+  # the systemd unit on the runner), and assert the enrolled device comes
+  # online AND metrics flow, within 60 s. This is exactly what a customer's
+  # pasted line does. /healthz is allowed to report degraded (redis/minio/
+  # meili are not part of this lean job) — the assertions are the proof.
+  installer-e2e:
+    name: Installer e2e (gap #9: one-click onboarding)
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 10
+    services:
+      timescale:
+        image: timescale/timescaledb:latest-pg16
+        env:
+          POSTGRES_DB: rmmway
+          POSTGRES_USER: rmmway
+          POSTGRES_PASSWORD: rmmway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rmmway -d rmmway"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      nats:
+        image: nats:2.10-alpine
+        ports:
+          - 4222:4222
+        options: >-
+          --jetstream --port 4222 --http_port 8222
+          --health-cmd "wget -qO- http://localhost:8222/healthz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      RMMWAY_PG_DSN: postgres://rmmway:rmmway@localhost:5432/rmmway
+      RMMWAY_NATS_URL: nats://localhost:4222
+      # The installer derives the agent's mTLS dial target from --server
+      # (localhost -> localhost:50052); the mTLS cert must carry a
+      # "localhost" SAN for the agent's hostname verification to pass.
+      RMMWAY_GRPC_MTLS_SANs: localhost
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build the linux/amd64 agent (static, same flags as scripts/build-agent.sh)
+        working-directory: agent
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath \
+            -ldflags "-s -w -X main.version=0.0.0-e2e -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o dist/rmmway-agent-linux-amd64 ./cmd/agent
+          ./dist/rmmway-agent-linux-amd64 --version
+      - name: Serve a local "release" dir (binary + SHA256SUMS) on 127.0.0.1:8088
+        run: |
+          set -euo pipefail
+          (cd agent/dist && sha256sum rmmway-agent-linux-amd64 > SHA256SUMS && cat SHA256SUMS)
+          python3 -m http.server 8088 --bind 127.0.0.1 --directory agent/dist > /tmp/rmmway-filesrv.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8088/SHA256SUMS > /dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8088/SHA256SUMS
+      - name: Boot the server from source (fresh Timescale — migrations on boot)
+        working-directory: server
+        run: |
+          set -euo pipefail
+          go build -o /tmp/rmmway-server ./cmd/server
+          /tmp/rmmway-server > /tmp/rmmway-server.log 2>&1 &
+          # /healthz is 503 while any probe is degraded (this lean job has no
+          # redis/minio/meili), so wait for the login API to answer 200 —
+          # that means the server is fully booted (migrations + PKI included).
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8080/api/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}')
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          [ "$code" = "200" ] || { echo "server did not boot"; tail -50 /tmp/rmmway-server.log; exit 1; }
+          tail -20 /tmp/rmmway-server.log
+      - name: Mint the operator token + one-time bootstrap code
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -fsS -X POST localhost:8080/api/login \
+            -H 'Content-Type: application/json' -d '{"username":"admin","password":"admin"}' \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          [ -n "$TOKEN" ] || { echo "login failed"; exit 1; }
+          OUT=$(curl -fsS -X POST localhost:8080/api/bootstrap -H "Authorization: Bearer $TOKEN" -d '{}')
+          BOOT=$(printf '%s' "$OUT" | sed -n 's/.*"bootstrap_token":"\([^"]*\)".*/\1/p')
+          DEVID=$(printf '%s' "$OUT" | sed -n 's/.*"device_id":"\([^"]*\)".*/\1/p')
+          [ -n "$BOOT" ] && [ -n "$DEVID" ] || { echo "bootstrap mint failed: $OUT"; exit 1; }
+          echo "TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "BOOTSTRAP_TOKEN=$BOOT" >> "$GITHUB_ENV"
+          echo "DEVICE_ID=$DEVID" >> "$GITHUB_ENV"
+      - name: Run the REAL installer (one pasted line; systemd unit on the runner)
+        env:
+          RMMWAY_DOWNLOAD_BASE: http://127.0.0.1:8088
+        run: |
+          set -euo pipefail
+          ./scripts/install.sh \
+            --server http://localhost:8080 \
+            --bootstrap "$BOOTSTRAP_TOKEN" \
+            --version 0.0.0-e2e
+          echo "--- /etc/rmmway/agent.env (token redacted) ---"
+          sed 's/^RMMWAY_BOOTSTRAP_TOKEN=.*/RMMWAY_BOOTSTRAP_TOKEN=<redacted>/' /etc/rmmway/agent.env
+          echo "--- unit state ---"
+          systemctl is-active rmmway-agent.service || true
+      - name: Assert the device is online and metrics flow (<= 60 s)
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 60 ))
+          ok=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if curl -fsS localhost:8080/api/devices -H "Authorization: Bearer $TOKEN" \
+              | grep -q "\"id\":\"$DEVICE_ID\"" \
+              && curl -fsS "localhost:8080/api/devices/$DEVICE_ID/metrics?range=1h" \
+                -H "Authorization: Bearer $TOKEN" | grep -q '"count":[1-9]'; then
+              ok="yes"
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" != "yes" ]; then
+            echo "FAIL: device $DEVICE_ID online + metrics flowing within 60 s"
+            echo "== server log =="; tail -50 /tmp/rmmway-server.log
+            echo "== agent unit =="; systemctl status rmmway-agent.service --no-pager || true
+            journalctl -u rmmway-agent --no-pager 2>/dev/null | tail -40 || true
+            exit 1
+          fi
+          echo "PASS: the installer enrolled the device and metrics flow (gap #9 closed)"
 
   build:
     name: Build
