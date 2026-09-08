@@ -6,6 +6,7 @@ import Login from "./Login.jsx";
 import Setup from "./Setup.jsx";
 import Devices from "./Devices.jsx";
 import Alerts from "./Alerts.jsx";
+import Clients from "./Clients.jsx";
 import Flows from "./Flows.jsx";
 import Events from "./Events.jsx";
 import Heal from "./Heal.jsx";
@@ -33,6 +34,7 @@ const NAV_ITEMS = [
     kind: "route",
     badge: "alerts",
   },
+  { label: "Clients", path: "clients", group: "Fleet", kind: "route" },
   { label: "Flows", path: "flows", group: "Ops", kind: "route" },
   { label: "Events", path: "events", group: "Ops", kind: "route" },
   { label: "Heal", path: "heal", group: "Ops", kind: "route" },
@@ -364,6 +366,8 @@ function Shell() {
               onUnauthorized={logout}
               liveTick={alertTick}
             />
+          ) : route === "clients" ? (
+            <Clients token={token} onUnauthorized={logout} />
           ) : route === "flows" ? (
             <Flows token={token} onUnauthorized={logout} />
           ) : route === "events" ? (
