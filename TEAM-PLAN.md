@@ -207,6 +207,20 @@ wk  C                    B                    A
   - `platform` (branch `pi-subagents/platform-*`): F3 (NAV_ITEMS), F4
     (MIGRATIONS.md ledger), F5 (ownership in DEVELOPER.md), F6
     (`make seed-dev`), F7 (install.sh mTLS-addr fix + installer e2e in CI).
+- Round 1 outcome (2026-09-08, both children timed out at 45 min):
+  - `platform` had finished F7 and was mid local-e2e verification →
+    **F7 adopted & merged to main** (`e4c5c1b` fix+test, merged `eefc24f`):
+    install.sh mTLS-addr derivation fixed (both case branches now strip the
+    scheme first), `scripts/test-install-sh.sh` extracts the REAL derivation
+    block and runs a 6-case matrix (all green), CI gains the unit test (lint)
+    + a lean `installer-e2e` job (fresh Timescale → build agent → local
+    release dir → real install.sh → assert device online + metrics ≤ 60 s).
+  - `server-split` staged only whitespace-normalized copies of httpapi.go/
+    main.go (no split) — discarded.
+- Round 2 (run f23ba1a9): fresh worktrees off `eefc24f`, 60-min budgets,
+  symbol→file map + commit-early discipline in the task briefs:
+  - `server-split`: F1 + F2.
+  - `platform2`: F3 + F4 + F5 + F6 (F7 already in main).
 - [todo] merge both branches → M0 gate verification → sync Obsidian
   `Projects/RMMWay` (plan note + repo mirror).
 - [todo] Wave 1 kickoff: B #2 clients, A #5 service.status, C #10a settings.
