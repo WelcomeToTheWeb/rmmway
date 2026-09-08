@@ -1,0 +1,93 @@
+/* Settings & profile page (Settings.jsx). */
+
+.settings-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+.settings-card h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+.settings-card > .muted {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+}
+
+/* Configured / not-configured tag on the SMTP section heading. */
+.settings-badge {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted, var(--fg-dim));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  vertical-align: middle;
+  margin-left: 8px;
+}
+.settings-badge.on {
+  color: var(--ok, var(--accent));
+  border-color: currentColor;
+}
+
+/* Two-column field grid (host/port, from/username, ...). */
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+@media (max-width: 720px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-err {
+  margin-top: 12px;
+  font-size: 12.5px;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.settings-save-msg {
+  font-size: 12.5px;
+}
+
+/* Send-test row: recipient field + button, inline. */
+.settings-test-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.settings-test-recipient {
+  flex: 1;
+  min-width: 220px;
+}
+.settings-test-hint {
+  margin: 6px 0 0;
+}
+
+/* Profile: password form + 2FA status row. */
+.settings-pw-form {
+  margin-top: 14px;
+}
+.settings-mfa {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}

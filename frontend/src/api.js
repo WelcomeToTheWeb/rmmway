@@ -391,4 +391,41 @@ export const api = {
     }
     return res.blob();
   },
+
+  // ---- C #10a: settings (wave 1) -------------------------------------------
+  // Operator-gated (JWT required) recurring settings surface — the setup
+  // wizard's /api/setup/* routes are pre-setup only.
+  // GET /api/settings -> { org_name, smtp: {host, port, from, username,
+  // pass_set, configured}, profile: {username, mfa_enabled} }. The SMTP
+  // password is never returned; pass_set only indicates one is on file.
+  getSettings: (token) => request("/api/settings", { token }),
+
+  // PATCH /api/settings { smtp: {host, port, from, username, password} }
+  // -> { ok, smtp: <same read model> }. 400 invalid config, 503 in-memory
+  // mode (no database). A blank password with a non-empty host keeps the
+  // stored password (the read model never returns it); a blank host clears
+  // the outbox.
+  patchSettings: (token, smtp) =>
+    request("/api/settings", { method: "PATCH", token, body: { smtp } }),
+
+  // POST /api/settings/smtp/test { to? } -> { ok, to }: sends via the
+  // STORED config (not the draft on screen). 400 bad body, 502 unreachable /
+  // refused / not configured, 503 in-memory mode.
+  testSMTP: (token, { to = "" } = {}) =>
+    request("/api/settings/smtp/test", {
+      method: "POST",
+      token,
+      body: { to: to || undefined },
+    }),
+
+  // POST /api/settings/profile/password { current_password, new_password }
+  // -> { ok }. 400 wrong current password or new-password length, 503
+  // in-memory mode. Once the account has a database row (wizard run or
+  // first password change), the old env pair no longer signs in.
+  changePassword: (token, { current_password, new_password }) =>
+    request("/api/settings/profile/password", {
+      method: "POST",
+      token,
+      body: { current_password, new_password },
+    }),
 };

@@ -128,6 +128,10 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 //	200 { ok, smtp: <sanitized read model> }
 //	400 invalid config (smtp.Config.Normalize)
 //	503 no database (in-memory mode)
+//
+// A blank password on a non-empty host means "keep the stored one" — the
+// read model never returns the password, so the masked form cannot re-send
+// it. Clearing the outbox (blank host) wipes it.
 func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 	if s.setup == nil {
 		http.Error(w, "settings require a database (in-memory mode)", http.StatusServiceUnavailable)
@@ -139,6 +143,11 @@ func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+	if in.SMTP.Password == "" && in.SMTP.Host != "" {
+		if stored, err := s.setup.Load(r.Context()); err == nil {
+			in.SMTP.Password = stored.SMTP.Password
+		}
 	}
 	if err := s.setup.SaveSMTP(r.Context(), in.SMTP); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

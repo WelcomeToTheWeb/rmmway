@@ -198,6 +198,19 @@ func TestSettingsPatchSMTP(t *testing.T) {
 		t.Fatalf("password in PATCH echo: %s", raw)
 	}
 
+	// Blank password on a live config = keep the stored one (the read
+	// model never returns it, so the form can't re-send it).
+	code, _ = doSettings(t, s, http.MethodPatch, "/api/settings", tok, map[string]any{
+		"smtp": map[string]any{"host": "smtp.acme.test", "port": 587, "from": "rmm@acme.test"},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("carryover patch: got %d", code)
+	}
+	stored, _ = svc.Load(context.Background())
+	if stored.SMTP.Password != "s3cret-pass" || stored.SMTP.Port != 587 {
+		t.Fatalf("stored password not carried over: %+v", stored.SMTP)
+	}
+
 	// Clearing the outbox: a zero host is a valid config that un-configures.
 	code, _ = doSettings(t, s, http.MethodPatch, "/api/settings", tok, map[string]any{
 		"smtp": map[string]any{"host": "", "port": 0, "from": "", "username": "", "password": ""},
