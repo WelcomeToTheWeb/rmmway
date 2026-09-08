@@ -181,6 +181,11 @@ another lane's files. Full plan, lane scopes, waves, and milestones:
 - **`proto/`** — only A commits; B/C review; generated code (agent + server)
   is regenerated in the same PR.
 - **Nav items** — A/B request them from C via a 1-line PR to `App.jsx`.
+- **Login fallback** — `handleLogin` (httpapi.go) checks the `admin_users`
+  DB row first; the `RMMWAY_ADMIN_USER/PASSWORD` env pair is a fallback
+  only for usernames with NO DB row. Changing a password from the settings
+  page (C #10a) mints/updates that row, so from then on the env pair no
+  longer signs in for that user.
 
 ### Merge discipline
 

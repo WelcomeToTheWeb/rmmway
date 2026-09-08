@@ -52,6 +52,10 @@ automation all stay under your control.
   or bring your own reverse proxy (Nginx, Traefik, HAProxy, Caddy)
 - First-boot setup wizard: create your root admin, define your organization's
   mTLS CA, and configure an SMTP outbox — all persisted to the database
+- **Settings & profile page** — the post-setup operator surface: reconfigure
+  the SMTP outbox (with a live test send through the saved config), change
+  your operator password (DB credentials then take precedence over the env
+  fallback), and check two-factor status
 - Every release artifact is cryptographically signed (minisign / Sigstore) and
   ships with a CycloneDX SBOM
 
@@ -128,6 +132,21 @@ a single transaction:
 After completion the wizard is gone for good — subsequent boots go straight
 to the login screen. (A deployment that already has enrolled devices is never
 treated as fresh, so the CA can't be swapped out from under pinned agents.)
+
+### Settings & profile
+
+After the wizard, **Settings** in the top nav is the recurring operator
+surface:
+
+- **Organization** — read-only; the name is stamped into the org root CA.
+- **SMTP outbox** — edit host/port/from/auth, then verify with
+  "Send test email", which sends through the *saved* configuration
+  (save your changes first). Leaving the host blank clears the outbox.
+- **Profile** — change your operator password. Once an `admin_users` row
+  exists (wizard run or first password change), only the database
+  credential signs in — the `RMMWAY_ADMIN_USER/PASSWORD` env fallback no
+  longer applies to that user. Two-factor authentication status is shown
+  here; TOTP enrollment ships in wave 2.
 
 ### Production deployment
 
