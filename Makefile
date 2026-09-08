@@ -43,9 +43,11 @@ dev: ## make dev — boot the full local stack and wait for health (idempotent)
 
 ## ---- Production (A-1) ---------------------------------------------------
 # Default stack includes the bundled Caddy TLS edge (the "edge" profile).
+# shellcheck disable=SC2283 # Make var: $(COMPOSE) is a Make macro, not a command
 COMPOSE_PROD = $(COMPOSE) --env-file .env.prod --profile edge -f docker-compose.prod.yml
 # BYO-reverse-proxy stack: bundled Caddy stays off (no "edge" profile) and the
 # operator API + SPA are published on the host for your own proxy to front.
+# shellcheck disable=SC2283 # Make var: $(COMPOSE) is a Make macro, not a command
 COMPOSE_PROD_BYO = $(COMPOSE) --env-file .env.prod -f docker-compose.prod.yml -f docker-compose.byoproxy.yml
 
 .PHONY: prod
@@ -109,6 +111,10 @@ run-server: ## Run the backend server locally (needs the stack up)
 .PHONY: migrate
 migrate: ## Apply pending SQL migrations from server/migrations
 	cd server && go run ./cmd/server --migrate-only
+
+.PHONY: seed-dev
+seed-dev: ## Seed DEV-ONLY synthetic fleet + 3-day metric history (run `make migrate` first; SEED_ARGS="--fresh" wipes)
+	cd server && go run ./cmd/seed-dev $(SEED_ARGS)
 
 .PHONY: check
 check: ## W0-1 DoD: build everything + verify /healthz reports all services ok

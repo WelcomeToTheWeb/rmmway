@@ -24,6 +24,7 @@ Requires Docker + Go 1.24+ + Node 18+.
 make dev        # boots TimescaleDB, NATS (JetStream), Redis, MinIO, Meilisearch,
                 # Loki; blocks until all 6 report healthy
 make run-server # Go backend on :8080 (curl localhost:8080/healthz)
+make seed-dev   # (dev only) synthetic fleet + 3-day metric history — after `make migrate`
 make frontend   # React dev server on :5173 (proxies /api/* → :8080)
 make down       # stop the stack (volumes kept)
 make clean      # stop + delete volumes (destructive)
