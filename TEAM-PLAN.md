@@ -221,6 +221,22 @@ wk  C                    B                    A
   symbol→file map + commit-early discipline in the task briefs:
   - `server-split`: F1 + F2.
   - `platform2`: F3 + F4 + F5 + F6 (F7 already in main).
-- [todo] merge both branches → M0 gate verification → sync Obsidian
-  `Projects/RMMWay` (plan note + repo mirror).
+- Round 2 outcome: a network/EngineCore failure killed both children
+  mid-run; both lanes recovered from their worktrees.
+  - `platform2` had committed F4 (`17a8d8a`), F5 (`c825561`), F3
+    (`74638b0`); its staged Prettier polish adopted as `f200fcf`; F6
+    (`make seed-dev`, new `server/cmd/seed-dev/`) completed in follow-up
+    run `14dc70f3` → `081e75c`. **Platform lane merged to main** as
+    `6e0dff8` (F3+F4+F5+F6 on top of F7's `eefc24f`).
+  - `server-split` had finished the F1 code (9 domain files; httpapi.go
+    2603→528 lines) but timed out before committing. F1 verified (build +
+    vet + full server suite green) and committed `4cf03a5`; F2 (main.go
+    1123→893, six wire_*.go files, pure move, identical call order)
+    completed `2203ed8`. **Server-split lane merged to main** as `d295c4f`.
+- **M0 gate PASSED (2026-09-08)** on main `d295c4f`: gofmt -l clean on all
+  split files; go vet clean; server suite 14/14 packages ok; agent
+  integration 8/8 ok; frontend `npm run build` ok; `test-install-sh.sh`
+  6/6 cases. Wave 0 (F1–F7) complete: F1 `4cf03a5`, F2 `2203ed8`,
+  F3 `74638b0`+`f200fcf`, F4 `17a8d8a`, F5 `c825561`, F6 `081e75c`,
+  F7 `e4c5c1b`.
 - [todo] Wave 1 kickoff: B #2 clients, A #5 service.status, C #10a settings.
