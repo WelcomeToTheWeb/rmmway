@@ -311,3 +311,74 @@ func TestHeartbeatAckRenewsExpiringJWT(t *testing.T) {
 		t.Fatalf("renewal remaining = %v, want ~full lifetime", rem)
 	}
 }
+
+// TestIngestServiceStatusMetric (wave1 A gap5) proves the new service.status
+// family flows through the generic ingest path: samples land in the metrics
+// sink keyed by (device, name, source = service name) with their 0/1 values
+// intact — the exact wire shape the seeded "service.down" playbook's
+// detect/confirm rules read.
+func TestIngestServiceStatusMetric(t *testing.T) {
+	svc, client, _, stop := newTestServer(t)
+	defer stop()
+	ctx := context.Background()
+
+	bootTok, devID := svc.MintBootstrapToken()
+	enroll, err := svc.Enroll(ctx, &agentv1.EnrollRequest{
+		BootstrapToken: bootTok,
+		Hostname:       "web-01",
+		Os:             "linux",
+		Arch:           "amd64",
+	})
+	if err != nil {
+		t.Fatalf("enroll: %v", err)
+	}
+
+	mdCtx := metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer "+enroll.Jwt))
+	stream, err := client.Stream(mdCtx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	now := time.Now().UnixMilli()
+	if err := stream.Send(&agentv1.StreamRequest{
+		Payload: &agentv1.StreamRequest_Heartbeat{
+			Heartbeat: &agentv1.Heartbeat{
+				TimestampMs: now,
+				Metrics: &agentv1.MetricBatch{
+					CollectedAtMs: now,
+					Samples: []*agentv1.Metric{
+						{Name: "service.status", Source: "nginx", Value: 0, TimestampMs: now},
+						{Name: "service.status", Source: "redis", Value: 1, TimestampMs: now},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ack: %v", err)
+	}
+	if resp.GetHeartbeatAck() == nil {
+		t.Fatalf("expected a heartbeat ack, got %+v", resp)
+	}
+
+	sink := svc.Metrics().(*store.MemoryMetricsSink)
+	if got := sink.Count(); got != 2 {
+		t.Fatalf("expected 2 samples stored, got %d", got)
+	}
+	want := map[string]float64{}
+	for _, s := range sink.Samples(devID) {
+		if s.Name == "service.status" {
+			want[s.Source] = s.Value
+		}
+	}
+	if want["nginx"] != 0 {
+		t.Fatalf("nginx: got %v want 0 (stopped — the playbook detect shape)", want["nginx"])
+	}
+	if want["redis"] != 1 {
+		t.Fatalf("redis: got %v want 1 (running)", want["redis"])
+	}
+
+	_ = stream.CloseSend()
+}
