@@ -25,7 +25,13 @@ import { ErrorBoundary } from "./ui/index.js";
 //   badge — "alerts" renders the open-alert count badge when > 0
 const NAV_ITEMS = [
   { label: "Devices", path: "devices", group: "Fleet", kind: "route" },
-  { label: "Alerts", path: "alerts", group: "Fleet", kind: "route", badge: "alerts" },
+  {
+    label: "Alerts",
+    path: "alerts",
+    group: "Fleet",
+    kind: "route",
+    badge: "alerts",
+  },
   { label: "Flows", path: "flows", group: "Ops", kind: "route" },
   { label: "Events", path: "events", group: "Ops", kind: "route" },
   { label: "Heal", path: "heal", group: "Ops", kind: "route" },
@@ -170,7 +176,9 @@ function Header({ route, openCount, onOpenPalette }) {
                 </a>
               ) : (
                 <a
-                  className={"nav-item" + (route === item.path ? " active" : "")}
+                  className={
+                    "nav-item" + (route === item.path ? " active" : "")
+                  }
                   href={"#/" + item.path}
                   aria-current={route === item.path ? "page" : undefined}
                 >
