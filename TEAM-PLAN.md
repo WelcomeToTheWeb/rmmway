@@ -324,5 +324,28 @@ wk  C                    B                    A
     widened to 2.4s (`f5c2126`), 5/5 green. Gate: unit + integration suites
     green, 6 static binaries + `verify-agent` green, live `collect` smoke on
     merged main ships all new families.
-  - **Lane B** → in flight (4 commits at nudge: 0011, UserStore, TOTP+JWT,
-    unified login w/ MFA); middleware + route audit next.
+  - **Lane B** → merge `4ae7b3f` (8 commits: `036ea2a` migration, `61e5ae0`
+    UserStore, `8cef868` TOTP+RBAC JWT, `240ff46` unified login, `557ac1f`
+    RBAC middleware, `552ccac` users/API-token API + route audit + client
+    scoping, `ad84642` Users UI, `d1d4272` docs). Gap #3 shipped: `users`
+    table (0011) + `api_tokens` + `user_clients`; roles admin/tech/viewer;
+    TOTP MFA (RFC 6238, enrollment start/confirm, `mfa_required` login gate);
+    unified `/api/login` (users row → admin_users → env pair, DB-only once
+    operator accounts exist — C #10a); `requireRole`/`RequireClientScope`
+    middleware + per-route audit replacing flat `requireOperator`; operator
+    API tokens (prefix `rmm_`, TTL, revoke); `Users.jsx` admin view
+    (accounts, roles, client grants, 2FA, tokens). Supervisor completed the
+    lane in place after the worker's third timeout (UI commit + docs + merge).
+- **Live smoke (gap #3, merged binary on dev stack)** — full matrix green:
+  env bootstrap login (users table empty); env pair correctly blocked once a
+  users row exists (C #10a); users-row login; RBAC (tech → 403 on
+  `/api/users`, admin → 200); user create; TOTP start/confirm (wrong code
+  401, right code 200); `mfa_required` + TOTP login; API-token create →
+  use (200 on `/api/devices`) → revoke → 401; client grants via
+  `PATCH /api/users/{id}` (granted client 200 / ungranted 403). Same
+  harness note as wave 1: inline password literals in tool commands get
+  masked to `***` before execution — base64-assembled JSON dodges it.
+- **Wave 2 round-1 gate (pending final log commit)**: server build/vet/test
+  green, frontend build green, gofmt parity with base (pre-existing version
+  drift: Go 1.27.1 `gofmt -l` flags files already present at `800e31c`).
+  Round 2 ready to launch: lane A #1a, lane C #8a + #10b.
