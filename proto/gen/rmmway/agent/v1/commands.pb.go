@@ -97,7 +97,7 @@ func (x CommandResult_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CommandResult_Status.Descriptor instead.
 func (CommandResult_Status) EnumDescriptor() ([]byte, []int) {
-	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{3, 0}
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{5, 0}
 }
 
 // Command is one requested action. The agent acknowledges receipt with a
@@ -112,6 +112,8 @@ type Command struct {
 	//
 	//	*Command_RunScript
 	//	*Command_Reboot
+	//	*Command_FilePull
+	//	*Command_FilePush
 	Action isCommand_Action `protobuf_oneof:"action"`
 	// Max seconds before the server considers this command failed. 0 = agent
 	// default.
@@ -189,6 +191,24 @@ func (x *Command) GetReboot() *Reboot {
 	return nil
 }
 
+func (x *Command) GetFilePull() *FilePull {
+	if x != nil {
+		if x, ok := x.Action.(*Command_FilePull); ok {
+			return x.FilePull
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetFilePush() *FilePush {
+	if x != nil {
+		if x, ok := x.Action.(*Command_FilePush); ok {
+			return x.FilePush
+		}
+	}
+	return nil
+}
+
 func (x *Command) GetTimeoutS() int32 {
 	if x != nil {
 		return x.TimeoutS
@@ -208,9 +228,24 @@ type Command_Reboot struct {
 	Reboot *Reboot `protobuf:"bytes,11,opt,name=reboot,proto3,oneof"`
 }
 
+type Command_FilePull struct {
+	// Reserved range 20-29: inventory / log-collection commands (W6-1).
+	// Reserved range 30-39: remediation actions (W5-1 playbooks).
+	// gap #1a: file transfer (range 50-59).
+	FilePull *FilePull `protobuf:"bytes,50,opt,name=file_pull,json=filePull,proto3,oneof"`
+}
+
+type Command_FilePush struct {
+	FilePush *FilePush `protobuf:"bytes,51,opt,name=file_push,json=filePush,proto3,oneof"`
+}
+
 func (*Command_RunScript) isCommand_Action() {}
 
 func (*Command_Reboot) isCommand_Action() {}
+
+func (*Command_FilePull) isCommand_Action() {}
+
+func (*Command_FilePush) isCommand_Action() {}
 
 // RunScript executes a small, signed script (base64 payload; the signing +
 // verification story is W3-4/W4-2). v1 is read-only by default.
@@ -338,6 +373,143 @@ func (x *Reboot) GetCapabilityToken() string {
 	return ""
 }
 
+// FilePull (gap #1a) copies ONE file from the agent host to the server.
+// The agent reads path in 256 KiB blocks and ships each as a FileChunk
+// frame (command_id correlation, 0-based seq, eof on the final chunk),
+// then reports SUCCEEDED (stdout_tail = "<bytes> bytes") or FAILED.
+// Capability: rmmway.file_pull.
+type FilePull struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Absolute path on the agent host.
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// W3-3: capability token (cap=rmmway.file_pull).
+	CapabilityToken string `protobuf:"bytes,2,opt,name=capability_token,json=capabilityToken,proto3" json:"capability_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FilePull) Reset() {
+	*x = FilePull{}
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FilePull) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FilePull) ProtoMessage() {}
+
+func (x *FilePull) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FilePull.ProtoReflect.Descriptor instead.
+func (*FilePull) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *FilePull) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FilePull) GetCapabilityToken() string {
+	if x != nil {
+		return x.CapabilityToken
+	}
+	return ""
+}
+
+// FilePush (gap #1a) writes a file on the agent host, replacing any
+// existing file. The content rides either inline (content_b64 — small
+// files, the server caps this) or as FileChunk downlink frames (a chunked
+// push dispatches the command first and streams the blocks immediately
+// after; the agent blocks on the eof chunk). mode is an octal string
+// ("0644"); empty = the platform default. Capability: rmmway.file_push.
+type FilePush struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Path  string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// Inline content (base64). Empty = the push is chunked (FileChunk frames
+	// follow the command on the same stream).
+	ContentB64 string `protobuf:"bytes,2,opt,name=content_b64,json=contentB64,proto3" json:"content_b64,omitempty"`
+	// Octal mode, e.g. "0644" (applied when non-empty and parseable).
+	Mode string `protobuf:"bytes,3,opt,name=mode,proto3" json:"mode,omitempty"`
+	// W3-3: capability token (cap=rmmway.file_push).
+	CapabilityToken string `protobuf:"bytes,4,opt,name=capability_token,json=capabilityToken,proto3" json:"capability_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FilePush) Reset() {
+	*x = FilePush{}
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FilePush) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FilePush) ProtoMessage() {}
+
+func (x *FilePush) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FilePush.ProtoReflect.Descriptor instead.
+func (*FilePush) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *FilePush) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FilePush) GetContentB64() string {
+	if x != nil {
+		return x.ContentB64
+	}
+	return ""
+}
+
+func (x *FilePush) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *FilePush) GetCapabilityToken() string {
+	if x != nil {
+		return x.CapabilityToken
+	}
+	return ""
+}
+
 // CommandResult is the agent's report back (sent as a future StreamRequest
 // extension; the field is defined here for versioning stability).
 type CommandResult struct {
@@ -355,7 +527,7 @@ type CommandResult struct {
 
 func (x *CommandResult) Reset() {
 	*x = CommandResult{}
-	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[3]
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -367,7 +539,7 @@ func (x *CommandResult) String() string {
 func (*CommandResult) ProtoMessage() {}
 
 func (x *CommandResult) ProtoReflect() protoreflect.Message {
-	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[3]
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -380,7 +552,7 @@ func (x *CommandResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandResult.ProtoReflect.Descriptor instead.
 func (*CommandResult) Descriptor() ([]byte, []int) {
-	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{3}
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CommandResult) GetCommandId() string {
@@ -436,7 +608,7 @@ var File_rmmway_agent_v1_commands_proto protoreflect.FileDescriptor
 
 const file_rmmway_agent_v1_commands_proto_rawDesc = "" +
 	"\n" +
-	"\x1ermmway/agent/v1/commands.proto\x12\x0frmmway.agent.v1\"\xd2\x01\n" +
+	"\x1ermmway/agent/v1/commands.proto\x12\x0frmmway.agent.v1\"\xc6\x02\n" +
 	"\aCommand\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12 \n" +
 	"\fissued_at_ms\x18\x02 \x01(\x03R\n" +
@@ -444,7 +616,9 @@ const file_rmmway_agent_v1_commands_proto_rawDesc = "" +
 	"\n" +
 	"run_script\x18\n" +
 	" \x01(\v2\x1a.rmmway.agent.v1.RunScriptH\x00R\trunScript\x121\n" +
-	"\x06reboot\x18\v \x01(\v2\x17.rmmway.agent.v1.RebootH\x00R\x06reboot\x12\x1b\n" +
+	"\x06reboot\x18\v \x01(\v2\x17.rmmway.agent.v1.RebootH\x00R\x06reboot\x128\n" +
+	"\tfile_pull\x182 \x01(\v2\x19.rmmway.agent.v1.FilePullH\x00R\bfilePull\x128\n" +
+	"\tfile_push\x183 \x01(\v2\x19.rmmway.agent.v1.FilePushH\x00R\bfilePush\x12\x1b\n" +
 	"\ttimeout_s\x18( \x01(\x05R\btimeoutSB\b\n" +
 	"\x06action\"}\n" +
 	"\tRunScript\x12\x12\n" +
@@ -455,7 +629,16 @@ const file_rmmway_agent_v1_commands_proto_rawDesc = "" +
 	"\x10capability_token\x18\x04 \x01(\tR\x0fcapabilityToken\"L\n" +
 	"\x06Reboot\x12\x17\n" +
 	"\adelay_s\x18\x01 \x01(\x05R\x06delayS\x12)\n" +
-	"\x10capability_token\x18\x02 \x01(\tR\x0fcapabilityToken\"\x90\x03\n" +
+	"\x10capability_token\x18\x02 \x01(\tR\x0fcapabilityToken\"I\n" +
+	"\bFilePull\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12)\n" +
+	"\x10capability_token\x18\x02 \x01(\tR\x0fcapabilityToken\"~\n" +
+	"\bFilePush\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1f\n" +
+	"\vcontent_b64\x18\x02 \x01(\tR\n" +
+	"contentB64\x12\x12\n" +
+	"\x04mode\x18\x03 \x01(\tR\x04mode\x12)\n" +
+	"\x10capability_token\x18\x04 \x01(\tR\x0fcapabilityToken\"\x90\x03\n" +
 	"\rCommandResult\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12=\n" +
@@ -491,23 +674,27 @@ func file_rmmway_agent_v1_commands_proto_rawDescGZIP() []byte {
 }
 
 var file_rmmway_agent_v1_commands_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_rmmway_agent_v1_commands_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_rmmway_agent_v1_commands_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_rmmway_agent_v1_commands_proto_goTypes = []any{
 	(CommandResult_Status)(0), // 0: rmmway.agent.v1.CommandResult.Status
 	(*Command)(nil),           // 1: rmmway.agent.v1.Command
 	(*RunScript)(nil),         // 2: rmmway.agent.v1.RunScript
 	(*Reboot)(nil),            // 3: rmmway.agent.v1.Reboot
-	(*CommandResult)(nil),     // 4: rmmway.agent.v1.CommandResult
+	(*FilePull)(nil),          // 4: rmmway.agent.v1.FilePull
+	(*FilePush)(nil),          // 5: rmmway.agent.v1.FilePush
+	(*CommandResult)(nil),     // 6: rmmway.agent.v1.CommandResult
 }
 var file_rmmway_agent_v1_commands_proto_depIdxs = []int32{
 	2, // 0: rmmway.agent.v1.Command.run_script:type_name -> rmmway.agent.v1.RunScript
 	3, // 1: rmmway.agent.v1.Command.reboot:type_name -> rmmway.agent.v1.Reboot
-	0, // 2: rmmway.agent.v1.CommandResult.status:type_name -> rmmway.agent.v1.CommandResult.Status
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 2: rmmway.agent.v1.Command.file_pull:type_name -> rmmway.agent.v1.FilePull
+	5, // 3: rmmway.agent.v1.Command.file_push:type_name -> rmmway.agent.v1.FilePush
+	0, // 4: rmmway.agent.v1.CommandResult.status:type_name -> rmmway.agent.v1.CommandResult.Status
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_rmmway_agent_v1_commands_proto_init() }
@@ -518,6 +705,8 @@ func file_rmmway_agent_v1_commands_proto_init() {
 	file_rmmway_agent_v1_commands_proto_msgTypes[0].OneofWrappers = []any{
 		(*Command_RunScript)(nil),
 		(*Command_Reboot)(nil),
+		(*Command_FilePull)(nil),
+		(*Command_FilePush)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -525,7 +714,7 @@ func file_rmmway_agent_v1_commands_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rmmway_agent_v1_commands_proto_rawDesc), len(file_rmmway_agent_v1_commands_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

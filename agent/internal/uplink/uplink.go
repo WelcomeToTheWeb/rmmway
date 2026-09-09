@@ -24,6 +24,8 @@ import (
 
 	"github.com/welcometotheweb/rmmway/agent/internal/caps"
 	"github.com/welcometotheweb/rmmway/agent/internal/exec"
+	"github.com/welcometotheweb/rmmway/agent/internal/files"
+	"github.com/welcometotheweb/rmmway/agent/internal/session"
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 )
 
@@ -70,7 +72,14 @@ type Uplink struct {
 	cfg     Config
 	collect func(ctx context.Context) (*agentv1.MetricBatch, error) // W1-2 collector
 	commander *Commander                                            // W3-3 (nil = legacy log-only)
+	sessions  *session.Driver                                       // gap #1a (nil = no remote session)
 	rng       *rand.Rand
+
+	// pushes (gap #1a): in-flight chunked file_push transfers,
+	// command_id -> session. The downlink reader routes FileChunk frames
+	// to them; the command's finish goroutine waits for the eof chunk.
+	pushMu   sync.Mutex
+	pushes   map[string]*files.PushSession
 
 	// acked (M3) is set once the current session has received a heartbeat
 	// ack — i.e. it was actually healthy. Run() uses it to reset the
@@ -133,6 +142,18 @@ func WithJWTChangeHook(fn func(string)) Option {
 	return func(u *Uplink) { u.jwtHook = fn }
 }
 
+// WithSessionDriver (gap #1a) wires the remote-session capture loop:
+// SessionControl downlink frames drive it and its frames ship as
+// SessionFrame uplink frames via PushSessionFrame. Nil = the agent ignores
+// session controls (pre-#1a servers stay happy).
+func WithSessionDriver(d *session.Driver) Option {
+	return func(u *Uplink) {
+		if d != nil {
+			u.sessions = d
+		}
+	}
+}
+
 // New builds an Uplink for an already-enrolled device (devID + jwt come from
 // the enroll.Store identity).
 func New(client Streamer, devID, jwt string, cfg Config, opts ...Option) *Uplink {
@@ -144,6 +165,7 @@ func New(client Streamer, devID, jwt string, cfg Config, opts ...Option) *Uplink
 		cfg:     cfg,
 		collect: func(context.Context) (*agentv1.MetricBatch, error) { return &agentv1.MetricBatch{}, nil },
 		rng:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		pushes:  map[string]*files.PushSession{},
 	}
 	for _, o := range opts {
 		o(u)
@@ -204,6 +226,21 @@ func (u *Uplink) PushLogs(ctx context.Context, batch *agentv1.LogBatch) error {
 	return st.Send(&agentv1.StreamRequest{Payload: &agentv1.StreamRequest_Logs{Logs: batch}})
 }
 
+// PushSessionFrame (gap #1a) ships one session frame on the live stream.
+// Same contract as PushLogs: an error means no live session (the caller's
+// capture loop stops; the uplink reconnect + the server's re-open control
+// re-establish the feed).
+func (u *Uplink) PushSessionFrame(ctx context.Context, f *agentv1.SessionFrame) error {
+	_ = ctx
+	u.curMu.Lock()
+	st := u.cur
+	u.curMu.Unlock()
+	if st == nil {
+		return errors.New("no live uplink stream")
+	}
+	return st.Send(&agentv1.StreamRequest{Payload: &agentv1.StreamRequest_SessionFrame{SessionFrame: f}})
+}
+
 // Run drives the stream until ctx is canceled. It reconnects with exponential
 // backoff (capped, jittered) on any stream error and never exits on a dropped
 // connection — that is the whole point of an RMM agent uplink.
@@ -260,7 +297,10 @@ func (u *Uplink) streamSession(ctx context.Context) error {
 		return fmt.Errorf("open stream: %w", err)
 	}
 	u.setCur(stream)
-	defer u.setCur(nil)
+	defer func() {
+		u.setCur(nil)
+		u.abandonAllPushes() // gap #1a: a stream drop kills in-flight pushes
+	}()
 
 	// Downlink reader: drain acks/commands so the client-side send buffer
 	// doesn't wedge. W2 command handling hooks in here; for now we just log
@@ -286,6 +326,14 @@ func (u *Uplink) streamSession(ctx context.Context) error {
 					u.cfg.Logger.Warn("command handling ended the downlink", "err", err)
 					return
 				}
+			case *agentv1.StreamResponse_SessionControl:
+				// gap #1a: open/close the capture loop (driver is nil-safe).
+				if u.sessions != nil {
+					u.sessions.Control(ctx, p.SessionControl)
+				}
+			case *agentv1.StreamResponse_FileChunk:
+				// gap #1a: a block of an in-flight chunked file_push.
+				u.routeChunk(p.FileChunk)
 			case *agentv1.StreamResponse_HeartbeatAck:
 				// M3: the server accepted a beat — this session is healthy.
 				u.acked.Store(true)
@@ -395,6 +443,10 @@ func (u *Uplink) handleCommand(ctx context.Context, stream agentv1.AgentService_
 		return u.runScriptCommand(ctx, c, stream, cmd)
 	case *agentv1.Command_Reboot:
 		return u.rebootCommand(ctx, c, stream, cmd)
+	case *agentv1.Command_FilePull: // gap #1a
+		return u.filePullCommand(ctx, stream, cmd)
+	case *agentv1.Command_FilePush: // gap #1a
+		return u.filePushCommand(ctx, c, stream, cmd)
 	}
 	return nil
 }
