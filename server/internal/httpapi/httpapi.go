@@ -35,6 +35,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/export"
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
+	"github.com/welcometotheweb/rmmway/server/internal/maintenance"
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/users"
@@ -61,6 +62,7 @@ type Server struct {
 	heal     *heal.Engine
 	releases *releases.Server
 	flows    *flow.Engine
+	maintStore *maintenance.Store
 
 	jwtSecret     []byte
 	tokenLifetime time.Duration
@@ -192,6 +194,9 @@ type Config struct {
 	// in-memory mode: /api/login keeps the legacy behavior and every
 	// session is a grandfathered admin (no scoping).
 	Users store.UserStore
+	// Maint (gap #10b) is the maintenance-window + snooze store; nil disables
+	// /{api|admin}/maintenance* (in-memory-mode deployments).
+	Maint *maintenance.Store
 	// PublicURL (if set) is the operator's public URL (RMMWAY_PUBLIC_URL).
 	// Exposed via GET /api/public-url so the Add Device UI can prefill the
 	// server URL with the configured public target instead of guessing
@@ -267,6 +272,7 @@ func New(cfg Config) *Server {
 		setup:         cfg.Setup,
 		clients:       cfg.Clients,
 		users:         cfg.Users,
+		maintStore:    cfg.Maint,
 		rbac:               &users.RBAC{Secret: cfg.JWTSecret, Users: cfg.Users},
 		publicURL:          cfg.PublicURL,
 		sessions:           cfg.Sessions,
@@ -296,6 +302,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	registerClients(s, mux)
 	registerUsers(s, mux)      // gap #3: operator accounts + API tokens (admin-only)
 	registerSession(s, mux)    // gap #1a: remote session + file download routes
+	registerMaintenance(s, mux) // gap #10b: maintenance windows + snooze
 }
 
 type loginRequest struct {
