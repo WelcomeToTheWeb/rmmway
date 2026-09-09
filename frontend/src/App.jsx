@@ -13,6 +13,7 @@ import Dashboard from "./Dashboard.jsx";
 import Heal from "./Heal.jsx";
 import Webhooks from "./Webhooks.jsx";
 import Baseline from "./Baseline.jsx";
+import Reports from "./Reports.jsx";
 import Settings from "./Settings.jsx";
 import Palette from "./Palette.jsx";
 import { ThemeToggle } from "./ui/theme.jsx";
@@ -42,6 +43,7 @@ const NAV_ITEMS = [
   { label: "Heal", path: "heal", group: "Ops", kind: "route" },
   { label: "Webhooks", path: "webhooks", group: "System", kind: "route" },
   { label: "Baseline", path: "baseline", group: "System", kind: "route" },
+  { label: "Reports", path: "reports", group: "Ops", kind: "route" },
   { label: "Settings", path: "settings", group: "System", kind: "route" },
   {
     label: "Search",
@@ -429,6 +431,8 @@ function Shell() {
               onUnauthorized={logout}
               onGoToDevice={goToDevice}
             />
+          ) : route === "reports" ? (
+            <Reports token={token} onUnauthorized={logout} />
           ) : route === "settings" ? (
             <Settings token={token} onUnauthorized={logout} />
           ) : (
