@@ -393,3 +393,69 @@ All 5 gaps addressed:
 
 Next: Wave 3 (Lane A #1b two-way input / #4 deep inventory; Lane C #1c session
 viewer + #8b reports; Lane B #6 notifications).
+
+### 2026-09-08 — Wave 3 execution session (pi supervisor + 3 parallel worker subagents via Herdr)
+
+- Setup: 3 workers in isolated Herdr workspaces with git worktrees off `1b2fb91`
+  (post-wave-2 baseline). Each subagent was a separate pi instance launched via
+  `herdr agent start --kind pi`, given a focused task brief for their lane's
+  Wave 3 scope from the plan. Supervisor coordinated via `herdr agent prompt`
+  and `herdr agent read`, waiting for completion, then merging each lane to main.
+- **Lane A — #4 deep inventory + #4 patch management v1 + #1b remote session
+  phase 2 (shipped):**
+  - Deep inventory collectors (agent/internal/inventory): hardware (CPU, RAM,
+    disk geometry/serials via /sys/block), software (dpkg/rpm/msi/registry),
+    services (systemd/launchctl/Windows SCM), users, AD/MDM. New proto types
+    InventoryReport/HardwareInfo/SoftwareInfo/ServiceInfo/UserAccount/DiskInfo.
+  - Migration 0013: device_hardware, device_software, device_services,
+    device_users, device_patches tables. Ingest pipeline handles InventoryReport
+    and PatchStatus frames. HTTP API: GET /api/devices/{id}/inventory, POST
+    /api/devices/{id}/inventory/collect.
+  - Patch management v1: PatchManager on agent (Windows Update query/apply via
+    PowerShell), proto types PatchQuery/PatchApprove/PatchApply/PatchStatus,
+    reboot scheduling support. Frontend DeviceInventory + DevicePatches panels.
+  - Remote session phase 2: InputRelayer architecture with per-OS implementations
+    (Windows SendInput, macOS CGEvent, Linux xdotool), session driver extended
+    for input event downlink.
+  - Committed `19329f1` + `05231ff`, merged to main fast-forward → `4ced929`.
+- **Lane B — #7 tickets + #6 notification channels/policies (shipped):**
+  - Tickets schema (migration 0012): tickets table with queue, status state
+    machine (open/in_progress/resolved/closed), priority, device/client/user
+    assignment, SLA timers, heal_run_id linkage. ticket_notes table.
+  - Heal escalation → real ticket via ticketHealNotifier wrapper.
+  - Tickets API: /api/tickets CRUD + transitions + notes, queue filters.
+  - Tickets UI (Tickets.jsx): queue view, my-tickets tab, detail view with
+    status transitions and note-adding.
+  - Notification channels (server/internal/notify): 5 adapters — email (SMTP),
+    Slack webhook, Teams adaptive cards, PagerDuty Events API v2, generic webhook.
+  - Migration 0016: notification_policies table. Policy-driven router by
+    category/client/role.
+  - Notify UI (Notify.jsx): channels tab (CRUD + test-fire), policies tab (CRUD).
+  - Committed `e8e67d2`, `137e0dd`, `4b43605`, `7ba3996`. Merged to main → `4db6c0a`
+    (additive conflicts in main.go/httpapi.go resolved keeping all 3 lanes' fields).
+- **Lane C — #10b maintenance windows + #10b cron triggers + #8b reports + #1c session viewer (shipped):**
+  - Maintenance windows (migration 0014): maintenance_windows + window_snoozes
+    tables. server/internal/maintenance/store.go with IsSuppressed() query — the
+    2-line guard baseline/heal engines call to skip alerts during maintenance.
+    API: GET/POST/DELETE /api/maintenance/windows, GET/POST /api/maintenance/snoozes.
+  - Cron/schedule flow triggers: KindSchedule trigger type in flow/graph.go,
+    engine sampler fires when schedule interval elapsed. Backward compatible.
+  - Reports (migration 0015): report_schedules + report_runs tables.
+    server/internal/reports/store.go with GenerateFleetStatusCSV, GenerateDeviceReportCSV.
+    API: /api/reports/schedules CRUD, /api/reports/runs, /api/reports/generate.
+    Frontend Reports.jsx (schedules/runs/generate tabs).
+  - Remote session web viewer: SessionViewer.jsx — canvas-based viewer consuming
+    Lane A's SSE session relay stream, base64 JPEG frame decode/render, status
+    indicators, frame count. Route: #/session/{deviceID}.
+  - Committed `797bc8e`, `12eb5da`, `a1cda1c`, `82618b1`, `e18684a`, `8cc6b43`.
+    Merged to main → `038e831`.
+- **Supervisor verification post-merge:** make build green (server + agent),
+  make test green (25 server packages + 14 agent packages pass), frontend npm
+  run build green (74 modules). Pushed origin/main (1b2fb91..4db6c0a).
+- **Wave 3 gate PASSED (2026-09-08)** at `4db6c0a`. All Wave 3 scope complete:
+  gaps #1b (remote input), #4 (deep inventory + patch mgmt), #6 (notifications),
+  #7 (tickets), #8b (reports), #1c (session viewer), #10b (maintenance windows,
+  cron triggers).
+- [todo] Wave 4 kickoff: M4 milestones — scheduled compliance reports (PDF),
+  two-way remote input (Windows), patch mgmt production hardening, integration
+  e2e across all lanes, release cut.
