@@ -83,6 +83,15 @@ func TotpCode(secret string, at time.Time) (string, error) {
 	return totpCode(secret, at.Unix()/TotpPeriodSeconds)
 }
 
+// TotpCodeNow is the code valid right now (tests, UI debug helper).
+func TotpCodeNow(secret string) string {
+	c, err := TotpCode(secret, time.Now())
+	if err != nil {
+		return ""
+	}
+	return c
+}
+
 // VerifyTotp checks code against the 30s step containing at, tolerating one
 // step on either side (clock drift; 90s total window). The comparison is
 // constant-time over the rendered digit strings.

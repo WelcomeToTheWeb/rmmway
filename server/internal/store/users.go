@@ -87,6 +87,9 @@ var ErrTotpNotEnrolled = errors.New("totp not enrolled")
 type UserStore interface {
 	// List returns every account sorted by username, with grants filled.
 	List(ctx context.Context) ([]*User, error)
+	// Count is the account count (the unified login's DB-only gate: the
+	// env bootstrap pair is valid only while this is 0).
+	Count(ctx context.Context) (int, error)
 	// Get returns one account by id; ErrNotFound when unknown.
 	Get(ctx context.Context, id string) (*User, error)
 	// GetByUsername is case-insensitive (the unique index is on
@@ -217,6 +220,12 @@ func (s *PostgresUserStore) List(ctx context.Context) ([]*User, error) {
 		return nil, err
 	}
 	return users, nil
+}
+
+func (s *PostgresUserStore) Count(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n)
+	return n, err
 }
 
 func (s *PostgresUserStore) listRows(ctx context.Context) ([]*User, error) {
@@ -608,6 +617,12 @@ func (s *MemoryUserStore) List(_ context.Context) ([]*User, error) {
 		return strings.ToLower(out[i].Username) < strings.ToLower(out[j].Username)
 	})
 	return out, nil
+}
+
+func (s *MemoryUserStore) Count(_ context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.users), nil
 }
 
 func (s *MemoryUserStore) Get(_ context.Context, id string) (*User, error) {
