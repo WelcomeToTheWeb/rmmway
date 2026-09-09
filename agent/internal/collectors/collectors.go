@@ -8,6 +8,15 @@
 //	load.avg1 / load.avg5 /    ""  (host-wide load averages; a value the
 //	load.avg15                 platform cannot report is omitted)
 //	disk.used_percent          <device>@<mountpoint> (per mounted volume, 0–100)
+//	disk.io_read_bytes_total /  <device> (cumulative since boot, per real
+//	disk.io_write_bytes_total,    device — loop/ram/zram pseudo-devices
+//	disk.io_reads_total /        excluded; cumulative counters, same
+//	disk.io_writes_total          convention as net.bytes_total)
+//	smart.health                 <device> (1 = SMART self-assessment PASSED,
+//	                             0 = failure predicted; needs the smartctl
+//	                             binary — absent or unreadable device means
+//	                             no sample, not an error)
+//	smart.reallocated_sectors    <device> (SMART attribute 5 raw value)
 //	net.bytes_total            <iface> (total rx+tx bytes since boot, per
 //	                           interface — loopback excluded)
 //	system.uptime_seconds      ""
@@ -73,6 +82,8 @@ type defaultCollector struct {
 	services []string
 	service  ServiceSampler
 	load     LoadSampler
+	diskIO   DiskIOSampler
+	smart    SmartSampler
 }
 
 // NewCollector returns the production collector (real gopsutil CPU window;
@@ -86,6 +97,8 @@ func NewCollector() Collector {
 		services: parseServiceList(os.Getenv("RMMWAY_SERVICES")),
 		service:  defaultServiceSampler,
 		load:     defaultLoadSampler,
+		diskIO:   defaultDiskIOSampler,
+		smart:    defaultSmartSampler,
 	}
 }
 
@@ -99,6 +112,8 @@ type Samplers struct {
 	Services []string
 	Service  ServiceSampler
 	Load     LoadSampler
+	DiskIO   DiskIOSampler
+	Smart    SmartSampler
 }
 
 // NewCollectorWithSamplers returns a collector with the given probes
@@ -119,6 +134,12 @@ func NewCollectorWithSamplers(s Samplers) Collector {
 	}
 	if s.Load != nil {
 		c.load = s.Load
+	}
+	if s.DiskIO != nil {
+		c.diskIO = s.DiskIO
+	}
+	if s.Smart != nil {
+		c.smart = s.Smart
 	}
 	return c
 }
@@ -237,6 +258,25 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 				continue
 			}
 			add("service.status", name, v)
+		}
+	}
+
+	// 6. Disk I/O + SMART — per-device cumulative counters and SMART health
+	// (loop/ram/zram pseudo-devices excluded; smartctl absence is silent).
+	if c.diskIO != nil {
+		counters, err := c.diskIO(ctx)
+		if err != nil {
+			errs = append(errs, "diskio: "+err.Error())
+		} else {
+			emitDiskIOStats(counters, add)
+			if c.smart != nil {
+				for _, dev := range realDevices(counters) {
+					res, sErr := c.smart(ctx, dev)
+					if serr := emitSmart(res, sErr, dev, add); serr != nil {
+						errs = append(errs, "smart["+dev+"]: "+serr.Error())
+					}
+				}
+			}
 		}
 	}
 
