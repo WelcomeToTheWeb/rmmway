@@ -132,6 +132,12 @@ message StreamRequest {
     // file_push payload when the push is chunked rather than inline).
     // Correlated to its dispatching command by command_id.
     FileChunk file_chunk = 6;
+    // gap #4: deep inventory report (triggered by an inventory command).
+    // One uplink frame containing the collected inventory for this device.
+    InventoryReport inventory_report = 7;
+    // gap #4: patch status update (triggered by patch commands).
+    // Contains the status of queried/applicable/installed patches.
+    PatchStatus patch_status = 8;
   }
 }
 
@@ -206,11 +212,15 @@ message SessionFrame {
 // SessionControl (gap #1a) is the downlink that drives the agent's capture
 // loop. open starts capturing at fps (0 = agent default ~2 fps, capped at
 // 30); close stops it and releases the capture backend. A repeated open for
-// an active session with a changed fps live-adjusts the rate.
+// an active session with a changed fps live-adjusts the rate. Phase 2 adds
+// mouse/keyboard input relay for two-way remote control.
 message SessionControl {
   oneof action {
     OpenSession open = 1;
     CloseSession close = 2;
+    // gap #1b: input relay frames (phase 2, two-way remote control).
+    MouseEvent mouse_event = 10;
+    KeyboardEvent keyboard_event = 11;
   }
   message OpenSession {
     // Server-minted session id; echoed in every SessionFrame.
@@ -220,6 +230,32 @@ message SessionControl {
   }
   message CloseSession {
     string session_id = 1;
+  }
+  // Mouse event to relay to the remote desktop. Coordinates are absolute
+  // within the captured display (origin at top-left, x grows right, y grows
+  // down). Buttons follow standard button numbers: left=0, middle=1, right=2.
+  message MouseEvent {
+    string session_id = 1;
+    // Event type.
+    string event_type = 2;  // "move" | "down" | "up" | "click" | "wheel"
+    int32 x = 3;
+    int32 y = 4;
+    // Button number (0=left, 1=middle, 2=right); 0 for move/wheel events.
+    int32 button = 5;
+    // Wheel delta (positive=up, negative=down); 0 for non-wheel events.
+    int32 wheel_delta = 6;
+  }
+  // Keyboard event to relay. Uses Unicode codepoint representation for
+  // portability across locales. Modifier keys are sent as separate events.
+  message KeyboardEvent {
+    string session_id = 1;
+    // Event type.
+    string event_type = 2;  // "down" | "up" | "key"
+    // Unicode codepoint of the character (e.g. 65 for 'A'). 0 for
+    // modifier-only events (shift, ctrl, alt, etc.).
+    uint32 codepoint = 3;
+    // Modifier bitmask: shift=1, ctrl=2, alt=4, meta/windows=8.
+    uint32 modifiers = 4;
   }
 }
 
@@ -241,4 +277,131 @@ message FileChunk {
   // file_pull only: the source file's mode (as an octal int, e.g. 0644).
   // The server records it for the download (phase 1 does not re-apply it).
   uint32 source_mode = 6;
+}
+
+// ---- gap #4: deep inventory types ----
+
+// InventoryReport is the agent's response to an inventory collection command.
+// It contains all inventory categories for this device, collected atomically.
+message InventoryReport {
+  // The command_id that triggered this report (for correlation).
+  string command_id = 1;
+  // Unix ms when collection started.
+  int64 collected_at_ms = 2;
+  // Collected inventory categories (all populated by default).
+  HardwareInfo hardware = 10;
+  repeated SoftwareInfo software = 11;
+  repeated ServiceInfo services = 12;
+  repeated UserAccount users = 13;
+}
+
+// HardwareInfo captures the device's hardware inventory.
+message HardwareInfo {
+  string cpu_model = 1;
+  string cpu_vendor = 2;
+  uint32 cpu_cores = 3;
+  uint32 cpu_logical = 4;
+  uint64 ram_total_bytes = 5;
+  string ram_model = 6;
+  string os_name = 7;
+  string os_version = 8;
+  string os_arch = 9;
+  string hostname = 10;
+  repeated DomainInfo domains = 11;
+  repeated DiskInfo disks = 12;
+}
+
+// DomainInfo describes AD/MDM affiliation.
+message DomainInfo {
+  string type = 1;     // "active_directory" | "apple_business_manager" | "local"
+  string name = 2;
+  string workgroup = 3;
+}
+
+// DiskInfo describes a physical disk's geometry and serial.
+message DiskInfo {
+  string device = 1;
+  string model = 2;
+  string serial = 3;
+  uint64 size = 4;
+  string type = 5;     // "hdd" | "ssd" | "unknown"
+}
+
+// SoftwareInfo describes an installed application.
+message SoftwareInfo {
+  string name = 1;
+  string version = 2;
+  string vendor = 3;
+  string install_date = 4;
+  string arch = 5;
+  string path = 6;
+  string source = 7;   // "dpkg" | "rpm" | "msi" | "registry" | "homebrew" | "pkg"
+}
+
+// ServiceInfo describes an installed system service.
+message ServiceInfo {
+  string name = 1;
+  string display_name = 2;
+  string status = 3;   // "running" | "stopped" | "paused" | "unknown"
+  string type = 4;     // "systemd" | "launchd" | "windows_service"
+  bool enabled = 5;
+}
+
+// UserAccount describes a local user account on the device.
+message UserAccount {
+  string username = 1;
+  string name = 2;
+  string uid = 3;
+  string sid = 4;      // Windows SID
+  string home_dir = 5;
+  string shell = 6;
+  bool enabled = 7;
+  string account_type = 8;  // "user" | "admin" | "system"
+}
+
+// ---- gap #4: patch management types ----
+
+// PatchStatus is the agent's response to a patch query/operation.
+message PatchStatus {
+  string command_id = 1;
+  int64 status_at_ms = 2;
+  // Query results (patch_query commands).
+  PatchQueryResult query = 10;
+  // Apply progress (patch_apply commands).
+  PatchApplyProgress apply = 11;
+}
+
+// PatchQueryResult contains the results of a patch query.
+message PatchQueryResult {
+  repeated AvailablePatch available = 1;
+  repeated InstalledPatch installed = 2;
+}
+
+// AvailablePatch describes a patch that can be applied.
+message AvailablePatch {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  string severity = 4;   // "critical" | "important" | "moderate" | "low" | "unrated"
+  string kb_article = 5; // Windows KB number, or CVE identifier
+  bool reboot_required = 6;
+  string download_url = 7;
+}
+
+// InstalledPatch describes a patch that has already been applied.
+message InstalledPatch {
+  string id = 1;
+  string title = 2;
+  string install_date = 3;
+  string kb_article = 4;
+}
+
+// PatchApplyProgress reports the progress of a patch apply operation.
+message PatchApplyProgress {
+  string phase = 1;      // "downloading" | "installing" | "completed" | "failed"
+  string message = 2;
+  uint32 progress_percent = 3;
+  bool reboot_required = 4;
+  repeated InstalledPatch installed = 5;
+  repeated string errors = 6;
 }

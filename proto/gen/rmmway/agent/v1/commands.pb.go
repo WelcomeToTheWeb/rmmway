@@ -97,7 +97,7 @@ func (x CommandResult_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CommandResult_Status.Descriptor instead.
 func (CommandResult_Status) EnumDescriptor() ([]byte, []int) {
-	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{5, 0}
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{9, 0}
 }
 
 // Command is one requested action. The agent acknowledges receipt with a
@@ -112,8 +112,12 @@ type Command struct {
 	//
 	//	*Command_RunScript
 	//	*Command_Reboot
+	//	*Command_CollectInventory
 	//	*Command_FilePull
 	//	*Command_FilePush
+	//	*Command_PatchQuery
+	//	*Command_PatchApprove
+	//	*Command_PatchApply
 	Action isCommand_Action `protobuf_oneof:"action"`
 	// Max seconds before the server considers this command failed. 0 = agent
 	// default.
@@ -191,6 +195,15 @@ func (x *Command) GetReboot() *Reboot {
 	return nil
 }
 
+func (x *Command) GetCollectInventory() *CollectInventory {
+	if x != nil {
+		if x, ok := x.Action.(*Command_CollectInventory); ok {
+			return x.CollectInventory
+		}
+	}
+	return nil
+}
+
 func (x *Command) GetFilePull() *FilePull {
 	if x != nil {
 		if x, ok := x.Action.(*Command_FilePull); ok {
@@ -204,6 +217,33 @@ func (x *Command) GetFilePush() *FilePush {
 	if x != nil {
 		if x, ok := x.Action.(*Command_FilePush); ok {
 			return x.FilePush
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetPatchQuery() *PatchQuery {
+	if x != nil {
+		if x, ok := x.Action.(*Command_PatchQuery); ok {
+			return x.PatchQuery
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetPatchApprove() *PatchApprove {
+	if x != nil {
+		if x, ok := x.Action.(*Command_PatchApprove); ok {
+			return x.PatchApprove
+		}
+	}
+	return nil
+}
+
+func (x *Command) GetPatchApply() *PatchApply {
+	if x != nil {
+		if x, ok := x.Action.(*Command_PatchApply); ok {
+			return x.PatchApply
 		}
 	}
 	return nil
@@ -228,8 +268,12 @@ type Command_Reboot struct {
 	Reboot *Reboot `protobuf:"bytes,11,opt,name=reboot,proto3,oneof"`
 }
 
+type Command_CollectInventory struct {
+	// gap #4: deep inventory collection command.
+	CollectInventory *CollectInventory `protobuf:"bytes,20,opt,name=collect_inventory,json=collectInventory,proto3,oneof"`
+}
+
 type Command_FilePull struct {
-	// Reserved range 20-29: inventory / log-collection commands (W6-1).
 	// Reserved range 30-39: remediation actions (W5-1 playbooks).
 	// gap #1a: file transfer (range 50-59).
 	FilePull *FilePull `protobuf:"bytes,50,opt,name=file_pull,json=filePull,proto3,oneof"`
@@ -239,13 +283,34 @@ type Command_FilePush struct {
 	FilePush *FilePush `protobuf:"bytes,51,opt,name=file_push,json=filePush,proto3,oneof"`
 }
 
+type Command_PatchQuery struct {
+	// gap #4: patch management commands (range 60-69).
+	PatchQuery *PatchQuery `protobuf:"bytes,60,opt,name=patch_query,json=patchQuery,proto3,oneof"`
+}
+
+type Command_PatchApprove struct {
+	PatchApprove *PatchApprove `protobuf:"bytes,61,opt,name=patch_approve,json=patchApprove,proto3,oneof"`
+}
+
+type Command_PatchApply struct {
+	PatchApply *PatchApply `protobuf:"bytes,62,opt,name=patch_apply,json=patchApply,proto3,oneof"`
+}
+
 func (*Command_RunScript) isCommand_Action() {}
 
 func (*Command_Reboot) isCommand_Action() {}
 
+func (*Command_CollectInventory) isCommand_Action() {}
+
 func (*Command_FilePull) isCommand_Action() {}
 
 func (*Command_FilePush) isCommand_Action() {}
+
+func (*Command_PatchQuery) isCommand_Action() {}
+
+func (*Command_PatchApprove) isCommand_Action() {}
+
+func (*Command_PatchApply) isCommand_Action() {}
 
 // RunScript executes a small, signed script (base64 payload; the signing +
 // verification story is W3-4/W4-2). v1 is read-only by default.
@@ -510,6 +575,248 @@ func (x *FilePush) GetCapabilityToken() string {
 	return ""
 }
 
+// CollectInventory (gap #4) triggers deep inventory collection on the
+// agent. The agent collects hardware, software, services, and user account
+// information and reports it back as an InventoryReport frame. Capability:
+// rmmway.collect_inventory.
+type CollectInventory struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// W3-3: capability token (cap=rmmway.collect_inventory).
+	CapabilityToken string `protobuf:"bytes,1,opt,name=capability_token,json=capabilityToken,proto3" json:"capability_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CollectInventory) Reset() {
+	*x = CollectInventory{}
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CollectInventory) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CollectInventory) ProtoMessage() {}
+
+func (x *CollectInventory) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CollectInventory.ProtoReflect.Descriptor instead.
+func (*CollectInventory) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CollectInventory) GetCapabilityToken() string {
+	if x != nil {
+		return x.CapabilityToken
+	}
+	return ""
+}
+
+// PatchQuery (gap #4) queries available patches on the agent. On Windows,
+// this uses the Windows Update API (WUAPI) to check for available updates.
+// Results are reported as a PatchStatus frame with a PatchQueryResult.
+// Capability: rmmway.patch_query.
+type PatchQuery struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Optional: filter by severity ("critical", "important", etc.).
+	// Empty = all severities.
+	SeverityFilter string `protobuf:"bytes,1,opt,name=severity_filter,json=severityFilter,proto3" json:"severity_filter,omitempty"`
+	// W3-3: capability token (cap=rmmway.patch_query).
+	CapabilityToken string `protobuf:"bytes,2,opt,name=capability_token,json=capabilityToken,proto3" json:"capability_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PatchQuery) Reset() {
+	*x = PatchQuery{}
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatchQuery) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatchQuery) ProtoMessage() {}
+
+func (x *PatchQuery) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatchQuery.ProtoReflect.Descriptor instead.
+func (*PatchQuery) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *PatchQuery) GetSeverityFilter() string {
+	if x != nil {
+		return x.SeverityFilter
+	}
+	return ""
+}
+
+func (x *PatchQuery) GetCapabilityToken() string {
+	if x != nil {
+		return x.CapabilityToken
+	}
+	return ""
+}
+
+// PatchApprove (gap #4) approves specific patches for installation.
+// Approvals are staged; patch_apply actually installs them. Capability:
+// rmmway.patch_approve.
+type PatchApprove struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// List of patch IDs to approve (from a previous patch_query result).
+	PatchIds []string `protobuf:"bytes,1,rep,name=patch_ids,json=patchIds,proto3" json:"patch_ids,omitempty"`
+	// W3-3: capability token (cap=rmmway.patch_approve).
+	CapabilityToken string `protobuf:"bytes,2,opt,name=capability_token,json=capabilityToken,proto3" json:"capability_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PatchApprove) Reset() {
+	*x = PatchApprove{}
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatchApprove) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatchApprove) ProtoMessage() {}
+
+func (x *PatchApprove) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatchApprove.ProtoReflect.Descriptor instead.
+func (*PatchApprove) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *PatchApprove) GetPatchIds() []string {
+	if x != nil {
+		return x.PatchIds
+	}
+	return nil
+}
+
+func (x *PatchApprove) GetCapabilityToken() string {
+	if x != nil {
+		return x.CapabilityToken
+	}
+	return ""
+}
+
+// PatchApply (gap #4) installs the approved patches. On Windows, this uses
+// the Windows Update API to download and install approved updates. Results
+// are reported as PatchStatus frames with PatchApplyProgress. Capability:
+// rmmway.patch_apply.
+type PatchApply struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// List of patch IDs to apply (from a previous patch_approve).
+	// Empty = apply all approved patches.
+	PatchIds []string `protobuf:"bytes,1,rep,name=patch_ids,json=patchIds,proto3" json:"patch_ids,omitempty"`
+	// Schedule a reboot after installation if required.
+	ScheduleReboot bool `protobuf:"varint,2,opt,name=schedule_reboot,json=scheduleReboot,proto3" json:"schedule_reboot,omitempty"`
+	// Reboot delay in seconds (applied if schedule_reboot and required).
+	RebootDelaySeconds uint32 `protobuf:"varint,3,opt,name=reboot_delay_seconds,json=rebootDelaySeconds,proto3" json:"reboot_delay_seconds,omitempty"`
+	// W3-3: capability token (cap=rmmway.patch_apply).
+	CapabilityToken string `protobuf:"bytes,4,opt,name=capability_token,json=capabilityToken,proto3" json:"capability_token,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PatchApply) Reset() {
+	*x = PatchApply{}
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatchApply) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatchApply) ProtoMessage() {}
+
+func (x *PatchApply) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatchApply.ProtoReflect.Descriptor instead.
+func (*PatchApply) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *PatchApply) GetPatchIds() []string {
+	if x != nil {
+		return x.PatchIds
+	}
+	return nil
+}
+
+func (x *PatchApply) GetScheduleReboot() bool {
+	if x != nil {
+		return x.ScheduleReboot
+	}
+	return false
+}
+
+func (x *PatchApply) GetRebootDelaySeconds() uint32 {
+	if x != nil {
+		return x.RebootDelaySeconds
+	}
+	return 0
+}
+
+func (x *PatchApply) GetCapabilityToken() string {
+	if x != nil {
+		return x.CapabilityToken
+	}
+	return ""
+}
+
 // CommandResult is the agent's report back (sent as a future StreamRequest
 // extension; the field is defined here for versioning stability).
 type CommandResult struct {
@@ -527,7 +834,7 @@ type CommandResult struct {
 
 func (x *CommandResult) Reset() {
 	*x = CommandResult{}
-	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[5]
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -539,7 +846,7 @@ func (x *CommandResult) String() string {
 func (*CommandResult) ProtoMessage() {}
 
 func (x *CommandResult) ProtoReflect() protoreflect.Message {
-	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[5]
+	mi := &file_rmmway_agent_v1_commands_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -552,7 +859,7 @@ func (x *CommandResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandResult.ProtoReflect.Descriptor instead.
 func (*CommandResult) Descriptor() ([]byte, []int) {
-	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{5}
+	return file_rmmway_agent_v1_commands_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CommandResult) GetCommandId() string {
@@ -608,7 +915,7 @@ var File_rmmway_agent_v1_commands_proto protoreflect.FileDescriptor
 
 const file_rmmway_agent_v1_commands_proto_rawDesc = "" +
 	"\n" +
-	"\x1ermmway/agent/v1/commands.proto\x12\x0frmmway.agent.v1\"\xc6\x02\n" +
+	"\x1ermmway/agent/v1/commands.proto\x12\x0frmmway.agent.v1\"\xde\x04\n" +
 	"\aCommand\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12 \n" +
 	"\fissued_at_ms\x18\x02 \x01(\x03R\n" +
@@ -616,9 +923,15 @@ const file_rmmway_agent_v1_commands_proto_rawDesc = "" +
 	"\n" +
 	"run_script\x18\n" +
 	" \x01(\v2\x1a.rmmway.agent.v1.RunScriptH\x00R\trunScript\x121\n" +
-	"\x06reboot\x18\v \x01(\v2\x17.rmmway.agent.v1.RebootH\x00R\x06reboot\x128\n" +
+	"\x06reboot\x18\v \x01(\v2\x17.rmmway.agent.v1.RebootH\x00R\x06reboot\x12P\n" +
+	"\x11collect_inventory\x18\x14 \x01(\v2!.rmmway.agent.v1.CollectInventoryH\x00R\x10collectInventory\x128\n" +
 	"\tfile_pull\x182 \x01(\v2\x19.rmmway.agent.v1.FilePullH\x00R\bfilePull\x128\n" +
-	"\tfile_push\x183 \x01(\v2\x19.rmmway.agent.v1.FilePushH\x00R\bfilePush\x12\x1b\n" +
+	"\tfile_push\x183 \x01(\v2\x19.rmmway.agent.v1.FilePushH\x00R\bfilePush\x12>\n" +
+	"\vpatch_query\x18< \x01(\v2\x1b.rmmway.agent.v1.PatchQueryH\x00R\n" +
+	"patchQuery\x12D\n" +
+	"\rpatch_approve\x18= \x01(\v2\x1d.rmmway.agent.v1.PatchApproveH\x00R\fpatchApprove\x12>\n" +
+	"\vpatch_apply\x18> \x01(\v2\x1b.rmmway.agent.v1.PatchApplyH\x00R\n" +
+	"patchApply\x12\x1b\n" +
 	"\ttimeout_s\x18( \x01(\x05R\btimeoutSB\b\n" +
 	"\x06action\"}\n" +
 	"\tRunScript\x12\x12\n" +
@@ -638,6 +951,21 @@ const file_rmmway_agent_v1_commands_proto_rawDesc = "" +
 	"\vcontent_b64\x18\x02 \x01(\tR\n" +
 	"contentB64\x12\x12\n" +
 	"\x04mode\x18\x03 \x01(\tR\x04mode\x12)\n" +
+	"\x10capability_token\x18\x04 \x01(\tR\x0fcapabilityToken\"=\n" +
+	"\x10CollectInventory\x12)\n" +
+	"\x10capability_token\x18\x01 \x01(\tR\x0fcapabilityToken\"`\n" +
+	"\n" +
+	"PatchQuery\x12'\n" +
+	"\x0fseverity_filter\x18\x01 \x01(\tR\x0eseverityFilter\x12)\n" +
+	"\x10capability_token\x18\x02 \x01(\tR\x0fcapabilityToken\"V\n" +
+	"\fPatchApprove\x12\x1b\n" +
+	"\tpatch_ids\x18\x01 \x03(\tR\bpatchIds\x12)\n" +
+	"\x10capability_token\x18\x02 \x01(\tR\x0fcapabilityToken\"\xaf\x01\n" +
+	"\n" +
+	"PatchApply\x12\x1b\n" +
+	"\tpatch_ids\x18\x01 \x03(\tR\bpatchIds\x12'\n" +
+	"\x0fschedule_reboot\x18\x02 \x01(\bR\x0escheduleReboot\x120\n" +
+	"\x14reboot_delay_seconds\x18\x03 \x01(\rR\x12rebootDelaySeconds\x12)\n" +
 	"\x10capability_token\x18\x04 \x01(\tR\x0fcapabilityToken\"\x90\x03\n" +
 	"\rCommandResult\x12\x1d\n" +
 	"\n" +
@@ -674,7 +1002,7 @@ func file_rmmway_agent_v1_commands_proto_rawDescGZIP() []byte {
 }
 
 var file_rmmway_agent_v1_commands_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_rmmway_agent_v1_commands_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_rmmway_agent_v1_commands_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_rmmway_agent_v1_commands_proto_goTypes = []any{
 	(CommandResult_Status)(0), // 0: rmmway.agent.v1.CommandResult.Status
 	(*Command)(nil),           // 1: rmmway.agent.v1.Command
@@ -682,19 +1010,27 @@ var file_rmmway_agent_v1_commands_proto_goTypes = []any{
 	(*Reboot)(nil),            // 3: rmmway.agent.v1.Reboot
 	(*FilePull)(nil),          // 4: rmmway.agent.v1.FilePull
 	(*FilePush)(nil),          // 5: rmmway.agent.v1.FilePush
-	(*CommandResult)(nil),     // 6: rmmway.agent.v1.CommandResult
+	(*CollectInventory)(nil),  // 6: rmmway.agent.v1.CollectInventory
+	(*PatchQuery)(nil),        // 7: rmmway.agent.v1.PatchQuery
+	(*PatchApprove)(nil),      // 8: rmmway.agent.v1.PatchApprove
+	(*PatchApply)(nil),        // 9: rmmway.agent.v1.PatchApply
+	(*CommandResult)(nil),     // 10: rmmway.agent.v1.CommandResult
 }
 var file_rmmway_agent_v1_commands_proto_depIdxs = []int32{
 	2, // 0: rmmway.agent.v1.Command.run_script:type_name -> rmmway.agent.v1.RunScript
 	3, // 1: rmmway.agent.v1.Command.reboot:type_name -> rmmway.agent.v1.Reboot
-	4, // 2: rmmway.agent.v1.Command.file_pull:type_name -> rmmway.agent.v1.FilePull
-	5, // 3: rmmway.agent.v1.Command.file_push:type_name -> rmmway.agent.v1.FilePush
-	0, // 4: rmmway.agent.v1.CommandResult.status:type_name -> rmmway.agent.v1.CommandResult.Status
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	6, // 2: rmmway.agent.v1.Command.collect_inventory:type_name -> rmmway.agent.v1.CollectInventory
+	4, // 3: rmmway.agent.v1.Command.file_pull:type_name -> rmmway.agent.v1.FilePull
+	5, // 4: rmmway.agent.v1.Command.file_push:type_name -> rmmway.agent.v1.FilePush
+	7, // 5: rmmway.agent.v1.Command.patch_query:type_name -> rmmway.agent.v1.PatchQuery
+	8, // 6: rmmway.agent.v1.Command.patch_approve:type_name -> rmmway.agent.v1.PatchApprove
+	9, // 7: rmmway.agent.v1.Command.patch_apply:type_name -> rmmway.agent.v1.PatchApply
+	0, // 8: rmmway.agent.v1.CommandResult.status:type_name -> rmmway.agent.v1.CommandResult.Status
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_rmmway_agent_v1_commands_proto_init() }
@@ -705,8 +1041,12 @@ func file_rmmway_agent_v1_commands_proto_init() {
 	file_rmmway_agent_v1_commands_proto_msgTypes[0].OneofWrappers = []any{
 		(*Command_RunScript)(nil),
 		(*Command_Reboot)(nil),
+		(*Command_CollectInventory)(nil),
 		(*Command_FilePull)(nil),
 		(*Command_FilePush)(nil),
+		(*Command_PatchQuery)(nil),
+		(*Command_PatchApprove)(nil),
+		(*Command_PatchApply)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -714,7 +1054,7 @@ func file_rmmway_agent_v1_commands_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rmmway_agent_v1_commands_proto_rawDesc), len(file_rmmway_agent_v1_commands_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

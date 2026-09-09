@@ -267,3 +267,146 @@ func scanDeviceRows(rows pgx.Rows) ([]*Device, error) {
 	}
 	return out, rows.Err()
 }
+
+// SaveDeviceHardware stores hardware inventory for a device (gap #4).
+func (d *PostgresDevices) SaveDeviceHardware(ctx context.Context, deviceID string, hardware map[string]any) error {
+	_, err := d.db.Exec(ctx, `
+		INSERT INTO device_hardware (
+			device_id, cpu_model, cpu_vendor, cpu_cores, cpu_logical,
+			ram_total_bytes, os_name, os_version, os_arch, hostname, collected_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+		ON CONFLICT (device_id) DO UPDATE SET
+			cpu_model = EXCLUDED.cpu_model,
+			cpu_vendor = EXCLUDED.cpu_vendor,
+			cpu_cores = EXCLUDED.cpu_cores,
+			cpu_logical = EXCLUDED.cpu_logical,
+			ram_total_bytes = EXCLUDED.ram_total_bytes,
+			os_name = EXCLUDED.os_name,
+			os_version = EXCLUDED.os_version,
+			os_arch = EXCLUDED.os_arch,
+			hostname = EXCLUDED.hostname,
+			collected_at = NOW()
+	`, deviceID,
+		toNullString(hardware["cpu_model"]), toNullString(hardware["cpu_vendor"]),
+		toNullInt32(hardware["cpu_cores"]), toNullInt32(hardware["cpu_logical"]),
+		toNullInt64(hardware["ram_total_bytes"]), toNullString(hardware["os_name"]),
+		toNullString(hardware["os_version"]), toNullString(hardware["os_arch"]),
+		toNullString(hardware["hostname"]))
+	return err
+}
+
+// GetDeviceHardware retrieves hardware inventory for a device (gap #4).
+func (d *PostgresDevices) GetDeviceHardware(ctx context.Context, deviceID string) (map[string]any, error) {
+	row := d.db.QueryRow(ctx, `
+		SELECT cpu_model, cpu_vendor, cpu_cores, cpu_logical,
+			ram_total_bytes, os_name, os_version, os_arch, hostname, collected_at
+		FROM device_hardware WHERE device_id = $1
+	`, deviceID)
+
+	hw := make(map[string]any)
+	var cpuModel, cpuVendor, osName, osVersion, osArch, hostname *string
+	var cpuCores, cpuLogical *int32
+	var ramTotal *int64
+	var collectedAt time.Time
+
+	err := row.Scan(&cpuModel, &cpuVendor, &cpuCores, &cpuLogical,
+		&ramTotal, &osName, &osVersion, &osArch, &hostname, &collectedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	hw["cpu_model"] = cpuModel
+	hw["cpu_vendor"] = cpuVendor
+	hw["cpu_cores"] = cpuCores
+	hw["cpu_logical"] = cpuLogical
+	hw["ram_total_bytes"] = ramTotal
+	hw["os_name"] = osName
+	hw["os_version"] = osVersion
+	hw["os_arch"] = osArch
+	hw["hostname"] = hostname
+	hw["collected_at"] = collectedAt
+
+	return hw, nil
+}
+
+// SaveDeviceSoftware stores software inventory for a device (gap #4).
+func (d *PostgresDevices) SaveDeviceSoftware(ctx context.Context, deviceID string, software []map[string]any) error {
+	tx, err := d.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Delete old entries
+	if _, err := tx.Exec(ctx, "DELETE FROM device_software WHERE device_id = $1", deviceID); err != nil {
+		return err
+	}
+
+	// Insert new entries
+	for _, sw := range software {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO device_software (device_id, name, version, vendor, install_date, arch, source, collected_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		`, deviceID,
+			toNullString(sw["name"]), toNullString(sw["version"]),
+			toNullString(sw["vendor"]), toNullString(sw["install_date"]),
+			toNullString(sw["arch"]), toNullString(sw["source"])); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// GetDeviceSoftware retrieves software inventory for a device (gap #4).
+func (d *PostgresDevices) GetDeviceSoftware(ctx context.Context, deviceID string) ([]map[string]any, error) {
+	rows, err := d.db.Query(ctx, `
+		SELECT name, version, vendor, install_date, arch, source, collected_at
+		FROM device_software WHERE device_id = $1 ORDER BY name
+	`, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var software []map[string]any
+	for rows.Next() {
+		s := make(map[string]any)
+		var name string
+		var version, vendor, installDate, arch, source *string
+		var collectedAt time.Time
+		if err := rows.Scan(&name, &version, &vendor, &installDate, &arch, &source, &collectedAt); err != nil {
+			return nil, err
+		}
+		s["name"] = name
+		s["version"] = version
+		s["vendor"] = vendor
+		s["install_date"] = installDate
+		s["arch"] = arch
+		s["source"] = source
+		software = append(software, s)
+	}
+	return software, rows.Err()
+}
+
+// Helper functions to convert map values to pointer types for pgx.
+func toNullString(v any) *string {
+	if s, ok := v.(string); ok && s != "" {
+		return &s
+	}
+	return nil
+}
+
+func toNullInt32(v any) *int32 {
+	if n, ok := v.(int32); ok {
+		return &n
+	}
+	return nil
+}
+
+func toNullInt64(v any) *int64 {
+	if n, ok := v.(int64); ok {
+		return &n
+	}
+	return nil
+}

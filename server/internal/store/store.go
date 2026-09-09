@@ -69,6 +69,14 @@ type DeviceStore interface {
 	// scoping). clientID "" returns every device; DefaultClientID also
 	// matches unassigned (NULL) devices.
 	ListByClient(ctx context.Context, clientID string) ([]*Device, error)
+	// SaveDeviceHardware stores hardware inventory for a device (gap #4).
+	SaveDeviceHardware(ctx context.Context, deviceID string, hardware map[string]any) error
+	// GetDeviceHardware retrieves hardware inventory for a device (gap #4).
+	GetDeviceHardware(ctx context.Context, deviceID string) (map[string]any, error)
+	// SaveDeviceSoftware stores software inventory for a device (gap #4).
+	SaveDeviceSoftware(ctx context.Context, deviceID string, software []map[string]any) error
+	// GetDeviceSoftware retrieves software inventory for a device (gap #4).
+	GetDeviceSoftware(ctx context.Context, deviceID string) ([]map[string]any, error)
 }
 
 // Device is the registry row shape shared by all DeviceStore implementations.
@@ -267,6 +275,26 @@ func (r *MemoryDeviceStore) GetByID(id string) (*Device, bool) {
 	}
 	cp := *d
 	return &cp, true
+}
+
+// SaveDeviceHardware stores hardware inventory for a device (gap #4, in-memory).
+func (r *MemoryDeviceStore) SaveDeviceHardware(_ context.Context, _ string, _ map[string]any) error {
+	return nil
+}
+
+// GetDeviceHardware retrieves hardware inventory for a device (gap #4, in-memory).
+func (r *MemoryDeviceStore) GetDeviceHardware(_ context.Context, _ string) (map[string]any, error) {
+	return map[string]any{}, nil
+}
+
+// SaveDeviceSoftware stores software inventory for a device (gap #4, in-memory).
+func (r *MemoryDeviceStore) SaveDeviceSoftware(_ context.Context, _ string, _ []map[string]any) error {
+	return nil
+}
+
+// GetDeviceSoftware retrieves software inventory for a device (gap #4, in-memory).
+func (r *MemoryDeviceStore) GetDeviceSoftware(_ context.Context, _ string) ([]map[string]any, error) {
+	return []map[string]any{}, nil
 }
 
 // SweepOffline (M4) flips stale online devices offline (in-memory mirror of

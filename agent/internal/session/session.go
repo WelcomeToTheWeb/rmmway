@@ -60,6 +60,7 @@ type Capturer interface {
 type DriverConfig struct {
 	SendFrame   func(ctx context.Context, f *agentv1.SessionFrame) error
 	NewCapturer func() (Capturer, error)
+	InputRelay  InputRelayer    // phase 2: input relay for two-way control
 	Logger      *slog.Logger
 }
 
@@ -70,6 +71,8 @@ type Driver struct {
 
 	mu   sync.Mutex
 	live *liveSession
+	// Phase 2: input relay for two-way remote control.
+	input InputRelayer
 }
 
 type liveSession struct {
@@ -97,13 +100,37 @@ func NewDriver(cfg DriverConfig) *Driver {
 }
 
 // Control applies one SessionControl downlink frame: open (create or
-// live-adjust the capture loop), close (stop it).
+// live-adjust the capture loop), close (stop it), or phase 2 input events.
 func (d *Driver) Control(ctx context.Context, sc *agentv1.SessionControl) {
 	switch a := sc.GetAction().(type) {
 	case *agentv1.SessionControl_Open:
 		d.open(ctx, a.Open.GetSessionId(), int(a.Open.GetFps()))
 	case *agentv1.SessionControl_Close:
 		d.close(a.Close.GetSessionId())
+	case *agentv1.SessionControl_MouseEvent_:
+		d.handleMouseEvent(ctx, a.MouseEvent)
+	case *agentv1.SessionControl_KeyboardEvent_:
+		d.handleKeyboardEvent(ctx, a.KeyboardEvent)
+	}
+}
+
+// handleMouseEvent relays a mouse event to the local desktop.
+func (d *Driver) handleMouseEvent(ctx context.Context, me *agentv1.SessionControl_MouseEvent) {
+	if d.input == nil {
+		return
+	}
+	if err := d.input.MouseEvent(ctx, me.GetEventType(), int(me.GetX()), int(me.GetY()), int(me.GetButton()), int(me.GetWheelDelta())); err != nil {
+		d.cfg.Logger.Warn("session: mouse event failed", "err", err)
+	}
+}
+
+// handleKeyboardEvent relays a keyboard event to the local desktop.
+func (d *Driver) handleKeyboardEvent(ctx context.Context, ke *agentv1.SessionControl_KeyboardEvent) {
+	if d.input == nil {
+		return
+	}
+	if err := d.input.KeyboardEvent(ctx, ke.GetEventType(), ke.GetCodepoint(), ke.GetModifiers()); err != nil {
+		d.cfg.Logger.Warn("session: keyboard event failed", "err", err)
 	}
 }
 

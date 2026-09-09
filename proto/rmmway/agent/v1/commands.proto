@@ -29,11 +29,16 @@ message Command {
   oneof action {
     RunScript run_script = 10;
     Reboot reboot = 11;
-    // Reserved range 20-29: inventory / log-collection commands (W6-1).
+    // gap #4: deep inventory collection command.
+    CollectInventory collect_inventory = 20;
     // Reserved range 30-39: remediation actions (W5-1 playbooks).
     // gap #1a: file transfer (range 50-59).
     FilePull file_pull = 50;
     FilePush file_push = 51;
+    // gap #4: patch management commands (range 60-69).
+    PatchQuery patch_query = 60;
+    PatchApprove patch_approve = 61;
+    PatchApply patch_apply = 62;
   }
 
   // Max seconds before the server considers this command failed. 0 = agent
@@ -85,6 +90,53 @@ message FilePush {
   // Octal mode, e.g. "0644" (applied when non-empty and parseable).
   string mode = 3;
   // W3-3: capability token (cap=rmmway.file_push).
+  string capability_token = 4;
+}
+
+// CollectInventory (gap #4) triggers deep inventory collection on the
+// agent. The agent collects hardware, software, services, and user account
+// information and reports it back as an InventoryReport frame. Capability:
+// rmmway.collect_inventory.
+message CollectInventory {
+  // W3-3: capability token (cap=rmmway.collect_inventory).
+  string capability_token = 1;
+}
+
+// PatchQuery (gap #4) queries available patches on the agent. On Windows,
+// this uses the Windows Update API (WUAPI) to check for available updates.
+// Results are reported as a PatchStatus frame with a PatchQueryResult.
+// Capability: rmmway.patch_query.
+message PatchQuery {
+  // Optional: filter by severity ("critical", "important", etc.).
+  // Empty = all severities.
+  string severity_filter = 1;
+  // W3-3: capability token (cap=rmmway.patch_query).
+  string capability_token = 2;
+}
+
+// PatchApprove (gap #4) approves specific patches for installation.
+// Approvals are staged; patch_apply actually installs them. Capability:
+// rmmway.patch_approve.
+message PatchApprove {
+  // List of patch IDs to approve (from a previous patch_query result).
+  repeated string patch_ids = 1;
+  // W3-3: capability token (cap=rmmway.patch_approve).
+  string capability_token = 2;
+}
+
+// PatchApply (gap #4) installs the approved patches. On Windows, this uses
+// the Windows Update API to download and install approved updates. Results
+// are reported as PatchStatus frames with PatchApplyProgress. Capability:
+// rmmway.patch_apply.
+message PatchApply {
+  // List of patch IDs to apply (from a previous patch_approve).
+  // Empty = apply all approved patches.
+  repeated string patch_ids = 1;
+  // Schedule a reboot after installation if required.
+  bool schedule_reboot = 2;
+  // Reboot delay in seconds (applied if schedule_reboot and required).
+  uint32 reboot_delay_seconds = 3;
+  // W3-3: capability token (cap=rmmway.patch_apply).
   string capability_token = 4;
 }
 

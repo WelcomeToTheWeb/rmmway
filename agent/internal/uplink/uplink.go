@@ -25,6 +25,8 @@ import (
 	"github.com/welcometotheweb/rmmway/agent/internal/caps"
 	"github.com/welcometotheweb/rmmway/agent/internal/exec"
 	"github.com/welcometotheweb/rmmway/agent/internal/files"
+	"github.com/welcometotheweb/rmmway/agent/internal/inventory"
+	"github.com/welcometotheweb/rmmway/agent/internal/patchmanager"
 	"github.com/welcometotheweb/rmmway/agent/internal/session"
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 )
@@ -454,6 +456,12 @@ func (u *Uplink) handleCommand(ctx context.Context, stream agentv1.AgentService_
 		return u.filePullCommand(ctx, stream, cmd)
 	case *agentv1.Command_FilePush: // gap #1a
 		return u.filePushCommand(ctx, c, stream, cmd)
+	case *agentv1.Command_CollectInventory: // gap #4
+		return u.collectInventoryCommand(ctx, stream, cmd)
+	case *agentv1.Command_PatchQuery: // gap #4
+		return u.patchQueryCommand(ctx, stream, cmd)
+	case *agentv1.Command_PatchApply: // gap #4
+		return u.patchApplyCommand(ctx, stream, cmd)
 	}
 	return nil
 }
@@ -617,9 +625,175 @@ func actionName(a any) string {
 		return "run_script(" + a.RunScript.GetLang() + ")"
 	case *agentv1.Command_Reboot:
 		return "reboot"
+	case *agentv1.Command_CollectInventory:
+		return "collect_inventory"
+	case *agentv1.Command_PatchQuery:
+		return "patch_query"
+	case *agentv1.Command_PatchApply:
+		return "patch_apply"
 	case nil:
 		return "none"
 	default:
 		return fmt.Sprintf("%T", a)
 	}
+}
+
+// collectInventoryCommand (gap #4) collects deep inventory for this device.
+func (u *Uplink) collectInventoryCommand(ctx context.Context, stream agentv1.AgentService_StreamClient, cmd *agentv1.Command) error {
+	u.cfg.Logger.Info("collect_inventory", "cmd", cmd.GetId())
+
+	// Collect all inventory categories
+	inv := &agentv1.InventoryReport{
+		CommandId:     cmd.GetId(),
+		CollectedAtMs: time.Now().UnixMilli(),
+	}
+
+	// Hardware
+	if hw, err := inventory.CollectHardware(ctx); err == nil {
+		inv.Hardware = hw.ToProto()
+	} else {
+		u.cfg.Logger.Warn("inventory: hardware collection failed", "err", err)
+	}
+
+	// Software
+	if sw, err := inventory.CollectSoftware(ctx); err == nil {
+		for _, s := range sw {
+			inv.Software = append(inv.Software, s.ToProto())
+		}
+	} else {
+		u.cfg.Logger.Warn("inventory: software collection failed", "err", err)
+	}
+
+	// Services
+	if svcs, err := inventory.CollectServices(ctx); err == nil {
+		for _, s := range svcs {
+			inv.Services = append(inv.Services, &agentv1.ServiceInfo{
+				Name:       s.Name,
+				Status:     s.Status,
+				Type:       s.Type,
+				Enabled:    s.Enabled,
+			})
+		}
+	} else {
+		u.cfg.Logger.Warn("inventory: services collection failed", "err", err)
+	}
+
+	// Users
+	if users, err := inventory.CollectUsers(ctx); err == nil {
+		for _, u := range users {
+			inv.Users = append(inv.Users, &agentv1.UserAccount{
+				Username:   u.Username,
+				Uid:        u.Uid,
+				HomeDir:    u.HomeDir,
+				Shell:      u.Shell,
+				Enabled:    u.Enabled,
+				AccountType: u.AccountType,
+			})
+		}
+	} else {
+		u.cfg.Logger.Warn("inventory: users collection failed", "err", err)
+	}
+
+	// Send inventory report
+	if err := stream.Send(&agentv1.StreamRequest{
+		Payload: &agentv1.StreamRequest_InventoryReport{InventoryReport: inv},
+	}); err != nil {
+		return err
+	}
+
+	u.cfg.Logger.Info("inventory: report sent", "cmd", cmd.GetId())
+	return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_SUCCEEDED, 0, []byte("inventory collected"), nil, "")
+}
+
+// patchQueryCommand (gap #4) queries available patches.
+func (u *Uplink) patchQueryCommand(ctx context.Context, stream agentv1.AgentService_StreamClient, cmd *agentv1.Command) error {
+	u.cfg.Logger.Info("patch_query", "cmd", cmd.GetId())
+
+	pm := patchmanager.NewPatchManager()
+	result, err := pm.Query(ctx, "")
+	if err != nil {
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, err.Error())
+	}
+
+	// Send patch status
+	patchStatus := &agentv1.PatchStatus{
+		CommandId:  cmd.GetId(),
+		StatusAtMs: time.Now().UnixMilli(),
+	}
+
+	patchStatus.Query = &agentv1.PatchQueryResult{}
+	for _, p := range result.Available {
+		patchStatus.Query.Available = append(patchStatus.Query.Available, &agentv1.AvailablePatch{
+			Id:             p.ID,
+			Title:          p.Title,
+			Severity:       p.Severity,
+			RebootRequired: p.RebootRequired,
+		})
+	}
+
+	if err := stream.Send(&agentv1.StreamRequest{
+		Payload: &agentv1.StreamRequest_PatchStatus{PatchStatus: patchStatus},
+	}); err != nil {
+		return err
+	}
+
+	u.cfg.Logger.Info("patch_query: results sent", "cmd", cmd.GetId(), "available", len(result.Available))
+	return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_SUCCEEDED, 0, []byte(fmt.Sprintf("%d patches available", len(result.Available))), nil, "")
+}
+
+// patchApplyCommand (gap #4) applies patches.
+func (u *Uplink) patchApplyCommand(ctx context.Context, stream agentv1.AgentService_StreamClient, cmd *agentv1.Command) error {
+	apply := cmd.GetPatchApply()
+	if apply == nil {
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, "nil patch_apply")
+	}
+	u.cfg.Logger.Info("patch_apply", "cmd", cmd.GetId(), "schedule_reboot", apply.GetScheduleReboot())
+
+	pm := patchmanager.NewPatchManager()
+	progressCh := make(chan agentv1.PatchApplyProgress, 10)
+
+	go func() {
+		defer close(progressCh)
+		err := pm.Apply(ctx, apply.GetPatchIds(), apply.GetScheduleReboot(), apply.GetRebootDelaySeconds(), func(p patchmanager.PatchApplyProgress) {
+			select {
+			case progressCh <- agentv1.PatchApplyProgress{
+				Phase:           p.Phase,
+				Message:         p.Message,
+				ProgressPercent: p.ProgressPercent,
+				RebootRequired:  p.RebootRequired,
+				Errors:          p.Errors,
+				}:
+			default:
+			}
+		})
+		if err != nil {
+			progressCh <- agentv1.PatchApplyProgress{
+			Phase:  "failed",
+			Errors: []string{err.Error()},
+		}
+		}
+	}()
+
+	// Report progress
+	for progress := range progressCh {
+		status := &agentv1.PatchStatus{
+			CommandId:  cmd.GetId(),
+			StatusAtMs: time.Now().UnixMilli(),
+		}
+		status.Apply = &agentv1.PatchApplyProgress{
+			Phase:           progress.Phase,
+			Message:         progress.Message,
+			ProgressPercent: progress.ProgressPercent,
+			RebootRequired:  progress.RebootRequired,
+			Errors:          progress.Errors,
+		}
+		if err := stream.Send(&agentv1.StreamRequest{
+			Payload: &agentv1.StreamRequest_PatchStatus{PatchStatus: status},
+		}); err != nil {
+			return err
+		}
+	}
+
+	u.cfg.Logger.Info("patch_apply: completed", "cmd", cmd.GetId())
+	return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_SUCCEEDED, 0, []byte("patches applied"), nil, "")
 }
