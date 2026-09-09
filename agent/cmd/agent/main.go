@@ -36,6 +36,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -49,6 +50,7 @@ import (
 	"github.com/welcometotheweb/rmmway/agent/internal/enroll"
 	"github.com/welcometotheweb/rmmway/agent/internal/exec"
 	"github.com/welcometotheweb/rmmway/agent/internal/logship"
+	"github.com/welcometotheweb/rmmway/agent/internal/osevent"
 	"github.com/welcometotheweb/rmmway/agent/internal/rotate"
 	"github.com/welcometotheweb/rmmway/agent/internal/secure"
 	"github.com/welcometotheweb/rmmway/agent/internal/update"
@@ -565,6 +567,52 @@ func runAgent(ctx context.Context, log *slog.Logger, cfg agentConfig, jsonl *log
 					log.Warn("logship stopped", "err", rerr)
 				}
 				_ = ship.Close()
+			}()
+		}
+	}
+
+	// Wave 2 gap5: tail the OS event log (systemd journal / Windows Event
+	// Log / macOS unified log) and ship it as LogBatch frames on the
+	// uplink, next to the agent's own log file. RMMWAY_EVENTLOG=off
+	// disables; RMMWAY_EVENTLOG_INTERVAL sets the poll cadence (default
+	// 60s); RMMWAY_EVENTLOG_LIMIT caps entries per poll (default 50).
+	// Content-derived entry ids make replays no-ops on the server.
+	if ev := os.Getenv("RMMWAY_EVENTLOG"); ev != "off" && ev != "0" {
+		evInterval := 60 * time.Second
+		if raw := os.Getenv("RMMWAY_EVENTLOG_INTERVAL"); raw != "" {
+			d, perr := time.ParseDuration(raw)
+			if perr == nil && d > 0 {
+				evInterval = d
+			} else {
+				log.Warn("invalid RMMWAY_EVENTLOG_INTERVAL, using 60s", "raw", raw, "err", perr)
+			}
+		}
+		evLimit := 50
+		if raw := os.Getenv("RMMWAY_EVENTLOG_LIMIT"); raw != "" {
+			n, aerr := strconv.Atoi(raw)
+			if aerr == nil && n > 0 && n <= 500 {
+				evLimit = n
+			} else {
+				log.Warn("invalid RMMWAY_EVENTLOG_LIMIT, using 50", "raw", raw, "err", aerr)
+			}
+		}
+		tail, terr := osevent.New(osevent.Config{
+			StatePath:    filepath.Join(filepath.Dir(cfg.IdentityPath), "eventlog.state"),
+			PollInterval: evInterval,
+			Limit:        evLimit,
+			Logger:       log,
+			Uplink: func(ctx context.Context, batch *agentv1.LogBatch) error {
+				return u.PushLogs(ctx, batch)
+			},
+		})
+		if terr != nil {
+			log.Warn("event log tail disabled", "err", terr)
+		} else {
+			log.Info("event log tail enabled", "source", tail.SourceName(), "interval", evInterval.String())
+			go func() {
+				if rerr := tail.Run(ctx); rerr != nil && !errors.Is(rerr, context.Canceled) {
+					log.Warn("event log tail stopped", "err", rerr)
+				}
 			}()
 		}
 	}
