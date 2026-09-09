@@ -190,8 +190,8 @@ func TestPostgresClientsLive(t *testing.T) {
 	t.Chdir("../../..")
 	if n, err := Migrate(ctx, db, "server/migrations"); err != nil {
 		t.Fatalf("migrate: %v", err)
-	} else if n != 10 {
-		t.Fatalf("expected 10 migrations applied, got %d", n)
+	} else if n != 11 {
+		t.Fatalf("expected 11 migrations applied, got %d", n)
 	}
 	// Idempotent re-run: nothing new, seed still exactly one row.
 	if n, err := Migrate(ctx, db, "server/migrations"); err != nil || n != 0 {

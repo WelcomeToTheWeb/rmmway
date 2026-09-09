@@ -69,8 +69,8 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if n != 10 {
-		t.Fatalf("expected 10 migrations applied, got %d", n)
+	if n != 11 {
+		t.Fatalf("expected 11 migrations applied, got %d", n)
 	}
 
 	mustScan := func(query string, dst ...any) {
@@ -126,6 +126,19 @@ func TestMigrateAppliesInitInTempDB(t *testing.T) {
 	mustScan(`SELECT count(*) FROM information_schema.columns WHERE table_name='devices' AND column_name='client_id'`, &count)
 	if count != 1 {
 		t.Fatalf("expected devices.client_id column, got %d", count)
+	}
+
+	// Gap #3 (wave 2, lane B): 0011_users.sql creates the users, grants,
+	// and API-token tables behind the RBAC middleware. A fresh database
+	// has zero operator accounts in users (the wizard's root admin stays
+	// in admin_users; new accounts are minted by the Users API).
+	mustScan(`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('users','user_clients','api_tokens')`, &count)
+	if count != 3 {
+		t.Fatalf("expected users+user_clients+api_tokens tables, got %d", count)
+	}
+	mustScan(`SELECT count(*) FROM users`, &count)
+	if count != 0 {
+		t.Fatalf("fresh database must have zero users rows, got %d", count)
 	}
 
 	// W5-1: the self-healing tables (playbooks + heal_runs + heal_events)
