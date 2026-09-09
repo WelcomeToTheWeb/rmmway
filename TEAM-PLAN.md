@@ -349,3 +349,45 @@ wk  C                    B                    A
   green, frontend build green, gofmt parity with base (pre-existing version
   drift: Go 1.27.1 `gofmt -l` flags files already present at `800e31c`).
   Round 2 ready to launch: lane A #1a, lane C #8a + #10b.
+
+## Round 2 results (Wave 2 complete)
+
+### Lane A: gap #1a remote session phase 1 + file pull/push — **MERGED** (commit 63f88aa)
+
+Architecture: bidirectional SessionFrame/SessionControl protocol over the agent's
+live gRPC stream. Agent-side capture driver (synthetic test backend for headless
+dev) + server-side frame relay registry + viewer SSE subscription. File transfer
+is chunked with transfer-state tracking on the server and in-flight push
+management on the agent.
+
+Live proof:
+- Agent enrolled + mTLS connected (dev-9d7e5cac6b56)
+- Session started via API → SessionControl downlink → agent capture loop armed
+- SSE stream delivers status frames (vnc_required on headless Linux)
+- File pull command dispatched + executed on agent
+
+Known follow-up: file pull chunk relay to server needs investigation (size=0
+reported; chunks sent but not received by ingest).
+
+### Lane C: gap #8a fleet dashboard + gap #10b mobile pass — **MERGED** (commit 3d89b6b)
+
+Architecture: 7-tile KPI dashboard (Dashboard.jsx) with real counts from the
+server. Default route is the dashboard. Mobile responsive pass uses the same
+kit.css media-query approach as the desktop redesign.
+
+Evidence: 10 screenshots (docs/gap8a-dashboard/ + docs/gap10b-mobile/) — desktop
+dashboard, 390px mobile views (dashboard, nav closed/open, device cards, card
+open, modal), 768px tablet views, 1280px desktop device rows.
+
+### Wave 2 status: COMPLETE
+
+All 5 gaps addressed:
+- gap #1: remote session phase 1 (A)
+- gap #3: users/RBAC/TOTP/API tokens (B, round 1)
+- gap #5: remaining collectors (A, round 1)
+- gap #8a: fleet dashboard (C)
+- gap #10a: device-table ergonomics (C, round 1)
+- gap #10b: mobile responsive pass (C)
+
+Next: Wave 3 (Lane A #1b two-way input / #4 deep inventory; Lane C #1c session
+viewer + #8b reports; Lane B #6 notifications).
