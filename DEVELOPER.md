@@ -59,6 +59,12 @@ minted account is the primary login).
 | `RMMWAY_RELEASES_DIR` (server) | unset = no auto-updates served |
 | `RMMWAY_AUTO_UPDATE` / `RMMWAY_UPDATE_INTERVAL` (agent) | `on` / `15m` |
 | `RMMWAY_SERVICES` (agent) | unset = no service monitoring; comma list of OS service names (capped at 50) → per-service `service.status` 0/1 samples, e.g. `nginx,postgresql` |
+| `RMMWAY_TOP_PROCS` (agent) | `10` — top-N `process.cpu_percent` / `process.memory_rss_bytes` families (cap 50; invalid values fall back to the default) |
+| `RMMWAY_CERT_DIRS` (agent) | `/etc/ssl/certs` — comma list of dirs scanned for `cert.days_to_expiry`; absent dirs are skipped silently |
+| `RMMWAY_CERT_SCAN_CAP` (agent) | `200` — max files inspected per heartbeat across all cert dirs (hard cap 1000) |
+| `RMMWAY_EVENTLOG` (agent) | `on` — tail the OS event log (journalctl / wevtutil / log show) and ship it as LogBatch over the uplink; `off` disables |
+| `RMMWAY_EVENTLOG_INTERVAL` (agent) | `60s` — event-log poll cadence |
+| `RMMWAY_EVENTLOG_LIMIT` (agent) | `50` — max entries per event-log poll (hard cap 500) |
 
 ## Test & e2e matrix
 
