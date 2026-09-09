@@ -31,6 +31,93 @@ const COLUMNS = [
   { key: "status", label: "Status", sortable: true, hideable: true },
 ];
 
+// #10b: tracks the <768px mobile breakpoint so the card list only mounts
+// its expanded detail where it is visible (the table keeps its own detail
+// row) — no duplicate DeviceDetail fetches when the layout is hidden.
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(
+    () => window.matchMedia("(max-width: 768px)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const onChange = () => setIsMobile(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return isMobile;
+}
+
+// #10b: the mobile card row (table markup untouched — devices-mobile.css
+// swaps visibility below 768px). Same data, same open/toggle state, same
+// clientName mapping as the table; expands to the SAME DeviceDetail the
+// table row expands to.
+function DeviceCard({
+  d,
+  open,
+  isMobile,
+  onToggle,
+  clientName,
+  token,
+  onUnauthorized,
+  liveTick,
+  onSaved,
+}) {
+  return (
+    <Fragment>
+      <button
+        className={"dev-card" + (d.online ? " on" : " off")}
+        onClick={() => onToggle(d.id)}
+        aria-expanded={open}
+        title="Show/hide recent agent log entries"
+      >
+        <span className="dev-card-top">
+          <span className="dev-card-host mono">{d.hostname}</span>
+          <StatusPill online={d.online} lastSeen={d.last_seen} />
+        </span>
+        <span className="dev-card-mid">
+          <span className="mono">
+            {d.os}/{d.arch}
+          </span>
+          <span className="dev-card-sep" aria-hidden="true">
+            ·
+          </span>
+          <span>{clientName(d)}</span>
+          {(d.interfaces || []).length > 0 && (
+            <>
+              <span className="dev-card-sep" aria-hidden="true">
+                ·
+              </span>
+              <span className="mono">{d.interfaces[0]}</span>
+            </>
+          )}
+        </span>
+        {d.tags && d.tags.length > 0 && (
+          <span className="dev-card-tags">
+            <span className="tags">
+              {d.tags.map((t) => (
+                <span key={t} className="tag">
+                  {t}
+                </span>
+              ))}
+            </span>
+          </span>
+        )}
+      </button>
+      {open && isMobile && (
+        <div className="dev-card-detail">
+          <DeviceDetail
+            token={token}
+            device={d}
+            onUnauthorized={onUnauthorized}
+            liveTick={liveTick}
+            onSaved={onSaved}
+          />
+        </div>
+      )}
+    </Fragment>
+  );
+}
+
 function parseTableState(hash) {
   const qIndex = hash.indexOf("?");
   const params =
@@ -591,6 +678,9 @@ export default function Devices({
   const [tick, setTick] = useState(0);
   // W6-1: the expanded device (recent indexed events panel below its row).
   const [open, setOpen] = useState(null);
+  // #10b: mobile breakpoint — the card list's expanded detail only mounts
+  // where it is visible (the table row keeps its own detail row).
+  const isMobile = useIsMobile();
   // Shareable view state (sort / hidden columns / client filter) — lives in
   // the URL hash so a view is linkable and survives reload (gap #10a).
   const [tableState, setTableState] = useState(() =>
@@ -875,83 +965,107 @@ export default function Devices({
           )}
         </div>
       ) : (
-        <div className="table-wrap">
-          <table className="devices">
-            <thead>
-              <tr>
-                {visibleColumns.map((c) => (
-                  <th
-                    key={c.key}
-                    aria-sort={
-                      sort && sort.key === c.key
-                        ? sort.dir === "asc"
-                          ? "ascending"
-                          : "descending"
-                        : undefined
-                    }
-                  >
-                    {c.sortable ? (
-                      <button
-                        className={
-                          "th-btn" +
-                          (sort && sort.key === c.key ? " active" : "")
-                        }
-                        onClick={() => onSortClick(c.key)}
-                        title={
-                          sort && sort.key === c.key
-                            ? `Sorted ${
-                                sort.dir === "asc" ? "ascending" : "descending"
-                              } — click to change direction`
-                            : `Sort by ${c.label.toLowerCase()}`
-                        }
-                      >
-                        {c.label}
-                        {sort && sort.key === c.key && (
-                          <span className="sort-ind" aria-hidden="true">
-                            {sort.dir === "asc" ? "▲" : "▼"}
-                          </span>
-                        )}
-                      </button>
-                    ) : (
-                      c.label
+        <div className="dev-table-desktop">
+          <div className="table-wrap">
+            <table className="devices">
+              <thead>
+                <tr>
+                  {visibleColumns.map((c) => (
+                    <th
+                      key={c.key}
+                      aria-sort={
+                        sort && sort.key === c.key
+                          ? sort.dir === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : undefined
+                      }
+                    >
+                      {c.sortable ? (
+                        <button
+                          className={
+                            "th-btn" +
+                            (sort && sort.key === c.key ? " active" : "")
+                          }
+                          onClick={() => onSortClick(c.key)}
+                          title={
+                            sort && sort.key === c.key
+                              ? `Sorted ${
+                                  sort.dir === "asc"
+                                    ? "ascending"
+                                    : "descending"
+                                } — click to change direction`
+                              : `Sort by ${c.label.toLowerCase()}`
+                          }
+                        >
+                          {c.label}
+                          {sort && sort.key === c.key && (
+                            <span className="sort-ind" aria-hidden="true">
+                              {sort.dir === "asc" ? "▲" : "▼"}
+                            </span>
+                          )}
+                        </button>
+                      ) : (
+                        c.label
+                      )}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((d) => (
+                  <Fragment key={d.id}>
+                    <DeviceRow
+                      d={d}
+                      open={open === d.id}
+                      onToggle={(id) => setOpen(open === id ? null : id)}
+                      visibleColumns={visibleColumns}
+                      clientName={clientName}
+                    />
+                    {open === d.id && (
+                      <tr className="detail-row">
+                        <td
+                          colSpan={visibleColumns.length}
+                          className="detail-cell"
+                        >
+                          <DeviceDetail
+                            token={token}
+                            device={d}
+                            onUnauthorized={onUnauthorized}
+                            liveTick={liveTick}
+                            onSaved={saveDevice}
+                          />
+                        </td>
+                      </tr>
                     )}
-                  </th>
+                  </Fragment>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((d) => (
-                <Fragment key={d.id}>
-                  <DeviceRow
-                    d={d}
-                    open={open === d.id}
-                    onToggle={(id) => setOpen(open === id ? null : id)}
-                    visibleColumns={visibleColumns}
-                    clientName={clientName}
-                  />
-                  {open === d.id && (
-                    <tr className="detail-row">
-                      <td
-                        colSpan={visibleColumns.length}
-                        className="detail-cell"
-                      >
-                        <DeviceDetail
-                          token={token}
-                          device={d}
-                          onUnauthorized={onUnauthorized}
-                          liveTick={liveTick}
-                          onSaved={saveDevice}
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
+      {/* #10b: below 768px the table above is hidden by devices-mobile.css
+          and this card list takes its place (same data/sort/open state). */}
+      {devices !== null && !error && sorted.length > 0 && (
+        <div className="device-cards" role="list" aria-label="Devices">
+          {sorted.map((d) => (
+            <DeviceCard
+              key={d.id}
+              d={d}
+              open={open === d.id}
+              isMobile={isMobile}
+              onToggle={(id) => setOpen(open === id ? null : id)}
+              clientName={clientName}
+              token={token}
+              onUnauthorized={onUnauthorized}
+              liveTick={liveTick}
+              onSaved={saveDevice}
+            />
+          ))}
+        </div>
+      )}
       {addOpen && (
         <AddDeviceModal
           token={token}

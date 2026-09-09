@@ -129,6 +129,195 @@ function value(name, t, i) {
 }
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
+// ---- gap #8a dashboard fixtures (lane C, wave 2 round 2) --------------------
+// Additive: alert + anomaly fixtures with the SAME shapes the real server
+// sends (see api.js docs), so the fleet dashboard's tiles can be evidenced.
+const ALERTS = [
+  {
+    id: "al-01",
+    device_id: "dev-web01",
+    hostname: "web-01",
+    name: "cpu.utilization_percent high",
+    source: "",
+    status: "open",
+    channel: "trend",
+    score: 6.4,
+    value: 91.2,
+    expected: 34.0,
+    events: 7,
+    first_at: new Date(Date.now() - 42 * 60 * 60 * 1000).toISOString(),
+    last_at: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+  },
+  {
+    id: "al-02",
+    device_id: "dev-db01",
+    hostname: "db-01",
+    name: "mem.used_percent high",
+    source: "",
+    status: "open",
+    channel: "seasonal",
+    score: 4.1,
+    value: 96.8,
+    expected: 61.0,
+    events: 3,
+    first_at: new Date(Date.now() - 3 * 3600e3).toISOString(),
+    last_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+  },
+  {
+    id: "al-03",
+    device_id: "dev-gw03",
+    hostname: "iot-gw-03",
+    name: "device offline",
+    source: "",
+    status: "open",
+    channel: "trend",
+    score: 8.9,
+    value: 0,
+    expected: 1,
+    events: 1,
+    first_at: new Date(Date.now() - 42 * 60 * 60 * 1000).toISOString(),
+    last_at: new Date(Date.now() - 42 * 60 * 60 * 1000).toISOString(),
+  },
+  {
+    id: "al-04",
+    device_id: "dev-fs01",
+    hostname: "win-fs-01",
+    name: "disk.used_percent high",
+    source: "sda1",
+    status: "acked",
+    channel: "trend",
+    score: 3.2,
+    value: 91.0,
+    expected: 71.2,
+    events: 12,
+    first_at: new Date(Date.now() - 2 * 86400e3).toISOString(),
+    last_at: new Date(Date.now() - 5 * 3600e3).toISOString(),
+    acked_at: new Date(Date.now() - 4 * 3600e3).toISOString(),
+  },
+];
+// /api/baseline/anomalies -> StoredAnomaly[] newest first (see api.js).
+const ANOMALIES = [
+  {
+    id: "an-05",
+    device_id: "dev-web01",
+    name: "cpu.utilization_percent",
+    source: "",
+    at: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+    value: 91.2,
+    score: 6.42,
+    channel: "trend",
+    trend_z: 6.42,
+    detected_at: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+  },
+  {
+    id: "an-04",
+    device_id: "dev-gw03",
+    name: "heartbeat.present",
+    source: "",
+    at: new Date(Date.now() - 42 * 60 * 60 * 1000).toISOString(),
+    value: 0,
+    score: 8.9,
+    channel: "trend",
+    trend_z: 8.9,
+    detected_at: new Date(Date.now() - 42 * 60 * 60 * 1000).toISOString(),
+  },
+  {
+    id: "an-03",
+    device_id: "dev-db01",
+    name: "mem.used_percent",
+    source: "",
+    at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+    value: 96.8,
+    score: 4.13,
+    channel: "seasonal",
+    seasonal_z: 4.13,
+    detected_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+  },
+  {
+    id: "an-02",
+    device_id: "dev-fs01",
+    name: "disk.used_percent",
+    source: "sda1",
+    at: new Date(Date.now() - 5 * 3600e3).toISOString(),
+    value: 91.0,
+    score: 3.21,
+    channel: "trend",
+    trend_z: 3.21,
+    detected_at: new Date(Date.now() - 5 * 3600e3).toISOString(),
+  },
+];
+// /api/events global journal -> top-level Envelope[] (see api.js D-2 docs):
+// { id (journal seq), version, source, category, type, device_id?, at, event }.
+// The rig's earlier {events:[…]} object shape only matched the per-device
+// route; the journal route is what the dashboard's activity tile consumes.
+const JOURNAL = [
+  [
+    "alert",
+    "rmmway.events.alert.opened",
+    "al-01",
+    "dev-web01",
+    "cpu.utilization_percent high (z=6.4)",
+    6 * 60 * 1000,
+  ],
+  [
+    "inventory",
+    "rmmway.events.device.offline",
+    "",
+    "dev-gw03",
+    "iot-gw-03 went offline",
+    42 * 60 * 60 * 1000,
+  ],
+  [
+    "automation",
+    "rmmway.events.command.result",
+    "c-9f21",
+    "dev-web01",
+    "run_script succeeded (exit 0)",
+    35 * 60 * 1000,
+  ],
+  [
+    "other",
+    "rmmway.events.device.online",
+    "",
+    "dev-web01",
+    "web-01 came online",
+    5 * 3600e3,
+  ],
+  [
+    "alert",
+    "rmmway.events.alert.opened",
+    "al-02",
+    "dev-db01",
+    "mem.used_percent high (z=4.1)",
+    12 * 60 * 1000,
+  ],
+  [
+    "automation",
+    "rmmway.events.command.dispatched",
+    "c-a7f3",
+    "dev-web01",
+    "run_script dispatched (systemctl restart nginx)",
+    42 * 1000,
+  ],
+]
+  .map(([category, type, ref, device_id, message, ago], i) => ({
+    id: i + 1,
+    version: 1,
+    source: "rig",
+    category,
+    type,
+    device_id: device_id || undefined,
+    at: new Date(Date.now() - ago).toISOString(),
+    event: {
+      type,
+      device_id,
+      message,
+      ref: ref || undefined,
+      at: new Date(Date.now() - ago).toISOString(),
+    },
+  }))
+  .sort((a, b) => b.id - a.id); // newest first, like the UI expects
+
 const RANGES = {
   "1h": [3600e3, 60],
   "6h": [6 * 3600e3, 300],
@@ -258,8 +447,25 @@ http
         return json(res, list);
       }
       if (p === "/api/alerts/counts")
-        return json(res, { open: 2, acked: 1, resolved: 0 });
-      if (p.startsWith("/api/alerts")) return json(res, []);
+        return json(res, {
+          open: ALERTS.filter((a) => a.status === "open").length,
+          acked: ALERTS.filter((a) => a.status === "acked").length,
+          resolved: ALERTS.filter((a) => a.status === "resolved").length,
+        });
+      if (p === "/api/alerts" || p.startsWith("/api/alerts?")) {
+        const status = url.searchParams.get("status") || "";
+        const device_id = url.searchParams.get("device_id") || "";
+        let list = ALERTS;
+        if (status) list = list.filter((a) => a.status === status);
+        if (device_id) list = list.filter((a) => a.device_id === device_id);
+        return json(res, list);
+      }
+      if (p === "/api/baseline/anomalies" || p.startsWith("/api/baseline")) {
+        if (p === "/api/baseline/run")
+          return json(res, { anomalies: [], series: 12, runs: 0 });
+        return json(res, ANOMALIES);
+      }
+      if (p === "/api/events") return json(res, JOURNAL);
       if (p === "/healthz")
         return json(res, { ok: true, version: "0.4.2", probes: { db: "ok" } });
       let m;
@@ -304,10 +510,6 @@ http
           res,
           m[1] === "dev-web01" ? COMMANDS : { pending: [], results: [] },
         );
-      if (p === "/api/events" || p.startsWith("/api/events?")) {
-        const dev = url.searchParams.get("device");
-        return json(res, { events: dev === "dev-gw03" ? [] : EVENTS });
-      }
       if ((m = /^\/api\/devices\/([^/]+)\/events$/.exec(p)))
         return json(res, {
           device_id: m[1],

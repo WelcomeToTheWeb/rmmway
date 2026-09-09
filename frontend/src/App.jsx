@@ -9,6 +9,7 @@ import Alerts from "./Alerts.jsx";
 import Clients from "./Clients.jsx";
 import Flows from "./Flows.jsx";
 import Events from "./Events.jsx";
+import Dashboard from "./Dashboard.jsx";
 import Heal from "./Heal.jsx";
 import Webhooks from "./Webhooks.jsx";
 import Baseline from "./Baseline.jsx";
@@ -26,6 +27,7 @@ import { ErrorBoundary } from "./ui/index.js";
 //   kind  — "route" renders a hash link; "palette" renders the ⌘K action
 //   badge — "alerts" renders the open-alert count badge when > 0
 const NAV_ITEMS = [
+  { label: "Dashboard", path: "dashboard", group: "Fleet", kind: "route" },
   { label: "Devices", path: "devices", group: "Fleet", kind: "route" },
   {
     label: "Alerts",
@@ -51,8 +53,10 @@ const NAV_ITEMS = [
   },
 ];
 
-// ---- tiny hash router: #/devices (default) + the NAV_ITEMS routes.
+// ---- tiny hash router: #/dashboard (default) + the NAV_ITEMS routes.
 // ---- Known routes derive from NAV_ITEMS above (one array, one truth).
+// The dashboard is the home view (gap #8a), so a bare # / unknown paths
+// fall back there; #/devices stays a live deep link for shared table URLs.
 function parseRoute() {
   const h = window.location.hash;
   for (const item of NAV_ITEMS) {
@@ -60,7 +64,7 @@ function parseRoute() {
       return item.path;
     }
   }
-  return "devices";
+  return "dashboard";
 }
 
 // probeTitle renders /healthz probes as a human-readable tooltip string.
@@ -101,6 +105,20 @@ function probeTitle(probes) {
 function Header({ route, openCount, onOpenPalette }) {
   const { token, logout } = useAuth();
   const [health, setHealth] = useState(null);
+  // #10b: the mobile nav drawer (hamburger). Hidden above 768px by CSS;
+  // closes on route change, on item click, and on Escape.
+  const [navOpen, setNavOpen] = useState(false);
+  useEffect(() => {
+    setNavOpen(false);
+  }, [route]);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setNavOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
   useEffect(() => {
     let alive = true;
     let id = null;
@@ -152,7 +170,17 @@ function Header({ route, openCount, onOpenPalette }) {
           </span>
         )}
       </div>
-      <nav className="nav">
+      <button
+        className="nav-burger"
+        aria-label={navOpen ? "Close menu" : "Open menu"}
+        aria-expanded={navOpen}
+        aria-controls="mainnav"
+        onClick={() => setNavOpen((o) => !o)}
+        title={navOpen ? "Close menu (Esc)" : "Menu"}
+      >
+        <span aria-hidden="true">{navOpen ? "✕" : "☰"}</span>
+      </button>
+      <nav id="mainnav" className={"nav" + (navOpen ? " open" : "")}>
         {NAV_ITEMS.map((item, i) => {
           const prev = i > 0 ? NAV_ITEMS[i - 1] : null;
           return (
@@ -172,6 +200,7 @@ function Header({ route, openCount, onOpenPalette }) {
                   role="button"
                   onClick={(e) => {
                     e.preventDefault();
+                    setNavOpen(false);
                     onOpenPalette();
                   }}
                   title={item.title}
@@ -185,6 +214,7 @@ function Header({ route, openCount, onOpenPalette }) {
                   }
                   href={"#/" + item.path}
                   aria-current={route === item.path ? "page" : undefined}
+                  onClick={() => setNavOpen(false)}
                 >
                   {item.label}
                   {item.badge === "alerts" && openCount > 0 && (
@@ -203,7 +233,9 @@ function Header({ route, openCount, onOpenPalette }) {
             title={probeTitle(health.probes)}
           >
             <span className={"dot " + (ok ? "on" : "off")} />
-            {ok ? "all services ok" : "degraded"}
+            <span className="health-label">
+              {ok ? "all services ok" : "degraded"}
+            </span>
           </span>
         )}
         <ThemeToggle />
@@ -360,7 +392,9 @@ function Shell() {
         {/* One boundary per route: a caught error panels that view but
             never blocks navigating to the rest of the app. */}
         <ErrorBoundary key={route}>
-          {route === "alerts" ? (
+          {route === "dashboard" ? (
+            <Dashboard token={token} onUnauthorized={logout} />
+          ) : route === "alerts" ? (
             <Alerts
               token={token}
               onUnauthorized={logout}

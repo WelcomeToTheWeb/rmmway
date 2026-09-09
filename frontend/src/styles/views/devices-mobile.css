@@ -1,0 +1,108 @@
+/* device table -> card layout below 768px (gap #10b, wave 2 round 2, lane C)
+   The table markup in Devices.jsx is untouched: below 768px this file hides
+   .dev-table-desktop and shows the .device-cards list instead. Above 768px
+   the cards are display:none and the table renders exactly as before. */
+
+.device-cards {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .dev-table-desktop {
+    display: none;
+  }
+  .device-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* one device = one tappable card; the whole card toggles the detail */
+  .dev-card {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    text-align: left;
+    padding: 12px 14px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: var(--radius);
+    color: var(--fg);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+  }
+  .dev-card.on {
+    border-left-color: var(--on);
+  }
+  .dev-card.off {
+    border-left-color: var(--off);
+    opacity: 0.85;
+  }
+  .dev-card:active {
+    background: var(--bg-elev2);
+  }
+  .dev-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .dev-card-host {
+    font-weight: 600;
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* the table's .status pill sits on the right of the card header */
+  .dev-card-top .status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+  .dev-card-mid {
+    display: block;
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dev-card-sep {
+    margin: 0 6px;
+    opacity: 0.6;
+  }
+  .dev-card-tags {
+    display: block;
+    margin-top: 8px;
+  }
+  .dev-card-tags .tag {
+    display: inline-block;
+    margin-right: 4px;
+  }
+
+  /* the expanded DeviceDetail reuses the table's detail-cell chrome */
+  .dev-card-detail {
+    margin-top: 8px;
+    padding: 4px 2px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+  }
+
+  /* the view toolbar wraps on a phone: the filter input gets its own row */
+  .view-actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .view-actions .search {
+    flex: 1 1 100%;
+  }
+  .view-actions .client-filter {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+}
