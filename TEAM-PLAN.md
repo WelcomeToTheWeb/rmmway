@@ -289,3 +289,17 @@ wk  C                    B                    A
   column, column show/hide, sortable headers, client column, URL state —
   wave 2, lane C); lane A's remaining #5 sub-items (OS event-log tail,
   load/swap, disk IO/SMART, cert-expiry, top-N processes).
+
+### 2026-09-08 — Wave 2 execution session (pi supervisor + 3 parallel worker subagents)
+
+- Setup: main at `800e31c` (wave 1 gate `3cffac0` + chore commits); 3 workers
+  in isolated git worktrees (90/120/90-min budgets, commit-early, additive-only
+  shared-file edits). Two-round structure per the vault plan note:
+  - **Round 1** (this launch): lane A = #5 remaining collectors (load/swap,
+    disk IO/SMART, top-N processes, cert-expiry, OS event-log tail); lane B =
+    #3 users/RBAC/TOTP MFA/API tokens (migration 0011); lane C = #10a
+    device-table ergonomics (URL state, sortable headers, client column,
+    primary-IP + expand, column show/hide).
+  - **Round 2** (after round 1 merges): lane A = #1a remote session phase 1
+    (screen capture + file transfer + relay + viewer API); lane C = #8a fleet
+    dashboard home + #10b mobile pass. Lane B wave-2 scope is #3 only.
