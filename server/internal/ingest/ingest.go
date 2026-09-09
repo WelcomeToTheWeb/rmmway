@@ -700,7 +700,7 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 			// One block of an in-progress file_pull. Accumulate in the
 			// session relay until the eof chunk arrives.
 			if c := p.FileChunk; c != nil {
-				s.log.Printf("ingest: file_chunk dev=%s cmd=%s seq=%d eof=%v", devID, c.GetCommandId(), c.GetSeq(), c.GetEof())
+				log.Printf("ingest: file_chunk dev=%s cmd=%s seq=%d eof=%v", devID, c.GetCommandId(), c.GetSeq(), c.GetEof())
 				if s.cfg.Sessions != nil {
 					s.cfg.Sessions.OnChunk(devID, c)
 				}
