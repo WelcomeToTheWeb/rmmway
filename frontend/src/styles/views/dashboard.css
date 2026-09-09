@@ -1,0 +1,315 @@
+/* fleet dashboard (gap #8a, wave 2 round 2, lane C) ----------------------------
+   12-column tile grid on wide screens, 2 columns on tablet, single column
+   below 768px. Tiles are plain cards on the elev surface — no new primitives,
+   only the design tokens + kit pills/dots. */
+
+.dash {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: var(--space-4);
+}
+.dash .tile {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  min-width: 0;
+}
+.dash .tile-4 {
+  grid-column: span 4;
+}
+.dash .tile-6 {
+  grid-column: span 6;
+}
+
+.tile-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: 10px;
+}
+.tile-head h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tile-link {
+  font-size: var(--text-xs);
+  color: var(--accent-2);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.tile-link:hover {
+  text-decoration: underline;
+}
+.tile-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tile-loading,
+.tile-err {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+.tile-err {
+  color: var(--off);
+}
+.tile-soon .tile-body {
+  padding: 6px 0;
+}
+
+/* ---- fleet status (donut + legend) ---------------------------------------- */
+.fleet-status {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-4);
+}
+.donut {
+  position: relative;
+  width: 132px;
+  flex: 0 0 auto;
+}
+.donut svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.donut circle {
+  transition: stroke-dasharray var(--transition-slow);
+}
+.donut .donut-off {
+  stroke: var(--off);
+  opacity: 0.55;
+}
+.donut .donut-on {
+  stroke: var(--on);
+}
+.donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.2;
+}
+.donut-total {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.donut-center .muted {
+  font-size: var(--text-2xs);
+}
+.fleet-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--text-sm);
+  min-width: 130px;
+}
+.fleet-legend li {
+  display: flex;
+  align-items: center;
+}
+.fleet-legend .dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 7px;
+}
+.fleet-legend .dot.on {
+  background: var(--on);
+}
+.fleet-legend .dot.off {
+  background: var(--off);
+}
+.fleet-legend strong {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- devices per OS -------------------------------------------------------- */
+.os-bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.os-bars li {
+  display: grid;
+  grid-template-columns: 74px 1fr 28px;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+}
+.os-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.os-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--bg-elev2);
+  overflow: hidden;
+}
+.os-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+  transition: width var(--transition-slow);
+}
+.os-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* ---- shared compact list rows (alerts / anomalies / activity) -------------- */
+.alert-list,
+.anom-list,
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.alert-list li,
+.anom-list li,
+.activity-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) auto auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+.alert-list li:last-child,
+.anom-list li:last-child,
+.activity-list li:last-child {
+  border-bottom: none;
+}
+.alert-list .host,
+.anom-list .host,
+.activity-list .host {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.a-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.a-time {
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  text-align: right;
+  min-width: 58px;
+}
+.alert-counts {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+}
+.z-pill {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  color: var(--off);
+  background: color-mix(in srgb, var(--off) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--off) 35%, transparent);
+  white-space: nowrap;
+}
+
+/* activity rows: category dot + shortened type + host + time */
+.activity-list li {
+  grid-template-columns: auto minmax(0, 1.6fr) minmax(0, 1fr) auto;
+}
+.act-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  align-self: center;
+}
+.activity-list li.cat-alert .act-dot {
+  background: var(--err);
+}
+.activity-list li.cat-automation .act-dot {
+  background: var(--accent);
+}
+.activity-list li.cat-inventory .act-dot {
+  background: var(--on);
+}
+.act-type {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-list .host {
+  font-weight: 500;
+}
+
+/* ---- responsive collapse --------------------------------------------------- */
+@media (max-width: 1023px) {
+  .dash .tile-4,
+  .dash .tile-6 {
+    grid-column: span 6;
+  }
+}
+@media (max-width: 767px) {
+  .dash {
+    grid-template-columns: 1fr;
+  }
+  .dash .tile-4,
+  .dash .tile-6 {
+    grid-column: auto;
+  }
+  .fleet-status {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .donut {
+    width: 116px;
+    margin: 0 auto;
+  }
+  .fleet-legend {
+    width: 100%;
+  }
+  .alert-list li,
+  .anom-list li {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 3px;
+  }
+  .alert-list .a-name,
+  .anom-list .a-name {
+    grid-column: 1 / -1;
+  }
+  .activity-list li {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .activity-list .host {
+    grid-column: 2 / 4;
+    grid-row: 2;
+  }
+}

@@ -20,6 +20,8 @@
 @import "./styles/views/alerts.css";
 @import "./styles/views/flows.css";
 @import "./styles/views/devices.css";
+@import "./styles/views/devices-mobile.css";
+@import "./styles/views/dashboard.css";
 @import "./styles/views/events.css";
 @import "./styles/views/heal.css";
 @import "./styles/views/webhooks.css";
