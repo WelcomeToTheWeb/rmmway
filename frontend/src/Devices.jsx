@@ -464,6 +464,54 @@ function AddDeviceModal({ token, onUnauthorized, onClose }) {
   );
 }
 
+// IPs cell (gap #10a): the primary (first) IP is always visible. When the
+// device has more interfaces, a keyboard-operable expand/collapse reveals
+// the full list inline (Esc collapses). The row click (detail panel) keeps
+// working — the button stops propagation.
+function IpCell({ ips }) {
+  const [expanded, setExpanded] = useState(false);
+  const list = ips || [];
+  if (!list.length) return <span className="muted">—</span>;
+  const primary = list[0];
+  const more = list.length - 1;
+  if (!more) return <span title={primary}>{primary}</span>;
+  return (
+    <>
+      <button
+        className="ip-primary"
+        aria-expanded={expanded}
+        title={list.join(", ")}
+        onClick={(e) => {
+          e.stopPropagation();
+          setExpanded((v) => !v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            setExpanded(false);
+          }
+        }}
+      >
+        {primary}
+        <span className="ip-more" aria-hidden="true">
+          +{more}
+        </span>
+      </button>
+      {expanded && (
+        <ul
+          className="ip-list"
+          aria-label="All interface IPs"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {list.map((ip) => (
+            <li key={ip}>{ip}</li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
 // One fleet row: identity, then one cell per visible column (driven by
 // COLUMNS so the header, the URL state and the hideable set stay in one
 // place). The whole row toggles the detail panel; column-internal controls
@@ -491,7 +539,7 @@ function DeviceRow({ d, open, onToggle, visibleColumns, clientName }) {
     agent: <td className="mono">{d.agent_version || "—"}</td>,
     ips: (
       <td className="mono ips">
-        {d.interfaces && d.interfaces.length ? d.interfaces.join(", ") : "—"}
+        <IpCell ips={d.interfaces} />
       </td>
     ),
     tags: (
