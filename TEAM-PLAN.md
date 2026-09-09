@@ -361,6 +361,7 @@ is chunked with transfer-state tracking on the server and in-flight push
 management on the agent.
 
 Live proof:
+
 - Agent enrolled + mTLS connected (dev-9d7e5cac6b56)
 - Session started via API → SessionControl downlink → agent capture loop armed
 - SSE stream delivers status frames (vnc_required on headless Linux)
@@ -382,6 +383,7 @@ open, modal), 768px tablet views, 1280px desktop device rows.
 ### Wave 2 status: COMPLETE
 
 All 5 gaps addressed:
+
 - gap #1: remote session phase 1 (A)
 - gap #3: users/RBAC/TOTP/API tokens (B, round 1)
 - gap #5: remaining collectors (A, round 1)
