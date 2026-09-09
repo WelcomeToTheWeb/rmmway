@@ -1,6 +1,71 @@
-import { Fragment, useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
 import { api } from "./api.js";
 import DeviceDetail from "./views/devices/DeviceDetail.jsx";
+
+// ---- shareable table state (gap #10a, wave 2, lane C) -----------------------
+// The device table's view state lives in the URL hash, AFTER the route:
+//
+//   #/devices?sort=host:asc&hidden=tags,agent&client=clt-4f2a
+//
+//   sort    — "<key>:<asc|desc>"; absent = the server's natural order
+//   hidden  — comma-separated hidden column keys (host is never hideable)
+//   client  — client filter id; absent = all clients. The server scopes the
+//             list (?client=), so the rows AND the counts come from the
+//             backend, not a client-side slice.
+//
+// The hash still starts with "#/devices", so App's parseRoute keeps matching
+// the same route; the state is written back on every change (normalizing the
+// URL) and re-read on hashchange, so browser back/forward walks the table
+// states and a copied URL restores the exact view.
+
+// Column model: single source of truth for headers, cell renderers and the
+// hideable set. `key` doubles as the URL state key (sort + hidden).
+const COLUMNS = [
+  { key: "host", label: "Host", sortable: true, hideable: false },
+  { key: "client", label: "Client", sortable: true, hideable: true },
+  { key: "os", label: "OS/Arch", sortable: true, hideable: true },
+  { key: "agent", label: "Agent", sortable: true, hideable: true },
+  { key: "ips", label: "IPs", sortable: true, hideable: true },
+  { key: "tags", label: "Tags", sortable: false, hideable: true },
+  { key: "status", label: "Status", sortable: true, hideable: true },
+];
+
+function parseTableState(hash) {
+  const qIndex = hash.indexOf("?");
+  const params =
+    qIndex === -1
+      ? new URLSearchParams()
+      : new URLSearchParams(hash.slice(qIndex + 1));
+  const state = { sort: null, hidden: new Set(), client: "" };
+  const [key, dir] = (params.get("sort") || "").split(":");
+  if (
+    COLUMNS.some((c) => c.key === key && c.sortable) &&
+    (dir === "asc" || dir === "desc")
+  ) {
+    state.sort = { key, dir };
+  }
+  (params.get("hidden") || "").split(",").forEach((k) => {
+    if (k && COLUMNS.some((c) => c.key === k && c.hideable))
+      state.hidden.add(k);
+  });
+  state.client = params.get("client") || "";
+  return state;
+}
+
+function tableStateToHash(state) {
+  const params = new URLSearchParams();
+  if (state.sort) params.set("sort", `${state.sort.key}:${state.sort.dir}`);
+  if (state.hidden.size)
+    params.set(
+      "hidden",
+      COLUMNS.filter((c) => state.hidden.has(c.key))
+        .map((c) => c.key)
+        .join(","),
+    );
+  if (state.client) params.set("client", state.client);
+  const qs = params.toString();
+  return "#/devices" + (qs ? `?${qs}` : "");
+}
 
 function relTime(iso) {
   if (!iso) return "—";
@@ -368,27 +433,37 @@ function AddDeviceModal({ token, onUnauthorized, onClose }) {
   );
 }
 
-function DeviceRow({ d, open, onToggle }) {
-  return (
-    <tr
-      className={(d.online ? "row-on" : "row-off") + (open ? " row-open" : "")}
-      onClick={() => onToggle(d.id)}
-      title="Show/hide recent agent log entries"
-      style={{ cursor: "pointer" }}
-    >
+// One fleet row: identity, then one cell per visible column (driven by
+// COLUMNS so the header, the URL state and the hideable set stay in one
+// place). The whole row toggles the detail panel; column-internal controls
+// stop propagation where they act.
+function DeviceRow({ d, open, onToggle, visibleColumns, clientName }) {
+  const cells = {
+    host: (
       <td>
         <div className="host">
           <span className="chev">{open ? "▾" : "▸"}</span> {d.hostname}
         </div>
         <div className="id">{d.id}</div>
       </td>
+    ),
+    client: (
+      <td className="client-cell" title={d.client_id || "unassigned"}>
+        {clientName(d)}
+      </td>
+    ),
+    os: (
       <td className="mono">
         {d.os}/{d.arch}
       </td>
-      <td className="mono">{d.agent_version || "—"}</td>
+    ),
+    agent: <td className="mono">{d.agent_version || "—"}</td>,
+    ips: (
       <td className="mono ips">
         {d.interfaces && d.interfaces.length ? d.interfaces.join(", ") : "—"}
       </td>
+    ),
+    tags: (
       <td>
         {d.tags && d.tags.length ? (
           <span className="tags">
@@ -402,9 +477,23 @@ function DeviceRow({ d, open, onToggle }) {
           <span className="muted">—</span>
         )}
       </td>
+    ),
+    status: (
       <td>
         <StatusPill online={d.online} lastSeen={d.last_seen} />
       </td>
+    ),
+  };
+  return (
+    <tr
+      className={(d.online ? "row-on" : "row-off") + (open ? " row-open" : "")}
+      onClick={() => onToggle(d.id)}
+      title="Show/hide recent agent log entries"
+      style={{ cursor: "pointer" }}
+    >
+      {visibleColumns.map((c) => (
+        <Fragment key={c.key}>{cells[c.key]}</Fragment>
+      ))}
     </tr>
   );
 }
@@ -422,6 +511,60 @@ export default function Devices({
   const [tick, setTick] = useState(0);
   // W6-1: the expanded device (recent indexed events panel below its row).
   const [open, setOpen] = useState(null);
+  // Shareable view state (sort / hidden columns / client filter) — lives in
+  // the URL hash so a view is linkable and survives reload (gap #10a).
+  const [tableState, setTableState] = useState(() =>
+    parseTableState(window.location.hash),
+  );
+  const { hidden, client } = tableState;
+  // MSP clients for the Client column + the toolbar filter (gap #2 surface —
+  // B owns the store, this view only reads /api/clients). null = loading.
+  const [clients, setClients] = useState(null);
+
+  // hashchange (back/forward, or App resetting the hash via the palette)
+  // re-reads the shareable state. The effect below writes the state back to
+  // the hash, normalizing it — the two never loop because the write is a
+  // no-op when the strings are already equal.
+  useEffect(() => {
+    const onHash = () => setTableState(parseTableState(window.location.hash));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  useEffect(() => {
+    const hash = tableStateToHash(tableState);
+    if (window.location.hash !== hash) window.location.hash = hash;
+  }, [tableState]);
+
+  // Client list for the column mapping + filter. A failure keeps the table
+  // usable: the column shows raw ids and the filter stays absent.
+  useEffect(() => {
+    let alive = true;
+    api
+      .clients(token)
+      .then((list) => alive && setClients(list || []))
+      .catch((e) => {
+        if (!alive) return;
+        if (e.unauthorized) onUnauthorized();
+        // non-fatal for the table — the column falls back to raw client ids
+      });
+    return () => {
+      alive = false;
+    };
+  }, [token, onUnauthorized]);
+
+  const clientById = useMemo(() => {
+    const m = new Map();
+    (clients || []).forEach((c) => m.set(c.id, c));
+    return m;
+  }, [clients]);
+  const clientName = useCallback(
+    (d) => {
+      if (!d.client_id) return "Unassigned";
+      const c = clientById.get(d.client_id);
+      return c ? c.name : d.client_id;
+    },
+    [clientById],
+  );
   // The "Add a device" modal (mint a one-time token -> copy-paste installer).
   const [addOpen, setAddOpen] = useState(false);
   // B-2: the "Dispatch to a group" modal (tag group -> bulk fan-out).
@@ -443,14 +586,16 @@ export default function Devices({
 
   const load = useCallback(async () => {
     try {
-      const list = await api.devices(token);
+      // The client filter is server-side (?client=), so the rows AND the
+      // counts below come from the backend for the active scope.
+      const list = await api.clientScopedDevices(token, client);
       setDevices(list);
       setError(null);
     } catch (e) {
       if (e.unauthorized) onUnauthorized();
       else setError(e.message);
     }
-  }, [token, onUnauthorized]);
+  }, [token, onUnauthorized, client]);
 
   useEffect(() => {
     load();
@@ -486,8 +631,17 @@ export default function Devices({
         (d.interfaces || []).some((ip) => ip.includes(needle)) ||
         (d.tags || []).some((t) => t.toLowerCase().includes(needle)),
   );
+  // Visible columns = the COLUMNS model minus the URL-hidden ones (the
+  // toolbar show/hide menu in the same lane writes that state). `host` is
+  // never hideable, so the table always keeps at least the identity column.
+  const visibleColumns = COLUMNS.filter(
+    (c) => !c.hideable || !hidden.has(c.key),
+  );
   const onlineCount = (devices || []).filter((d) => d.online).length;
   const total = (devices || []).length;
+  const clientLabel = client
+    ? (clientById.get(client) || {}).name || client
+    : "";
   void tick;
 
   return (
@@ -498,10 +652,33 @@ export default function Devices({
           <p className="muted">
             {devices === null
               ? "loading…"
-              : `${total} total · ${onlineCount} online · ${total - onlineCount} offline`}
+              : client
+                ? `${total} in ${clientLabel} · ${onlineCount} online · ${
+                    total - onlineCount
+                  } offline`
+                : `${total} total · ${onlineCount} online · ${
+                    total - onlineCount
+                  } offline`}
           </p>
         </div>
         <div className="view-actions">
+          {clients && clients.length > 0 && (
+            <select
+              className="search client-filter"
+              value={client}
+              onChange={(e) =>
+                setTableState((prev) => ({ ...prev, client: e.target.value }))
+              }
+              title="Scope the table to one client (server-side ?client=)"
+            >
+              <option value="">All clients</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             className="btn primary"
             onClick={() => setAddOpen(true)}
@@ -548,7 +725,17 @@ export default function Devices({
             </div>
           ) : (
             <p>
-              No devices match <em>{q}</em>.
+              {needle ? (
+                <>
+                  No devices match <em>{q}</em>.
+                </>
+              ) : client ? (
+                <>
+                  No devices in <em>{clientLabel}</em>.
+                </>
+              ) : (
+                "No devices found."
+              )}
             </p>
           )}
         </div>
@@ -557,12 +744,9 @@ export default function Devices({
           <table className="devices">
             <thead>
               <tr>
-                <th>Host</th>
-                <th>OS/Arch</th>
-                <th>Agent</th>
-                <th>IPs</th>
-                <th>Tags</th>
-                <th>Status</th>
+                {visibleColumns.map((c) => (
+                  <th key={c.key}>{c.label}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -572,10 +756,15 @@ export default function Devices({
                     d={d}
                     open={open === d.id}
                     onToggle={(id) => setOpen(open === id ? null : id)}
+                    visibleColumns={visibleColumns}
+                    clientName={clientName}
                   />
                   {open === d.id && (
                     <tr className="detail-row">
-                      <td colSpan={6} className="detail-cell">
+                      <td
+                        colSpan={visibleColumns.length}
+                        className="detail-cell"
+                      >
                         <DeviceDetail
                           token={token}
                           device={d}

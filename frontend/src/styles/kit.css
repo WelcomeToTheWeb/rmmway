@@ -180,6 +180,18 @@ table.devices tbody tr:last-child td {
  max-width: 260px;
 }
 
+/* client column + toolbar filter (gap #10a / gap #2 surface) */
+.client-cell {
+ max-width: 180px;
+ overflow: hidden;
+ text-overflow: ellipsis;
+ white-space: nowrap;
+}
+.client-filter {
+ min-width: 160px;
+ max-width: 220px;
+}
+
 /* shared compact event table (flows runs + per-device events) */
 table.events {
  width: 100%;
