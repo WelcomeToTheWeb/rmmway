@@ -39,8 +39,13 @@ func (n busHealNotifier) Escalate(run *heal.Run, reason string) {
 // so it needs hasPG; remediations go through the same capability-gated
 // command dispatch as operator-run actions (W3-3 token on every script).
 // Returns nil when disabled. Pure move out of main() (wave-0 F2).
+//
+// When a ticket notifier is provided, heal escalations create real
+// tickets (gap #7); otherwise the legacy log-and-publish-only behavior
+// is used.
 func wireHealEngine(hasPG bool, pgPool *pgxpool.Pool, svc *ingest.Service,
 	publishEvent func(subject, deviceID, message string, data map[string]any),
+	ticketNotifier heal.Notifier,
 ) *heal.Engine {
 	var healEngine *heal.Engine
 	if hasPG {
@@ -54,9 +59,15 @@ func wireHealEngine(hasPG bool, pgPool *pgxpool.Pool, svc *ingest.Service,
 					},
 				})
 			}
-			healEngine = heal.New(hst, remediate, svc.Dispatcher().Result, busHealNotifier{
-				log: log.New(os.Stderr, "selfheal: ", 0), pub: publishEvent,
-			})
+			var notifier heal.Notifier
+			if ticketNotifier != nil {
+				notifier = ticketNotifier
+			} else {
+				notifier = busHealNotifier{
+					log: log.New(os.Stderr, "selfheal: ", 0), pub: publishEvent,
+				}
+			}
+			healEngine = heal.New(hst, remediate, svc.Dispatcher().Result, notifier)
 			healErrCh := make(chan error, 1)
 			go healEngine.Run(context.Background(), d, healErrCh)
 			go func() {

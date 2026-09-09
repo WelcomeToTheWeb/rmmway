@@ -39,6 +39,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/reports"
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
+	"github.com/welcometotheweb/rmmway/server/internal/notify"
 	"github.com/welcometotheweb/rmmway/server/internal/users"
 	"github.com/welcometotheweb/rmmway/server/internal/releases"
 	"github.com/welcometotheweb/rmmway/server/internal/sessionrelay"
@@ -115,6 +116,15 @@ type Server struct {
 	// in-memory mode: /api/login delegates to the legacy env/admin_users
 	// path and scoping is off (every session is a grandfathered admin).
 	users store.UserStore
+	// tickets (gap #7) is the helpdesk ticket store (0012_tickets); nil =
+	// in-memory mode: /{api|admin}/tickets* returns 503.
+	tickets store.TicketStore
+	// notifyStore (gap #6) is the notification channel/policy store;
+	// nil = in-memory mode: /{api|admin}/notify* returns 503.
+	notifyStore store.NotifyStore
+	// notifySender (gap #6) creates channel instances for sending;
+	// nil = channels cannot send (test-fire unavailable).
+	notifySender *notify.Sender
 	// rbac (gap #3) resolves session JWTs + rmm_ API tokens into scoped
 	// Sessions for the route gates (rbacGate/rbacScopeGate/rbacRoleGate
 	// in domain_users.go). Always built; the Users store may be nil.
@@ -202,6 +212,15 @@ type Config struct {
 	// Reports (gap #8b) is the reports store + service; nil disables
 	// /{api|admin}/reports* (in-memory-mode deployments).
 	Reports *reports.Store
+	// Tickets (gap #7) is the helpdesk ticket store (0012_tickets). Nil =
+	// in-memory mode: /{api|admin}/tickets* returns 503.
+	Tickets store.TicketStore
+	// NotifyStore (gap #6) is the notification channel/policy store.
+	// Nil = in-memory mode: /{api|admin}/notify* returns 503.
+	NotifyStore store.NotifyStore
+	// NotifySender (gap #6) creates channel instances for sending.
+	// Nil = channels cannot send (test-fire unavailable).
+	NotifySender *notify.Sender
 	// PublicURL (if set) is the operator's public URL (RMMWAY_PUBLIC_URL).
 	// Exposed via GET /api/public-url so the Add Device UI can prefill the
 	// server URL with the configured public target instead of guessing
@@ -279,6 +298,9 @@ func New(cfg Config) *Server {
 		users:         cfg.Users,
 		maintStore:    cfg.Maint,
 		reportsStore:  cfg.Reports,
+		tickets:       cfg.Tickets,
+		notifyStore:   cfg.NotifyStore,
+		notifySender:  cfg.NotifySender,
 		rbac:               &users.RBAC{Secret: cfg.JWTSecret, Users: cfg.Users},
 		publicURL:          cfg.PublicURL,
 		sessions:           cfg.Sessions,
@@ -307,6 +329,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	registerSettings(s, mux)
 	registerClients(s, mux)
 	registerUsers(s, mux)      // gap #3: operator accounts + API tokens (admin-only)
+	registerTickets(s, mux)    // gap #7: helpdesk tickets (queue, SLA, notes)
+	registerNotify(s, mux)     // gap #6: notification channels + policies
 	registerSession(s, mux)    // gap #1a: remote session + file download routes
 	registerMaintenance(s, mux) // gap #10b: maintenance windows + snooze
 	registerReports(s, mux)     // gap #8b: scheduled + on-demand reports

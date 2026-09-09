@@ -31,6 +31,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/ca"
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
+	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/sessionrelay"
@@ -778,8 +779,26 @@ func main() {
 	svc, grpcServer, mtlsServer := wireIngest(version, jwtSecret, grpcAddr, grpcMTLSAddr, httpAddr,
 		indexer, caMgr, capsIssuer, logSink, flowBus, publishEvent, metricsSink, devicesStore, sessionRelay)
 
+	// gap #7: helpdesk ticketing (see wire_tickets.go). The ticket store
+	// is created early so heal escalations can create real tickets.
+	ticketStore, _ := wireTickets(hasPG, pgPool)
+	defer func() { if ticketStore != nil { log.Println("tickets: shutdown") } }()
+
+	// gap #6: notification channels + policies (see wire_notify.go).
+	notifyStore, notifySender := wireNotify(hasPG, pgPool)
+
 	// ---- self-healing playbook engine (W5-1) ---------------------------
-	healEngine := wireHealEngine(hasPG, pgPool, svc, publishEvent)
+	// When the ticket store is available, heal escalations create real
+	// tickets via the ticket notifier (gap #7).
+	var ticketNotifier heal.Notifier = nil
+	if ticketStore != nil {
+		ticketNotifier = ticketHealNotifier{
+			log:  log.New(os.Stderr, "selfheal: ", 0),
+			store: ticketStore,
+			pub: publishEvent,
+		}
+	}
+	healEngine := wireHealEngine(hasPG, pgPool, svc, publishEvent, ticketNotifier)
 
 	// ---- event-driven automation chains (W5-2) -------------------------
 	flowEngine := wireFlowEngine(hasPG, flowBus, pgPool, svc, publishEvent)
@@ -869,8 +888,11 @@ func main() {
 		Setup:     setupSvc,
 		Clients:   clientsStore,
 		Users:     usersStore,
-		Maint:     maintStore,
-		Reports:   reportsStore,
+		Maint:         maintStore,
+		Reports:       reportsStore,
+		Tickets:       ticketStore,
+		NotifyStore:   notifyStore,
+		NotifySender:  notifySender,
 		PublicURL: publicURL(),
 	})
 	apiSrv.Register(mux)
