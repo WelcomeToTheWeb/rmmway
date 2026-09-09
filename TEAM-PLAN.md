@@ -303,3 +303,26 @@ wk  C                    B                    A
   - **Round 2** (after round 1 merges): lane A = #1a remote session phase 1
     (screen capture + file transfer + relay + viewer API); lane C = #8a fleet
     dashboard home + #10b mobile pass. Lane B wave-2 scope is #3 only.
+- Round 1 results (supervisor-verified merges):
+  - **Lane C** → merge `bfa059d` (5 commits: `d5aca41`, `f4c4d67`, `bdc5454`,
+    `f2dd2d3`, `4538467`). Device-table ergonomics complete: URL-shareable
+    view state (`#/devices?sort=<key>:<dir>&hidden=<keys>&client=<id>`),
+    sortable headers (aria-sort), client column + `?client=` filter,
+    primary-IP cell with keyboard expand (aria-expanded), column show/hide
+    kit-level `Menu.jsx`. Prettier settle of `kit.css` (last 1-space CSS
+    file) + rig client fixtures; 4 screenshots in `docs/gap10a-device-table/`.
+  - **Lane A** → merge `78ca52f` (7 commits: `62f2abb`, `7355b4e`, `862a9ab`,
+    `59cd3d0`, `3485089`, `2a8a5ee` + supervisor fix `f5c2126`). Gap #5
+    remainder shipped: `load.avg1/5/15`, `swap.used_percent`, per-device
+    `disk.io_*`, exec `smartctl` `smart.health/reallocated_sectors` (silent
+    when absent), top-N `process.*` (CPU-second deltas in-agent),
+    `cert.days_to_expiry` (capped PEM scan of `RMMWAY_CERT_DIRS`), and the
+    `agent/internal/osevent` package (journalctl / wevtutil / log show,
+    stable content-derived entry IDs, persisted offset, `RMMWAY_EVENTLOG*
+    `). Supervisor caught + fixed a real regression: W14 e2e heartbeat window
+    (280ms) too tight for the expanded Collect() (~100–250ms under load) →
+    widened to 2.4s (`f5c2126`), 5/5 green. Gate: unit + integration suites
+    green, 6 static binaries + `verify-agent` green, live `collect` smoke on
+    merged main ships all new families.
+  - **Lane B** → in flight (4 commits at nudge: 0011, UserStore, TOTP+JWT,
+    unified login w/ MFA); middleware + route audit next.
