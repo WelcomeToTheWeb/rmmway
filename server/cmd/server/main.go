@@ -822,6 +822,12 @@ func main() {
 	// gap #3: operator accounts + RBAC (see wire_users.go).
 	usersStore := wireUsers(hasPG, pgPool)
 
+	// gap #10b: maintenance windows + snooze (see wire_maintenance.go).
+	maintStore := wireMaintenance(hasPG, pgPool)
+
+	// gap #8b: reports (see wire_reports.go).
+	reportsStore := wireReports(hasPG, pgPool)
+
 	// Per-device metrics viewer: the operator UI's device-detail charts read
 	// the metric series the agents report (Timescale hypertable).
 	metricsView := store.NewPostgresMetricsView(pgPool)
@@ -863,6 +869,8 @@ func main() {
 		Setup:     setupSvc,
 		Clients:   clientsStore,
 		Users:     usersStore,
+		Maint:     maintStore,
+		Reports:   reportsStore,
 		PublicURL: publicURL(),
 	})
 	apiSrv.Register(mux)

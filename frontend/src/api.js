@@ -578,4 +578,35 @@ export const api = {
   // DELETE /api/users/{id}/tokens/{tid} -> {ok} (revoke; 404 unknown).
   revokeUserToken: (token, id, tid) =>
     request(`/api/users/${id}/tokens/${tid}`, { method: "DELETE", token }),
+
+  // ---- gap #8b: reports (wave 3, lane C) --------------------------------
+  // GET /api/reports/schedules -> { schedules: [] }
+  reportSchedules: (token) => request("/api/reports/schedules", { token }),
+
+  // POST /api/reports/schedules { name, report_type, schedule, client_id?, output_format? }
+  createReportSchedule: (token, body) =>
+    request("/api/reports/schedules", { method: "POST", token, body }),
+
+  // DELETE /api/reports/schedules/{id} -> { ok }
+  deleteReportSchedule: (token, id) =>
+    request(`/api/reports/schedules/${id}`, { method: "DELETE", token }),
+
+  // GET /api/reports/runs?limit= -> { runs: [] }
+  reportRuns: (token) => request("/api/reports/runs", { token }),
+
+  // POST /api/reports/generate { report_type, client_id?, device_id?, output_format? }
+  generateReport: (token, body) =>
+    request("/api/reports/generate", { method: "POST", token, body }),
+
+  // ---- gap #1a: remote session (Lane A owns backend, Lane C owns viewer) ---
+  // POST /api/devices/{id}/session/start { fps? } -> { session_id, fps, device_id }
+  startSession: (token, deviceID, body) =>
+    request(`/api/devices/${deviceID}/session/start`, { method: "POST", token, body }),
+
+  // POST /api/devices/{id}/session/stop { session_id } -> { stopped: true }
+  stopSession: (token, deviceID, body) =>
+    request(`/api/devices/${deviceID}/session/stop`, { method: "POST", token, body }),
+
+  // SSE stream: GET /api/devices/{id}/session/stream?token=... -> text/event-stream
+  // (handled directly by EventSource in SessionViewer.jsx)
 };

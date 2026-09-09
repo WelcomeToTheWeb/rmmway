@@ -72,6 +72,10 @@ type Engine struct {
 
 	sweepInterval  time.Duration
 	sampleInterval time.Duration
+
+	// scheduleLastFire tracks the last fire time for schedule-triggered
+	// flows so they only fire once per interval.
+	scheduleLastFire map[int64]time.Time
 }
 
 // New builds an Engine. bus, remediate and results are required; notify
@@ -89,13 +93,14 @@ func New(st *Store, bus Bus, remediate Remediator, results ResultLookup, notify 
 		sampleInterval = 60 * time.Second
 	}
 	return &Engine{
-		store:          st,
-		bus:            bus,
-		remediate:      remediate,
-		results:        results,
-		notify:         notify,
-		sweepInterval:  sweepInterval,
-		sampleInterval: sampleInterval,
+		store:            st,
+		bus:              bus,
+		remediate:        remediate,
+		results:          results,
+		notify:           notify,
+		sweepInterval:    sweepInterval,
+		sampleInterval:   sampleInterval,
+		scheduleLastFire: make(map[int64]time.Time),
 	}
 }
 
@@ -194,8 +199,12 @@ func (e *Engine) handleTrigger(ctx context.Context, ev *Event) error {
 		return nil
 	}
 
-	// Resolve the measurement: the event carries it (synthetic), else the
-	// device's latest fresh sample (real). No measurement = no trigger.
+	// Schedule triggers don't have a metric condition; they fire on time.
+	if trig.Kind == KindSchedule {
+		return e.handleScheduleTrigger(ctx, f, trig, ev)
+	}
+
+	// Metric trigger: resolve the measurement.
 	var value float64
 	var at time.Time
 	if ev.Value != nil {
@@ -210,15 +219,48 @@ func (e *Engine) handleTrigger(ctx context.Context, ev *Event) error {
 	if !trig.Holds(value) {
 		return nil // condition not actually met (e.g. synthetic value below threshold)
 	}
-	// Anti-storm: a run already in flight (the DB's job) or one started
-	// within the flow's cooldown.
+	return e.handleMetricTrigger(ctx, f, trig, ev, value, at)
+}
+
+// handleScheduleTrigger creates a run for a schedule-triggered flow.
+func (e *Engine) handleScheduleTrigger(ctx context.Context, f *Flow, trig *Node, ev *Event) error {
+	value := 1.0
+	at := ev.At
+	// Anti-storm: check cooldown.
 	if f.CooldownS > 0 {
 		if cd, err := e.store.CooldownStarted(ctx, f.ID, ev.DeviceID, ev.Source, time.Now().Add(-time.Duration(f.CooldownS)*time.Second)); err == nil && cd {
 			e.logf("trigger: %s/%s within cooldown (%ds) — dropped", f.Name, ev.DeviceID, f.CooldownS)
 			return nil
 		}
 	}
+	run, created, err := e.store.InsertRun(ctx, f, ev.DeviceID, ev.Source, &value, at)
+	if err != nil {
+		return err
+	}
+	if !created {
+		return nil // an active run for this (flow, device, source) already exists
+	}
+	e.logf("trigger: %s fired for %s (schedule) -> run %d",
+		f.Name, ev.DeviceID, run.ID)
+	applied, err := e.store.AdvanceTo(ctx, run.ID, trig.ID, trig.Next,
+		"schedule trigger", at)
+	if err != nil {
+		return err
+	}
+	if applied && trig.Next != "" {
+		return e.publishStep(ctx, run.ID, trig.Next)
+	}
+	return nil
+}
 
+// handleMetricTrigger creates a run for a metric-triggered flow.
+func (e *Engine) handleMetricTrigger(ctx context.Context, f *Flow, trig *Node, ev *Event, value float64, at time.Time) error {
+	if f.CooldownS > 0 {
+		if cd, err := e.store.CooldownStarted(ctx, f.ID, ev.DeviceID, ev.Source, time.Now().Add(-time.Duration(f.CooldownS)*time.Second)); err == nil && cd {
+			e.logf("trigger: %s/%s within cooldown (%ds) — dropped", f.Name, ev.DeviceID, f.CooldownS)
+			return nil
+		}
+	}
 	run, created, err := e.store.InsertRun(ctx, f, ev.DeviceID, ev.Source, &value, at)
 	if err != nil {
 		return err
@@ -228,11 +270,8 @@ func (e *Engine) handleTrigger(ctx context.Context, ev *Event) error {
 	}
 	e.logf("trigger: %s fired for %s (%s): %s = %v -> run %d",
 		f.Name, ev.DeviceID, ev.Source, trig.DescribeCondition(), value, run.ID)
-
-	// Hop the run onto its first action node (trigger-only flows terminate
-	// here), then publish the step — every chain move is a bus event.
 	applied, err := e.store.AdvanceTo(ctx, run.ID, trig.ID, trig.Next,
-		fmt.Sprintf("trigger %s = %v", trig.DescribeCondition(), value), time.Now().UTC())
+		fmt.Sprintf("trigger %s = %v", trig.DescribeCondition(), value), at)
 	if err != nil {
 		return err
 	}
@@ -504,6 +543,7 @@ func (e *Engine) Sweep(ctx context.Context, now time.Time) {
 // SampleOnce is the REAL trigger path: for every enabled flow whose
 // trigger is a metric condition, look at the latest fresh sample per
 // (device, source) and publish a trigger event where the condition holds.
+// Also checks schedule-triggered flows and fires them when due.
 // Returns the number of trigger events published.
 func (e *Engine) SampleOnce(ctx context.Context, now time.Time) int {
 	flows, err := e.store.ListFlows(ctx, true)
@@ -515,7 +555,28 @@ func (e *Engine) SampleOnce(ctx context.Context, now time.Time) int {
 	for i := range flows {
 		f := &flows[i]
 		trig := f.Graph.Trigger()
-		if trig == nil || trig.Metric == "" {
+		if trig == nil {
+			continue
+		}
+		// Schedule trigger: fire when interval has elapsed since last fire.
+		if trig.Kind == KindSchedule {
+			if e.scheduleFireDue(f, trig, now) {
+				deviceID := trig.ScheduleDevice
+				ev := &Event{Type: SubjectTrigger, FlowID: f.ID, DeviceID: deviceID, Source: "schedule", At: now}
+				if err := e.bus.Publish(ctx, SubjectTrigger, ev); err != nil {
+					e.logf("sampler: publish schedule %s: %v", f.Name, err)
+				} else {
+					if prev, ok := e.scheduleLastFire[f.ID]; ok {
+						e.logf("sampler: schedule %s fired (last %s ago)", f.Name, now.Sub(prev).Round(time.Second))
+					}
+					e.scheduleLastFire[f.ID] = now
+					n++
+				}
+			}
+			continue
+		}
+		// Metric trigger: check the condition.
+		if trig.Metric == "" {
 			continue
 		}
 		samples, err := e.store.FreshSamples(ctx, trig.Metric, trig.Source, now, 5*time.Minute)
@@ -538,6 +599,22 @@ func (e *Engine) SampleOnce(ctx context.Context, now time.Time) int {
 		}
 	}
 	return n
+}
+
+// scheduleFireDue reports whether a schedule-triggered flow should fire
+// at now. The interval must have elapsed since the last fire (or first
+// fire ever).
+func (e *Engine) scheduleFireDue(f *Flow, trig *Node, now time.Time) bool {
+	d, err := time.ParseDuration(trig.Schedule)
+	if err != nil {
+		e.logf("sampler: %s: bad schedule interval %q: %v", f.Name, trig.Schedule, err)
+		return false
+	}
+	last, ok := e.scheduleLastFire[f.ID]
+	if !ok {
+		return true // never fired
+	}
+	return now.Sub(last) >= d
 }
 
 // Trigger publishes a synthetic trigger event for a flow + device (the
