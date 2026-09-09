@@ -28,18 +28,20 @@ import (
 
 // Node kinds (flow graph node "kind" field).
 const (
-	KindTrigger = "trigger"
-	KindScript  = "script"
-	KindCheck   = "check"
-	KindNotify  = "notify"
+	KindTrigger  = "trigger"
+	KindSchedule = "schedule"
+	KindScript   = "script"
+	KindCheck    = "check"
+	KindNotify   = "notify"
 )
 
 // Node is one vertex of a flow DAG. Fields apply per kind:
 //
-//	trigger: Metric, Source, Op, Threshold
-//	script:  Lang, Script, TimeoutS
-//	check:   Metric, Source, Op, Threshold, Then, Else
-//	notify:  Message
+//	trigger:  Metric, Source, Op, Threshold
+//	schedule: Schedule (ISO 8601 duration), DeviceID (optional), Next
+//	script:   Lang, Script, TimeoutS
+//	check:    Metric, Source, Op, Threshold, Then, Else
+//	notify:   Message
 //
 // Edges: linear nodes (trigger, script, notify) use Next; check uses
 // Then/Else. An empty edge target means "the chain ends here" (allowed
@@ -55,6 +57,11 @@ type Node struct {
 	Source    string  `json:"source,omitempty"`
 	Op        string  `json:"op,omitempty"`
 	Threshold float64 `json:"threshold,omitempty"`
+
+	// schedule trigger: ISO 8601 duration ("1h", "30m", "24h").
+	Schedule string `json:"schedule,omitempty"`
+	// schedule trigger: target device (optional; empty = fleet-wide).
+	ScheduleDevice string `json:"schedule_device,omitempty"`
 
 	// script.
 	Lang     string `json:"lang,omitempty"`
@@ -176,7 +183,7 @@ func (g *Graph) Validate() error {
 			return fmt.Errorf("duplicate node id %q", n.ID)
 		}
 		seen[n.ID] = true
-		if n.Kind == KindTrigger {
+		if n.Kind == KindTrigger || n.Kind == KindSchedule {
 			triggers++
 		}
 	}
@@ -188,6 +195,10 @@ func (g *Graph) Validate() error {
 		case KindTrigger:
 			if err := checkCondition(n); err != nil {
 				return fmt.Errorf("node %q: %v", n.ID, err)
+			}
+		case KindSchedule:
+			if n.Schedule == "" {
+				return fmt.Errorf("schedule node %q needs a schedule interval (e.g. '1h')", n.ID)
 			}
 		case KindScript:
 			if n.Lang == "" || strings.TrimSpace(n.Script) == "" {
@@ -223,7 +234,7 @@ func (g *Graph) Validate() error {
 		}
 	}
 	if triggers != 1 {
-		return fmt.Errorf("flow has %d trigger nodes, want exactly 1", triggers)
+		return fmt.Errorf("flow has %d trigger/schedule nodes, want exactly 1", triggers)
 	}
 	// Cycles: iterative DFS over the explicit edges (white/grey/black).
 	color := map[string]int{} // 0 white, 1 grey, 2 black
