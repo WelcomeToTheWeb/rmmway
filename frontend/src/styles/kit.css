@@ -192,6 +192,40 @@ table.devices tbody tr:last-child td {
  max-width: 220px;
 }
 
+/* sortable headers (gap #10a): the <th> keeps its table role, a real
+   <button> inside is the keyboard-operable control; the th's aria-sort
+   mirrors the active direction for screen readers. */
+.th-btn {
+ display: flex;
+ align-items: center;
+ gap: 6px;
+ width: 100%;
+ text-align: left;
+ font: inherit;
+ letter-spacing: inherit;
+ text-transform: inherit;
+ font-weight: inherit;
+ color: inherit;
+ background: none;
+ border: 0;
+ padding: 0;
+ cursor: pointer;
+ transition: color var(--transition-fast);
+}
+.th-btn:hover {
+ color: var(--fg);
+}
+.th-btn:focus-visible {
+ outline: 2px solid var(--accent);
+ outline-offset: 2px;
+ border-radius: var(--radius-xs);
+}
+.sort-ind {
+ font-size: 10px;
+ line-height: 1;
+ color: var(--accent);
+}
+
 /* shared compact event table (flows runs + per-device events) */
 table.events {
  width: 100%;

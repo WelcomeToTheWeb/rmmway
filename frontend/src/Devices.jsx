@@ -67,6 +67,37 @@ function tableStateToHash(state) {
   return "#/devices" + (qs ? `?${qs}` : "");
 }
 
+// Base comparator for a sort key — always in its "natural" direction; the
+// header cycle applies the direction as a multiplier. Strings compare
+// case-insensitively. "status" orders online first, then most-recently-seen
+// first, so sorting by Status reads like a health board.
+function compareDevices(a, b, key, clientName) {
+  const strCmp = (x, y) =>
+    String(x == null ? "" : x)
+      .toLowerCase()
+      .localeCompare(String(y == null ? "" : y).toLowerCase());
+  switch (key) {
+    case "host":
+      return strCmp(a.hostname, b.hostname);
+    case "client":
+      return strCmp(clientName(a), clientName(b));
+    case "os":
+      return strCmp(a.os + "/" + a.arch, b.os + "/" + b.arch);
+    case "agent":
+      return strCmp(a.agent_version, b.agent_version);
+    case "ips":
+      return strCmp((a.interfaces || [])[0], (b.interfaces || [])[0]);
+    case "status": {
+      if (a.online !== b.online) return a.online ? -1 : 1;
+      const at = a.last_seen ? Date.parse(a.last_seen) : 0;
+      const bt = b.last_seen ? Date.parse(b.last_seen) : 0;
+      return bt - at;
+    }
+    default:
+      return 0;
+  }
+}
+
 function relTime(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -516,7 +547,7 @@ export default function Devices({
   const [tableState, setTableState] = useState(() =>
     parseTableState(window.location.hash),
   );
-  const { hidden, client } = tableState;
+  const { sort, hidden, client } = tableState;
   // MSP clients for the Client column + the toolbar filter (gap #2 surface —
   // B owns the store, this view only reads /api/clients). null = loading.
   const [clients, setClients] = useState(null);
@@ -637,6 +668,29 @@ export default function Devices({
   const visibleColumns = COLUMNS.filter(
     (c) => !c.hideable || !hidden.has(c.key),
   );
+  // Client-side sort over the (server-scoped) list; the server's order is
+  // the natural order while no sort is set.
+  const sorted = useMemo(() => {
+    if (!sort) return filtered;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return [...filtered].sort(
+      (a, b) => compareDevices(a, b, sort.key, clientName) * dir,
+    );
+  }, [filtered, sort, clientName]);
+  // Three-state header cycle: natural order → asc → desc → natural. Each
+  // step is a URL state change, so every step is linkable.
+  const onSortClick = (key) => {
+    setTableState((prev) => {
+      const cur = prev.sort;
+      const next =
+        !cur || cur.key !== key
+          ? { key, dir: "asc" }
+          : cur.dir === "asc"
+            ? { key, dir: "desc" }
+            : null;
+      return { ...prev, sort: next };
+    });
+  };
   const onlineCount = (devices || []).filter((d) => d.online).length;
   const total = (devices || []).length;
   const clientLabel = client
@@ -745,12 +799,47 @@ export default function Devices({
             <thead>
               <tr>
                 {visibleColumns.map((c) => (
-                  <th key={c.key}>{c.label}</th>
+                  <th
+                    key={c.key}
+                    aria-sort={
+                      sort && sort.key === c.key
+                        ? sort.dir === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : undefined
+                    }
+                  >
+                    {c.sortable ? (
+                      <button
+                        className={
+                          "th-btn" +
+                          (sort && sort.key === c.key ? " active" : "")
+                        }
+                        onClick={() => onSortClick(c.key)}
+                        title={
+                          sort && sort.key === c.key
+                            ? `Sorted ${
+                                sort.dir === "asc" ? "ascending" : "descending"
+                              } — click to change direction`
+                            : `Sort by ${c.label.toLowerCase()}`
+                        }
+                      >
+                        {c.label}
+                        {sort && sort.key === c.key && (
+                          <span className="sort-ind" aria-hidden="true">
+                            {sort.dir === "asc" ? "▲" : "▼"}
+                          </span>
+                        )}
+                      </button>
+                    ) : (
+                      c.label
+                    )}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filtered.map((d) => (
+              {sorted.map((d) => (
                 <Fragment key={d.id}>
                   <DeviceRow
                     d={d}
