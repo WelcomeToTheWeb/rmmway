@@ -259,7 +259,7 @@ wk  C                    B                    A
   table + fixed-id `unassigned` seed + device backfill + `devices.client_id`),
   PG + in-memory `ClientStore` (`4af04ac`), clients API + `?client=` scoping on
   devices/alerts incl. `unassigned` (`9709d28`), `Clients.jsx` + `clients.css`
-  + api.js helpers (`b877527`). Merged `1629bf7` → `1c742e2` (--no-ff; three
+  and api.js helpers (`b877527`). Merged `1629bf7` → `1c742e2` (--no-ff; three
   purely-additive conflicts — api.js, styles.css, httpapi.go — resolved
   keep-both). Supervisor then wired the Clients nav item + route into
   `App.jsx` (`4b2414c`), build +8 kB as expected.
