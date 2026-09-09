@@ -317,8 +317,8 @@ func registerWebhooks(s *Server, mux *http.ServeMux) {
 	// (HMAC secret + categories); /events/stream is the SSE subscription,
 	// /events is the REST catch-up query. The stream route accepts the JWT
 	// via ?token= (EventSource can't set headers). /admin mirrors for e2e/ops.
-	mux.HandleFunc("/api/webhooks", s.requireOperator(s.handleWebhooks))
-	mux.HandleFunc("/api/webhooks/", s.requireOperator(s.handleWebhookSub))
-	mux.HandleFunc("/admin/webhooks", s.requireOperator(s.handleWebhooks))
-	mux.HandleFunc("/admin/webhooks/", s.requireOperator(s.handleWebhookSub))
+	mux.HandleFunc("/api/webhooks", s.rbacRoleGate(s.handleWebhooks, "admin"))
+	mux.HandleFunc("/api/webhooks/", s.rbacRoleGate(s.handleWebhookSub, "admin"))
+	mux.HandleFunc("/admin/webhooks", s.rbacRoleGate(s.handleWebhooks, "admin"))
+	mux.HandleFunc("/admin/webhooks/", s.rbacRoleGate(s.handleWebhookSub, "admin"))
 }

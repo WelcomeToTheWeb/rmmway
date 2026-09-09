@@ -30,16 +30,17 @@ import (
 
 	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/smtp"
+	"github.com/welcometotheweb/rmmway/server/internal/users"
 )
 
 func registerSettings(s *Server, mux *http.ServeMux) {
-	gated := s.requireOperator(s.handleSettings)
+	gated := s.rbacGate(s.handleSettings)
 	mux.HandleFunc("/api/settings", gated)
 	mux.HandleFunc("/admin/settings", gated)
-	test := s.requireOperator(s.handleSettingsSMTPTest)
+	test := s.rbacRoleGate(s.handleSettingsSMTPTest, "admin")
 	mux.HandleFunc("/api/settings/smtp/test", test)
 	mux.HandleFunc("/admin/settings/smtp/test", test)
-	password := s.requireOperator(s.handleSettingsProfilePassword)
+	password := s.rbacRoleGate(s.handleSettingsProfilePassword, "admin", "tech")
 	mux.HandleFunc("/api/settings/profile/password", password)
 	mux.HandleFunc("/admin/settings/profile/password", password)
 }
@@ -104,21 +105,29 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 //	200 { org_name, smtp: {host, port, from, username, pass_set,
 //	      configured}, profile: {username, mfa_enabled} }
 //
-// mfa_enabled is pinned to false: TOTP MFA lands in wave 2 (B #3) and
-// flips this from its own lane — the UI renders the row as "not yet
-// enabled" meanwhile.
+// mfa_enabled (gap #3): the session's own TOTP enrollment state from the
+// users table — false when the users store is unwired (in-memory mode) or
+// the session is a legacy (pre-account) token.
 func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	username, stored, err := s.currentUsername(r.Context())
 	if err != nil {
 		http.Error(w, "settings: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	mfaEnabled := false
+	if s.users != nil {
+		if sess, ok := users.SessionFromContext(r.Context()); ok && sess.Username != "" {
+			if u, err := s.users.GetByUsername(r.Context(), sess.Username); err == nil {
+				mfaEnabled = u.TotpSecret != ""
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"org_name": stored.OrgName,
 		"smtp":     settingsSMTPReadModel(stored.SMTP, stored.SMTP.Password != ""),
 		"profile": map[string]any{
 			"username":    username,
-			"mfa_enabled": false,
+			"mfa_enabled": mfaEnabled,
 		},
 	})
 }
@@ -133,6 +142,11 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 // read model never returns the password, so the masked form cannot re-send
 // it. Clearing the outbox (blank host) wipes it.
 func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
+	// gap #3: the SMTP outbox is org config (admin-only; the profile
+	// password route carries its own admin|tech gate at registration).
+	if !requireRole(w, r, "admin") {
+		return
+	}
 	if s.setup == nil {
 		http.Error(w, "settings require a database (in-memory mode)", http.StatusServiceUnavailable)
 		return

@@ -137,12 +137,12 @@ func registerHeal(s *Server, mux *http.ServeMux) {
 	// W5-1: self-healing playbook engine — playbooks, runs (+ stage log),
 	// and a manual pass trigger. /admin mirrors below for e2e/ops (C1:
 	// auth-gated).
-	mux.HandleFunc("/api/heal/playbooks", s.requireOperator(s.handleHealPlaybooks))
-	mux.HandleFunc("/api/heal/runs", s.requireOperator(s.handleHealRuns))
-	mux.HandleFunc("/api/heal/runs/", s.requireOperator(s.handleHealRunSub))
-	mux.HandleFunc("/api/heal/pass", s.requireOperator(s.handleHealPass))
-	mux.HandleFunc("/admin/heal/playbooks", s.requireOperator(s.handleHealPlaybooks))
-	mux.HandleFunc("/admin/heal/runs", s.requireOperator(s.handleHealRuns))
-	mux.HandleFunc("/admin/heal/runs/", s.requireOperator(s.handleHealRunSub))
-	mux.HandleFunc("/admin/heal/pass", s.requireOperator(s.handleHealPass))
+	mux.HandleFunc("/api/heal/playbooks", s.rbacRoleGate(s.handleHealPlaybooks, "admin"))
+	mux.HandleFunc("/api/heal/runs", s.rbacRoleGate(s.handleHealRuns, "admin"))
+	mux.HandleFunc("/api/heal/runs/", s.rbacRoleGate(s.handleHealRunSub, "admin"))
+	mux.HandleFunc("/api/heal/pass", s.rbacRoleGate(s.handleHealPass, "admin"))
+	mux.HandleFunc("/admin/heal/playbooks", s.rbacRoleGate(s.handleHealPlaybooks, "admin"))
+	mux.HandleFunc("/admin/heal/runs", s.rbacRoleGate(s.handleHealRuns, "admin"))
+	mux.HandleFunc("/admin/heal/runs/", s.rbacRoleGate(s.handleHealRunSub, "admin"))
+	mux.HandleFunc("/admin/heal/pass", s.rbacRoleGate(s.handleHealPass, "admin"))
 }

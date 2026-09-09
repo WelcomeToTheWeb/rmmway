@@ -237,6 +237,31 @@ func (s *AlertStore) Counts(ctx context.Context) (map[string]int, error) {
 	return out, rows.Err()
 }
 
+// CountsClient is Counts scoped to one MSP client's devices (gap #3, wave 2,
+// lane B) — the non-admin badge union sums this per granted client. Same
+// DefaultClientID = unassigned (NULL) semantics as ListClient.
+func (s *AlertStore) CountsClient(ctx context.Context, clientID string) (map[string]int, error) {
+	out := map[string]int{"open": 0, "acked": 0, "resolved": 0}
+	sub := "a.device_id IN (SELECT id FROM devices WHERE client_id = $1)"
+	if clientID == DefaultClientID {
+		sub = "a.device_id IN (SELECT id FROM devices WHERE client_id IS NULL OR client_id = $1)"
+	}
+	rows, err := s.db.Query(ctx, "SELECT status, count(*) FROM alerts a WHERE "+sub+" GROUP BY status", clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var st string
+		var n int
+		if err := rows.Scan(&st, &n); err != nil {
+			return nil, err
+		}
+		out[st] = n
+	}
+	return out, rows.Err()
+}
+
 // SetStatus applies a manual inbox transition: open -> acked | resolved,
 // acked -> resolved. Anything else (including re-opening) is refused.
 func (s *AlertStore) SetStatus(ctx context.Context, id int64, status string) (*Alert, error) {

@@ -152,10 +152,10 @@ func registerEnroll(s *Server, mux *http.ServeMux) {
 	// (It used to be open "for machine callers", but the only machine
 	// endpoints the agent needs are /agent/enroll + /agent/releases/*;
 	// minting an enroll token is an operator decision.)
-	mux.HandleFunc("/admin/bootstrap", s.requireOperator(s.handleBootstrap))
+	mux.HandleFunc("/admin/bootstrap", s.rbacRoleGate(s.handleBootstrap, "admin"))
 	// "Add a device": the auth-gated mint (the UI mints a token to hand to an
 	// installer) and the OPEN bootstrap enroll a remote agent calls over the
 	// operator's HTTPS origin (machine caller, like /agent/releases).
-	mux.HandleFunc("/api/bootstrap", s.requireOperator(s.handleBootstrapMint))
+	mux.HandleFunc("/api/bootstrap", s.rbacRoleGate(s.handleBootstrapMint, "admin"))
 	mux.HandleFunc("/agent/enroll", s.handleAgentEnroll)
 }

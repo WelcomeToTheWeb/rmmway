@@ -37,6 +37,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
+	"github.com/welcometotheweb/rmmway/server/internal/users"
 	"github.com/welcometotheweb/rmmway/server/internal/releases"
 	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
@@ -109,6 +110,10 @@ type Server struct {
 	// in-memory mode: /api/login delegates to the legacy env/admin_users
 	// path and scoping is off (every session is a grandfathered admin).
 	users store.UserStore
+	// rbac (gap #3) resolves session JWTs + rmm_ API tokens into scoped
+	// Sessions for the route gates (rbacGate/rbacScopeGate/rbacRoleGate
+	// in domain_users.go). Always built; the Users store may be nil.
+	rbac *users.RBAC
 	// publicURL (if set) is the configured public operator URL
 	// (RMMWAY_PUBLIC_URL). The Add Device UI reads this via
 	// GET /api/public-url to prefill the server URL field.
@@ -252,6 +257,7 @@ func New(cfg Config) *Server {
 		setup:         cfg.Setup,
 		clients:       cfg.Clients,
 		users:         cfg.Users,
+		rbac:          &users.RBAC{Secret: cfg.JWTSecret, Users: cfg.Users},
 		publicURL:     cfg.PublicURL,
 	}
 }
@@ -276,6 +282,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	registerCommands(s, mux)
 	registerSettings(s, mux)
 	registerClients(s, mux)
+	registerUsers(s, mux) // gap #3: operator accounts + API tokens (admin-only)
 }
 
 type loginRequest struct {

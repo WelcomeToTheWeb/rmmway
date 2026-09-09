@@ -1,13 +1,16 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/welcometotheweb/rmmway/server/internal/baseline"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
+	"github.com/welcometotheweb/rmmway/server/internal/users"
 )
 
 // ---- W2-3: dynamic baselining ----------------------------------------------
@@ -107,8 +110,13 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	var rows []store.Alert
 	var err error
 	if clientID != "" {
-		// gap #2: ?client=<id> scopes the inbox to one client's devices.
+		// gap #2: ?client=<id> scopes the inbox to one client's devices
+		// (gap #3: grant-validated for non-admins by the scope gate).
 		rows, err = s.alerts.ListClient(r.Context(), clientID, status, deviceID, limit)
+	} else if sess, ok := users.SessionFromContext(r.Context()); ok && !sess.AllClients {
+		// gap #3: a non-admin without ?client= sees the union of its
+		// granted clients, newest first, trimmed to the limit.
+		rows, err = s.alertsListUnion(r.Context(), sess, status, deviceID, limit)
 	} else {
 		rows, err = s.alerts.List(r.Context(), status, deviceID, limit)
 	}
@@ -120,6 +128,30 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		rows = []store.Alert{}
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+// alertsListUnion (gap #3) fetches the inbox across a non-admin's granted
+// clients, newest first, trimmed to the limit (each per-client fetch is
+// itself limited to the union's final size — overfetch at most n-fold).
+func (s *Server) alertsListUnion(ctx context.Context, sess users.Session, status, deviceID string, limit int) ([]store.Alert, error) {
+	merged := []store.Alert{}
+	for _, cid := range sess.ClientIDs {
+		rows, err := s.alerts.ListClient(ctx, cid, status, deviceID, limit)
+		if err != nil {
+			return nil, err
+		}
+		merged = append(merged, rows...)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].LastAt.Equal(merged[j].LastAt) {
+			return merged[i].ID > merged[j].ID
+		}
+		return merged[i].LastAt.After(merged[j].LastAt)
+	})
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged, nil
 }
 
 // alertCounts returns the per-status counts for the inbox badge.
@@ -137,6 +169,21 @@ func (s *Server) alertCounts(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "alert counts: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// gap #3: a non-admin badge counts only the union of its granted
+	// clients (per-client counts summed; the admin path stays one query).
+	if sess, ok := users.SessionFromContext(r.Context()); ok && !sess.AllClients {
+		counts = map[string]int{"open": 0, "acked": 0, "resolved": 0}
+		for _, cid := range sess.ClientIDs {
+			c, err := s.alerts.CountsClient(r.Context(), cid)
+			if err != nil {
+				http.Error(w, "alert counts: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			for k, v := range c {
+				counts[k] += v
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, counts)
 }
@@ -189,6 +236,26 @@ func (s *Server) handleAlertStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// gap #3: ack/resolve is an operational act (admin|tech) and must stay
+	// inside the session's client grants (the alert's device's client) —
+	// checked BEFORE the write so a denied request changes nothing.
+	if !requireRole(w, r, "admin", "tech") {
+		return
+	}
+	cur, err := s.alerts.Get(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "alert not found"})
+		return
+	}
+	if dev, err := s.devices.Get(r.Context(), cur.DeviceID); err == nil {
+		cid := dev.ClientID
+		if cid == "" {
+			cid = store.DefaultClientID
+		}
+		if !requireClientAccess(w, r, cid) {
+			return
+		}
+	}
 	a, err := s.alerts.SetStatus(r.Context(), id, in.Status)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -204,13 +271,13 @@ func (s *Server) handleAlertStatus(w http.ResponseWriter, r *http.Request) {
 // registerAlerts mounts the alert-inbox + baseline-anomaly routes (W2-3 baselining and W2-4 alerts live in one domain file).
 func registerAlerts(s *Server, mux *http.ServeMux) {
 	// W2-3: dynamic baselining — anomaly feed (auth-gated) + manual pass.
-	mux.HandleFunc("/api/baseline/anomalies", s.requireOperator(s.handleBaselineAnomalies))
-	mux.HandleFunc("/api/baseline/run", s.requireOperator(s.handleBaselineRun))
+	mux.HandleFunc("/api/baseline/anomalies", s.rbacRoleGate(s.handleBaselineAnomalies, "admin"))
+	mux.HandleFunc("/api/baseline/run", s.rbacRoleGate(s.handleBaselineRun, "admin"))
 	// W2-4: deduped alert inbox (auth-gated) + ack/resolve + counts.
-	mux.HandleFunc("/api/alerts", s.requireOperator(s.handleAlerts))
-	mux.HandleFunc("/api/alerts/", s.requireOperator(s.handleAlertSub))
-	mux.HandleFunc("/admin/baseline/anomalies", s.requireOperator(s.handleBaselineAnomalies))
-	mux.HandleFunc("/admin/baseline/run", s.requireOperator(s.handleBaselineRun))
-	mux.HandleFunc("/admin/alerts", s.requireOperator(s.handleAlerts))
-	mux.HandleFunc("/admin/alerts/", s.requireOperator(s.handleAlertSub))
+	mux.HandleFunc("/api/alerts", s.rbacScopeGate(s.handleAlerts))
+	mux.HandleFunc("/api/alerts/", s.rbacGate(s.handleAlertSub))
+	mux.HandleFunc("/admin/baseline/anomalies", s.rbacRoleGate(s.handleBaselineAnomalies, "admin"))
+	mux.HandleFunc("/admin/baseline/run", s.rbacRoleGate(s.handleBaselineRun, "admin"))
+	mux.HandleFunc("/admin/alerts", s.rbacScopeGate(s.handleAlerts))
+	mux.HandleFunc("/admin/alerts/", s.rbacGate(s.handleAlertSub))
 }

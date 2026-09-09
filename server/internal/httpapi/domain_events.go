@@ -165,8 +165,8 @@ func (s *Server) handleEventStream(w http.ResponseWriter, r *http.Request) {
 
 // registerEvents mounts the event-journal routes: the REST catch-up query and the live SSE stream (the stream route accepts the JWT via ?token=).
 func registerEvents(s *Server, mux *http.ServeMux) {
-	mux.HandleFunc("/api/events", s.requireOperator(s.handleEvents))
-	mux.HandleFunc("/api/events/stream", s.requireOperatorStream(s.handleEventStream))
-	mux.HandleFunc("/admin/events", s.requireOperator(s.handleEvents))
-	mux.HandleFunc("/admin/events/stream", s.requireOperatorStream(s.handleEventStream))
+	mux.HandleFunc("/api/events", s.rbacRoleGate(s.handleEvents, "admin"))
+	mux.HandleFunc("/api/events/stream", s.rbacRoleGate(s.handleEventStream, "admin"))
+	mux.HandleFunc("/admin/events", s.rbacRoleGate(s.handleEvents, "admin"))
+	mux.HandleFunc("/admin/events/stream", s.rbacRoleGate(s.handleEventStream, "admin"))
 }

@@ -131,6 +131,23 @@ func sessionFromUser(u *store.User) Session {
 	return sess
 }
 
+// Allows reports whether the session may pass a role gate (legacy
+// sessions count as admin). Exported for the handler-level role checks
+// the route audit adds (multiplex handlers can't use RequireRole at the
+// registration).
+func (s Session) Allows(roles ...string) bool {
+	role := s.Role
+	if s.Legacy {
+		role = RoleAdminValue
+	}
+	for _, want := range roles {
+		if role == want {
+			return true
+		}
+	}
+	return false
+}
+
 // RoleAdminValue is the admin role (mirrors store.RoleAdmin without the
 // middleware depending on the store's naming).
 const RoleAdminValue = "admin"
@@ -184,18 +201,7 @@ func (rb *RBAC) RequireClientScope(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // roleAllowed reports whether the session may pass a role gate.
-func roleAllowed(sess Session, roles []string) bool {
-	role := sess.Role
-	if sess.Legacy {
-		role = RoleAdminValue
-	}
-	for _, want := range roles {
-		if role == want {
-			return true
-		}
-	}
-	return false
-}
+func roleAllowed(sess Session, roles []string) bool { return sess.Allows(roles...) }
 
 func writeUnauthorized(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")

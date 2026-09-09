@@ -39,9 +39,9 @@ const (
 // wired (in-memory-mode deployments).
 func registerClients(s *Server, mux *http.ServeMux) {
 	for _, p := range []string{"/api", "/admin"} {
-		mux.HandleFunc(p+"/clients", s.requireOperator(s.handleClients))
-		mux.HandleFunc(p+"/clients/", s.requireOperator(s.handleClientsSub))
-		mux.HandleFunc(p+"/devices/{id}/client", s.requireOperator(s.handleDeviceClient))
+		mux.HandleFunc(p+"/clients", s.rbacGate(s.handleClients))
+		mux.HandleFunc(p+"/clients/", s.rbacGate(s.handleClientsSub))
+		mux.HandleFunc(p+"/devices/{id}/client", s.rbacRoleGate(s.handleDeviceClient, "admin"))
 	}
 }
 
@@ -117,6 +117,11 @@ func (s *Server) clientList(w http.ResponseWriter, r *http.Request) {
 //	409  name already taken
 //	503  client store not wired
 func (s *Server) createClient(w http.ResponseWriter, r *http.Request) {
+	// gap #3: the client registry is MSP-admin territory (tech/viewer
+	// clients are read-only).
+	if !requireRole(w, r, "admin") {
+		return
+	}
 	if s.clients == nil {
 		s.clientsUnwired(w)
 		return
@@ -182,6 +187,10 @@ func (s *Server) handleClientsSub(w http.ResponseWriter, r *http.Request) {
 //	409  new name already taken
 //	503  client store not wired
 func (s *Server) patchClient(w http.ResponseWriter, r *http.Request, id string) {
+	// gap #3: client edits are admin-only (see createClient).
+	if !requireRole(w, r, "admin") {
+		return
+	}
 	if s.clients == nil {
 		s.clientsUnwired(w)
 		return
