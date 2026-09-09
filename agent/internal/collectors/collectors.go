@@ -22,6 +22,11 @@
 //	                             10, cap 50 — first heartbeat after start
 //	                             has no delta and omits this family)
 //	process.memory_rss_bytes     <process name> (top N, RSS bytes)
+//	cert.days_to_expiry          <cert file path> (per PEM certificate found
+//	                             under RMMWAY_CERT_DIRS, default
+//	                             /etc/ssl/certs, scan capped at
+//	                             RMMWAY_CERT_SCAN_CAP — negative when
+//	                             already expired)
 //	net.bytes_total            <iface> (total rx+tx bytes since boot, per
 //	                           interface — loopback excluded)
 //	system.uptime_seconds      ""
@@ -94,6 +99,8 @@ type defaultCollector struct {
 	procs    ProcSampler
 	topN     int
 	now      func() time.Time
+	certDirs []string
+	certCap  int
 
 	procMu   sync.Mutex
 	procPrev map[string]procPrev
@@ -114,6 +121,8 @@ func NewCollector() Collector {
 		smart:    defaultSmartSampler,
 		procs:    defaultProcSampler,
 		topN:     parseTopProcs(os.Getenv("RMMWAY_TOP_PROCS")),
+		certDirs: parseCertDirs(os.Getenv("RMMWAY_CERT_DIRS")),
+		certCap:  parseCertScanCap(os.Getenv("RMMWAY_CERT_SCAN_CAP")),
 		now:      time.Now,
 	}
 }
@@ -146,6 +155,8 @@ type Samplers struct {
 	Procs    ProcSampler
 	TopN     int
 	Now      func() time.Time
+	CertDirs []string
+	CertCap  int
 }
 
 // NewCollectorWithSamplers returns a collector with the given probes
@@ -181,6 +192,12 @@ func NewCollectorWithSamplers(s Samplers) Collector {
 	}
 	if s.Now != nil {
 		c.now = s.Now
+	}
+	if s.CertDirs != nil {
+		c.certDirs = s.CertDirs
+	}
+	if s.CertCap > 0 {
+		c.certCap = s.CertCap
 	}
 	return c
 }
@@ -302,7 +319,7 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 		}
 	}
 
-	// 6. Disk I/O + SMART — per-device cumulative counters and SMART health
+	// 7. Disk I/O + SMART — per-device cumulative counters and SMART health
 	// (loop/ram/zram pseudo-devices excluded; smartctl absence is silent).
 	if c.diskIO != nil {
 		counters, err := c.diskIO(ctx)
@@ -321,12 +338,12 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 		}
 	}
 
-	// 7. Load averages — 1/5/15 min (host-wide; no source).
+	// 8. Load averages — 1/5/15 min (host-wide; no source).
 	if cerr := c.emitLoad(ctx, add); cerr != nil {
 		errs = append(errs, "load: "+cerr.Error())
 	}
 
-	// 8. Top-N processes — CPU% from deltas between consecutive collects;
+	// 9. Top-N processes — CPU% from deltas between consecutive collects;
 	// the first collect ranks by RSS and emits no process.cpu_percent.
 	if c.procs != nil {
 		stats, err := c.procs(ctx)
@@ -334,6 +351,14 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 			errs = append(errs, "procs: "+err.Error())
 		} else {
 			c.emitTopProcs(stats, add)
+		}
+	}
+
+	// 10. Certificate expiry — PEM scan of RMMWAY_CERT_DIRS (default
+	// /etc/ssl/certs); absent dirs and non-cert files are skipped silently.
+	if c.certDirs != nil {
+		if cerr := c.emitCerts(add); cerr != nil {
+			errs = append(errs, "certs: "+cerr.Error())
 		}
 	}
 
