@@ -17,6 +17,11 @@
 //	                             binary — absent or unreadable device means
 //	                             no sample, not an error)
 //	smart.reallocated_sectors    <device> (SMART attribute 5 raw value)
+//	process.cpu_percent          <process name> (top N by CPU%, per-name
+//	                             aggregate; N = RMMWAY_TOP_PROCS, default
+//	                             10, cap 50 — first heartbeat after start
+//	                             has no delta and omits this family)
+//	process.memory_rss_bytes     <process name> (top N, RSS bytes)
 //	net.bytes_total            <iface> (total rx+tx bytes since boot, per
 //	                           interface — loopback excluded)
 //	system.uptime_seconds      ""
@@ -35,7 +40,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -84,6 +91,12 @@ type defaultCollector struct {
 	load     LoadSampler
 	diskIO   DiskIOSampler
 	smart    SmartSampler
+	procs    ProcSampler
+	topN     int
+	now      func() time.Time
+
+	procMu   sync.Mutex
+	procPrev map[string]procPrev
 }
 
 // NewCollector returns the production collector (real gopsutil CPU window;
@@ -99,7 +112,23 @@ func NewCollector() Collector {
 		load:     defaultLoadSampler,
 		diskIO:   defaultDiskIOSampler,
 		smart:    defaultSmartSampler,
+		procs:    defaultProcSampler,
+		topN:     parseTopProcs(os.Getenv("RMMWAY_TOP_PROCS")),
+		now:      time.Now,
 	}
+}
+
+// parseTopProcs reads RMMWAY_TOP_PROCS (default 10; invalid values fall
+// back to the default rather than erroring at agent startup).
+func parseTopProcs(raw string) int {
+	if raw == "" {
+		return defaultTopProcs
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return defaultTopProcs
+	}
+	return n
 }
 
 // Samplers bundles every injectable probe for tests. A nil sampler falls
@@ -114,6 +143,9 @@ type Samplers struct {
 	Load     LoadSampler
 	DiskIO   DiskIOSampler
 	Smart    SmartSampler
+	Procs    ProcSampler
+	TopN     int
+	Now      func() time.Time
 }
 
 // NewCollectorWithSamplers returns a collector with the given probes
@@ -141,13 +173,22 @@ func NewCollectorWithSamplers(s Samplers) Collector {
 	if s.Smart != nil {
 		c.smart = s.Smart
 	}
+	if s.Procs != nil {
+		c.procs = s.Procs
+	}
+	if s.TopN > 0 {
+		c.topN = s.TopN
+	}
+	if s.Now != nil {
+		c.now = s.Now
+	}
 	return c
 }
 
 // NewCollectorWithCPU returns a collector with an injected CPU sampler
 // (used by tests to avoid the real sleep window).
 func NewCollectorWithCPU(sample cpuMeasure) Collector {
-	return &defaultCollector{cpu: sample}
+	return &defaultCollector{cpu: sample, now: time.Now}
 }
 
 // NewCollectorWithCPUServices returns a collector with injected CPU and
@@ -161,7 +202,7 @@ func NewCollectorWithCPUServices(cpu cpuMeasure, services []string, svc ServiceS
 // manager, no host load averages). A nil load sampler emits no
 // load.avg* samples.
 func NewCollectorWithCPUServicesLoad(cpu cpuMeasure, services []string, svc ServiceSampler, ld LoadSampler) Collector {
-	return &defaultCollector{cpu: cpu, services: services, service: svc, load: ld}
+	return &defaultCollector{cpu: cpu, services: services, service: svc, load: ld, now: time.Now}
 }
 
 // Collect samples every family and packages them as one MetricBatch.
@@ -283,6 +324,17 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 	// 7. Load averages — 1/5/15 min (host-wide; no source).
 	if cerr := c.emitLoad(ctx, add); cerr != nil {
 		errs = append(errs, "load: "+cerr.Error())
+	}
+
+	// 8. Top-N processes — CPU% from deltas between consecutive collects;
+	// the first collect ranks by RSS and emits no process.cpu_percent.
+	if c.procs != nil {
+		stats, err := c.procs(ctx)
+		if err != nil {
+			errs = append(errs, "procs: "+err.Error())
+		} else {
+			c.emitTopProcs(stats, add)
+		}
 	}
 
 	if len(errs) > 0 {
