@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/welcometotheweb/rmmway/server/internal/store"
+	"github.com/welcometotheweb/rmmway/server/internal/users"
 )
 
 type deviceOut struct {
@@ -55,15 +56,37 @@ func (s *Server) deviceList(w http.ResponseWriter, r *http.Request) {
 	out := []deviceOut{}
 	// gap #2: ?client=<id> scopes the list to one client's devices
 	// ("unassigned" also matches unassigned devices; "" = all).
-	list, err := s.devices.ListByClient(r.Context(), r.URL.Query().Get("client"))
+	client := r.URL.Query().Get("client")
+	list, err := s.devices.ListByClient(r.Context(), client)
 	if err != nil {
 		http.Error(w, "device list: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// gap #3: a non-admin session with no ?client= (already grant-validated
+	// when present) sees the union of its granted clients.
+	if sess, ok := users.SessionFromContext(r.Context()); ok && !sess.AllClients && client == "" {
+		list = filterDevicesByClients(list, sess)
 	}
 	for _, d := range list {
 		out = append(out, toDeviceOut(d))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// filterDevicesByClients (gap #3) keeps the devices whose client the session
+// is granted; an empty device client id = the default client.
+func filterDevicesByClients(list []*store.Device, sess users.Session) []*store.Device {
+	out := make([]*store.Device, 0, len(list))
+	for _, d := range list {
+		cid := d.ClientID
+		if cid == "" {
+			cid = store.DefaultClientID
+		}
+		if sess.CanSeeClient(cid) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // handleSearch serves Meilisearch device search. Degraded (503) when the
@@ -169,12 +192,39 @@ func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected /devices/{id}/(commands|export|events) or /devices/bulk/commands", http.StatusNotFound)
 		return
 	}
+	// gap #3: single-device routes scope to the device's client (an empty
+	// client = the default client) — a non-admin session that is not
+	// granted that client gets a 403 here, before the sub-route dispatch.
+	// Admin/legacy sessions skip the extra store fetch (they can see
+	// everything, and unknown-device 404s come from the sub-hander).
+	if parts[2] != "bulk" {
+		if sess, ok := users.SessionFromContext(r.Context()); ok && !sess.AllClients {
+			dev, err := s.devices.Get(r.Context(), parts[2])
+			if err != nil {
+				http.Error(w, "unknown device", http.StatusNotFound)
+				return
+			}
+			cid := dev.ClientID
+			if cid == "" {
+				cid = store.DefaultClientID
+			}
+			if !requireClientAccess(w, r, cid) {
+				return
+			}
+		}
+	}
 	if len(parts) == 3 {
+		if !requireRole(w, r, "admin", "tech") { // gap #3: viewers are read-only
+			return
+		}
 		s.patchDeviceTags(w, r, parts[2])
 		return
 	}
 	if parts[2] == "bulk" {
 		if len(parts) == 4 && parts[3] == "commands" {
+			if !requireRole(w, r, "admin", "tech") { // gap #3
+				return
+			}
 			s.bulkCommand(w, r)
 			return
 		}
@@ -198,6 +248,9 @@ func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 	case "commands":
 		if r.Method == http.MethodGet {
 			s.deviceCommands(w, r, parts[2])
+			return
+		}
+		if !requireRole(w, r, "admin", "tech") { // gap #3: dispatch is operational
 			return
 		}
 		s.dispatchCommand(w, r, parts[2])
@@ -539,12 +592,12 @@ func (s *Server) patchDeviceTags(w http.ResponseWriter, r *http.Request, deviceI
 
 // registerDevices mounts the device-domain routes: the device list, search, and the /{api|admin}/devices/ subtree (dispatch, tags, export, events, metrics, bulk fan-out).
 func registerDevices(s *Server, mux *http.ServeMux) {
-	mux.HandleFunc("/api/devices", s.requireOperator(s.deviceList))
+	mux.HandleFunc("/api/devices", s.rbacScopeGate(s.deviceList))
 	// W2-2: fuzzy device search (Cmd-K backing) + command dispatch, both auth-gated.
-	mux.HandleFunc("/api/search", s.requireOperator(s.handleSearch))
-	mux.HandleFunc("/api/devices/", s.requireOperator(s.deviceSub))
+	mux.HandleFunc("/api/search", s.rbacGate(s.handleSearch))
+	mux.HandleFunc("/api/devices/", s.rbacGate(s.deviceSub))
 	// W3-3: the device's dispatched commands + results (C1: auth-gated).
-	mux.HandleFunc("/admin/devices/", s.requireOperator(s.deviceSub))
-	mux.HandleFunc("/admin/devices", s.requireOperator(s.deviceList)) // C1: was open
-	mux.HandleFunc("/admin/search", s.requireOperator(s.handleSearch))
+	mux.HandleFunc("/admin/devices/", s.rbacGate(s.deviceSub))
+	mux.HandleFunc("/admin/devices", s.rbacScopeGate(s.deviceList)) // C1: was open
+	mux.HandleFunc("/admin/search", s.rbacGate(s.handleSearch))
 }

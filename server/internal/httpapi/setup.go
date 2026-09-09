@@ -39,7 +39,7 @@ func (s *Server) setupGate(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if done {
-			s.requireOperator(next)(w, r)
+			s.rbacGate(next)(w, r)
 			return
 		}
 		next(w, r)

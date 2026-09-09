@@ -815,6 +815,9 @@ func main() {
 	// gap #2: MSP client/tenant registry (see wire_clients.go).
 	clientsStore := wireClients(hasPG, pgPool)
 
+	// gap #3: operator accounts + RBAC (see wire_users.go).
+	usersStore := wireUsers(hasPG, pgPool)
+
 	// Per-device metrics viewer: the operator UI's device-detail charts read
 	// the metric series the agents report (Timescale hypertable).
 	metricsView := store.NewPostgresMetricsView(pgPool)
@@ -851,6 +854,7 @@ func main() {
 		Webhooks:  webhookSvc,
 		Setup:     setupSvc,
 		Clients:   clientsStore,
+		Users:     usersStore,
 		PublicURL: publicURL(),
 	})
 	apiSrv.Register(mux)

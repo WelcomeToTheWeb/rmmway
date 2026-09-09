@@ -496,4 +496,76 @@ export const api = {
     if (limit) q.set("limit", String(limit));
     return request(`/api/alerts?${q.toString()}`, { token });
   },
+
+  // ---- gap #3: operator accounts, RBAC, MFA, API tokens (wave 2, B) ------
+
+  // POST /api/login with the MFA code (own fetch — the 401 body must stay
+  // readable: {error:"mfa_required"} drives the code field in Login.jsx).
+  // unauthorized=false on the mfa challenge so the caller doesn't bounce.
+  loginFull: async (username, password, totp) => {
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, totp }),
+    });
+    if (res.status === 401) {
+      let err = "unauthorized";
+      try {
+        const j = await res.json();
+        if (j && j.error) err = j.error;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(err, 401, err !== "mfa_required");
+    }
+    if (!res.ok) throw new ApiError(`HTTP ${res.status}`, res.status);
+    return res.json();
+  },
+
+  // GET /api/users -> User[] {id, username, role, enabled, totp_enrolled,
+  // totp_verified, last_login_at, clients, created_at, updated_at}.
+  // 503 = in-memory server (no account model).
+  users: (token) => request("/api/users", { token }),
+
+  // POST /api/users {username, password, role, clients?} -> the created
+  // user (201, server-minted "usr-…" id). 400 short password / bad role,
+  // 409 username exists (case-insensitive).
+  createUser: (token, body) =>
+    request("/api/users", { method: "POST", token, body }),
+
+  // PATCH /api/users/{id} {role?, enabled?, clients?, password?} -> the
+  // updated user. clients []string replaces the grant list (null = keep).
+  updateUser: (token, id, body) =>
+    request(`/api/users/${id}`, { method: "PATCH", token, body }),
+
+  // POST /api/users/{id}/totp/start -> {secret, uri}. Enrollment begins
+  // the moment this returns — from here on the account needs the code.
+  startUserTotp: (token, id) =>
+    request(`/api/users/${id}/totp/start`, { method: "POST", token }),
+
+  // POST /api/users/{id}/totp/confirm {code} -> {ok}. 401 = wrong code.
+  confirmUserTotp: (token, id, code) =>
+    request(`/api/users/${id}/totp/confirm`, {
+      method: "POST",
+      token,
+      body: { code },
+    }),
+
+  // DELETE /api/users/{id}/totp -> {ok} (2FA reset).
+  clearUserTotp: (token, id) =>
+    request(`/api/users/${id}/totp`, { method: "DELETE", token }),
+
+  // POST /api/users/{id}/tokens {name, ttl_days?} -> {token, prefix,
+  // expires_at}. The full "rmm_…" token appears EXACTLY once (the hash is
+  // what's stored) — the UI must show a copy affordance.
+  createUserToken: (token, id, body) =>
+    request(`/api/users/${id}/tokens`, { method: "POST", token, body }),
+
+  // GET /api/users/{id}/tokens -> [{id, name, prefix, created_at,
+  // expires_at, last_used_at}] (never the full token).
+  listUserTokens: (token, id) => request(`/api/users/${id}/tokens`, { token }),
+
+  // DELETE /api/users/{id}/tokens/{tid} -> {ok} (revoke; 404 unknown).
+  revokeUserToken: (token, id, tid) =>
+    request(`/api/users/${id}/tokens/${tid}`, { method: "DELETE", token }),
 };

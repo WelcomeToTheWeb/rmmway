@@ -269,10 +269,10 @@ func main() {
 	defer pool.Close()
 	if n, err := store.Migrate(ctx, pool, "migrations"); err != nil {
 		die("migrate: %v (n=%d)", err, n)
-	} else if n != 10 {
-		die("expected 10 migrations, got %d", n)
+	} else if n != 11 {
+		die("expected 11 migrations, got %d", n)
 	}
-	info("9 migrations applied to scratch db %s", dbName)
+	info("11 migrations applied to scratch db %s", dbName)
 
 	// ---- in-process SMTP sink (the outbox's mail server) -------------------
 	sink, err := smtpoutbox.NewSink()

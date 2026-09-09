@@ -306,8 +306,8 @@ func registerFlows(s *Server, mux *http.ServeMux) {
 	// W5-2: event-driven automation chains — compose (DAG CRUD), trigger
 	// (synthetic), runs (+ node log), and a manual sweep. /admin mirrors
 	// below for e2e/ops (C1: auth-gated).
-	mux.HandleFunc("/api/flows", s.requireOperator(s.handleFlows))
-	mux.HandleFunc("/api/flows/", s.requireOperator(s.handleFlowSub))
-	mux.HandleFunc("/admin/flows", s.requireOperator(s.handleFlows))
-	mux.HandleFunc("/admin/flows/", s.requireOperator(s.handleFlowSub))
+	mux.HandleFunc("/api/flows", s.rbacRoleGate(s.handleFlows, "admin"))
+	mux.HandleFunc("/api/flows/", s.rbacRoleGate(s.handleFlowSub, "admin"))
+	mux.HandleFunc("/admin/flows", s.rbacRoleGate(s.handleFlows, "admin"))
+	mux.HandleFunc("/admin/flows/", s.rbacRoleGate(s.handleFlowSub, "admin"))
 }

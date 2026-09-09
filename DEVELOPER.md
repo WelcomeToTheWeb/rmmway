@@ -100,6 +100,21 @@ curl -fsS -X PATCH localhost:8080/api/devices/dev-…/client \
 curl -fsS "localhost:8080/api/devices?client=unassigned" -H "Authorization: Bearer $TOKEN"
 curl -fsS "localhost:8080/api/alerts?client=clt-…" -H "Authorization: Bearer $TOKEN"
 
+# operator users / RBAC / MFA / API tokens (admin-gated; tech/viewer get 403)
+curl -fsS localhost:8080/api/users -H "Authorization: Bearer $ADMIN_TOKEN"
+curl -fsS -X POST localhost:8080/api/users -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"username":"tech1","password":"…","role":"tech","clients":["clt-…"]}'
+curl -fsS -X PATCH localhost:8080/api/users/usr-… -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"role":"viewer","enabled":true,"clients":null}'
+# TOTP: start -> confirm (RFC 6238, SHA-1) ; DELETE resets 2FA
+curl -fsS -X POST localhost:8080/api/users/usr-…/totp/start -H "Authorization: Bearer $ADMIN_TOKEN"
+curl -fsS -X POST localhost:8080/api/users/usr-…/totp/confirm -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"code":"123456"}'
+# API tokens (shown once; work as Bearer in place of a session JWT)
+curl -fsS -X POST localhost:8080/api/users/usr-…/tokens -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"name":"ci","ttl_days":90}'
+# MFA-required login: password first, then code
+#   POST /api/login {username, password} -> 200 {token} or 401 {mfa_required:true}
+#   POST /api/login {username, password, totp_code} -> 200 {token}
+
 # search (Meilisearch; /admin/search is the JWT-gated mirror)
 curl -fsS "localhost:8080/api/search?q=fileserver" -H "Authorization: Bearer $TOKEN"
 

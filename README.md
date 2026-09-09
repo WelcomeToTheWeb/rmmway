@@ -170,7 +170,13 @@ surface:
   exists (wizard run or first password change), only the database
   credential signs in — the `RMMWAY_ADMIN_USER/PASSWORD` env fallback no
   longer applies to that user. Two-factor authentication status is shown
-  here; TOTP enrollment ships in wave 2.
+  here; enroll via the Users view (TOTP, RFC 6238) — once 2FA is on, login
+  asks for the 6-digit code.
+- **Users** (admin-only) — create operator accounts, assign roles
+  (admin / tech / viewer) and per-client grants, manage TOTP enrollment,
+  and issue long-lived API tokens (shown once). Non-admin sessions are
+  scoped: techs act only on their granted clients, viewers read-only; the
+  Users view itself is admin-gated.
 
 ### Production deployment
 
