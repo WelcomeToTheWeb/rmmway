@@ -183,13 +183,15 @@ func normalizeTags(in []string) ([]string, error) {
 //	GET  {id}/events    — recent indexed agent-log events (W6-1)
 //	GET  {id}/metrics    — the device's metric series (viewer picker)
 //	GET  {id}/metrics/series — bucketed samples of one series over a range
+//	GET  {id}/inventory   — deep inventory for the device (gap #4)
+//	POST {id}/inventory/collect — trigger inventory collection (gap #4)
 //	PATCH {id}          — replace the device's tag list (B-2)
 //	POST bulk/commands  — capability-gated fan-out to a tag group (B-2)
 func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	// parts: ["api"|"admin", "devices", ...]
 	if len(parts) < 3 || parts[1] != "devices" || parts[2] == "" {
-		http.Error(w, "expected /devices/{id}/(commands|export|events) or /devices/bulk/commands", http.StatusNotFound)
+		http.Error(w, "expected /devices/{id}/(commands|export|events|inventory) or /devices/bulk/commands", http.StatusNotFound)
 		return
 	}
 	// gap #3: single-device routes scope to the device's client (an empty
@@ -239,9 +241,20 @@ func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "expected /devices/{id}/metrics/series", http.StatusNotFound)
 		return
 	}
+	if len(parts) == 5 {
+		if parts[3] == "inventory" && parts[4] == "collect" {
+			if !requireRole(w, r, "admin", "tech") { // gap #3: operational
+				return
+			}
+			s.handleTriggerInventoryCollect(w, r, parts[2])
+			return
+		}
+		http.Error(w, "expected /devices/{id}/(commands|export|events|metrics|inventory)", http.StatusNotFound)
+		return
+	}
 	if len(parts) != 4 ||
-		(parts[3] != "commands" && parts[3] != "export" && parts[3] != "events" && parts[3] != "metrics") {
-		http.Error(w, "expected /devices/{id}/(commands|export|events|metrics)", http.StatusNotFound)
+		(parts[3] != "commands" && parts[3] != "export" && parts[3] != "events" && parts[3] != "metrics" && parts[3] != "inventory") {
+		http.Error(w, "expected /devices/{id}/(commands|export|events|metrics|inventory)", http.StatusNotFound)
 		return
 	}
 	switch parts[3] {
@@ -260,8 +273,10 @@ func (s *Server) deviceSub(w http.ResponseWriter, r *http.Request) {
 		s.deviceEvents(w, r, parts[2])
 	case "metrics":
 		s.deviceMetrics(w, r, parts[2])
+	case "inventory":
+		s.handleDeviceInventory(w, r, parts[2])
 	default:
-		http.Error(w, "expected /devices/{id}/(commands|export|events|metrics)", http.StatusNotFound)
+		http.Error(w, "expected /devices/{id}/(commands|export|events|metrics|inventory)", http.StatusNotFound)
 	}
 }
 

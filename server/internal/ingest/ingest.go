@@ -705,6 +705,20 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 					s.cfg.Sessions.OnChunk(devID, c)
 				}
 			}
+		case *agentv1.StreamRequest_InventoryReport: // gap #4
+			// Deep inventory report from the agent. Store in the inventory tables.
+			if r := p.InventoryReport; r != nil && r.GetCommandId() != "" {
+				if err := s.handleInventoryReport(ctx, devID, r); err != nil {
+					log.Printf("ingest: inventory report dev=%s cmd=%s: %v", devID, r.GetCommandId(), err)
+				}
+			}
+		case *agentv1.StreamRequest_PatchStatus: // gap #4
+			// Patch query/apply status from the agent.
+			if ps := p.PatchStatus; ps != nil && ps.GetCommandId() != "" {
+				if err := s.handlePatchStatus(ctx, devID, ps); err != nil {
+					log.Printf("ingest: patch status dev=%s cmd=%s: %v", devID, ps.GetCommandId(), err)
+				}
+			}
 		}
 	}
 }
@@ -723,4 +737,59 @@ func isFinalCommandStatus(st agentv1.CommandResult_Status) bool {
 		return true
 	}
 	return false
+}
+
+// handleInventoryReport processes an InventoryReport frame from an agent.
+func (s *Service) handleInventoryReport(ctx context.Context, deviceID string, report *agentv1.InventoryReport) error {
+	if report.GetHardware() != nil {
+		// Store hardware info
+		hw := report.GetHardware()
+		if err := s.devices.SaveDeviceHardware(ctx, deviceID, map[string]any{
+			"cpu_model":         hw.GetCpuModel(),
+			"cpu_vendor":        hw.GetCpuVendor(),
+			"cpu_cores":         hw.GetCpuCores(),
+			"cpu_logical":       hw.GetCpuLogical(),
+			"ram_total_bytes":   hw.GetRamTotalBytes(),
+			"os_name":           hw.GetOsName(),
+			"os_version":        hw.GetOsVersion(),
+			"os_arch":           hw.GetOsArch(),
+			"hostname":          hw.GetHostname(),
+		}); err != nil {
+			return fmt.Errorf("save hardware: %w", err)
+		}
+	}
+
+	// Store software info
+	if len(report.GetSoftware()) > 0 {
+		software := make([]map[string]any, 0, len(report.GetSoftware()))
+		for _, sw := range report.GetSoftware() {
+			software = append(software, map[string]any{
+				"name":         sw.GetName(),
+				"version":      sw.GetVersion(),
+				"vendor":       sw.GetVendor(),
+				"install_date": sw.GetInstallDate(),
+				"arch":         sw.GetArch(),
+				"source":       sw.GetSource(),
+			})
+		}
+		if err := s.devices.SaveDeviceSoftware(ctx, deviceID, software); err != nil {
+			return fmt.Errorf("save software: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// handlePatchStatus processes a PatchStatus frame from an agent.
+func (s *Service) handlePatchStatus(ctx context.Context, deviceID string, ps *agentv1.PatchStatus) error {
+	// Log the patch status
+	log.Printf("ingest: patch status dev=%s cmd=%s", deviceID, ps.GetCommandId())
+
+	// If it's a query result, store the available patches
+	if query := ps.GetQuery(); query != nil && len(query.GetAvailable()) > 0 {
+		// Store in patch inventory (simplified for now)
+		log.Printf("ingest: %d available patches for dev=%s", len(query.GetAvailable()), deviceID)
+	}
+
+	return nil
 }

@@ -17,6 +17,7 @@ import TimeSeriesChart, {
   metricCategory,
   METRIC_CATEGORY_ORDER,
 } from "../../ui/TimeSeriesChart.jsx";
+import DeviceInventory from "./DeviceInventory.jsx";
 
 // ---- agent log (recent indexed events) ------------------------------------
 
@@ -724,6 +725,11 @@ export default function DeviceDetail({
         onSaved={onSaved}
       />
       <DeviceMetrics
+        token={token}
+        device={device}
+        onUnauthorized={onUnauthorized}
+      />
+      <DeviceInventory
         token={token}
         device={device}
         onUnauthorized={onUnauthorized}

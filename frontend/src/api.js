@@ -408,6 +408,16 @@ export const api = {
     return res.blob();
   },
 
+  // ---- gap #4: deep inventory (lane A, wave 3) -----------------------------
+  // GET /api/devices/{id}/inventory -> { hardware: {...}, software: [...], collected_at: "..." }
+  deviceInventory: (token, id) => request(`/api/devices/${id}/inventory`, { token }),
+
+  // POST /api/devices/{id}/inventory/collect -> { command_id }
+  collectDeviceInventory: (token, id) => request(`/api/devices/${id}/inventory/collect`, {
+    token,
+    method: "POST",
+  }),
+
   // ---- C #10a: settings (wave 1) -------------------------------------------
   // Operator-gated (JWT required) recurring settings surface — the setup
   // wizard's /api/setup/* routes are pre-setup only.

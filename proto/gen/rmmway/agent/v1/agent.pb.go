@@ -364,6 +364,8 @@ type StreamRequest struct {
 	//	*StreamRequest_Logs
 	//	*StreamRequest_SessionFrame
 	//	*StreamRequest_FileChunk
+	//	*StreamRequest_InventoryReport
+	//	*StreamRequest_PatchStatus
 	Payload       isStreamRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -460,6 +462,24 @@ func (x *StreamRequest) GetFileChunk() *FileChunk {
 	return nil
 }
 
+func (x *StreamRequest) GetInventoryReport() *InventoryReport {
+	if x != nil {
+		if x, ok := x.Payload.(*StreamRequest_InventoryReport); ok {
+			return x.InventoryReport
+		}
+	}
+	return nil
+}
+
+func (x *StreamRequest) GetPatchStatus() *PatchStatus {
+	if x != nil {
+		if x, ok := x.Payload.(*StreamRequest_PatchStatus); ok {
+			return x.PatchStatus
+		}
+	}
+	return nil
+}
+
 type isStreamRequest_Payload interface {
 	isStreamRequest_Payload()
 }
@@ -503,6 +523,18 @@ type StreamRequest_FileChunk struct {
 	FileChunk *FileChunk `protobuf:"bytes,6,opt,name=file_chunk,json=fileChunk,proto3,oneof"`
 }
 
+type StreamRequest_InventoryReport struct {
+	// gap #4: deep inventory report (triggered by an inventory command).
+	// One uplink frame containing the collected inventory for this device.
+	InventoryReport *InventoryReport `protobuf:"bytes,7,opt,name=inventory_report,json=inventoryReport,proto3,oneof"`
+}
+
+type StreamRequest_PatchStatus struct {
+	// gap #4: patch status update (triggered by patch commands).
+	// Contains the status of queried/applicable/installed patches.
+	PatchStatus *PatchStatus `protobuf:"bytes,8,opt,name=patch_status,json=patchStatus,proto3,oneof"`
+}
+
 func (*StreamRequest_Heartbeat) isStreamRequest_Payload() {}
 
 func (*StreamRequest_Metrics) isStreamRequest_Payload() {}
@@ -514,6 +546,10 @@ func (*StreamRequest_Logs) isStreamRequest_Payload() {}
 func (*StreamRequest_SessionFrame) isStreamRequest_Payload() {}
 
 func (*StreamRequest_FileChunk) isStreamRequest_Payload() {}
+
+func (*StreamRequest_InventoryReport) isStreamRequest_Payload() {}
+
+func (*StreamRequest_PatchStatus) isStreamRequest_Payload() {}
 
 // StreamResponse is one downlink frame on Stream.
 type StreamResponse struct {
@@ -909,13 +945,16 @@ func (x *SessionFrame) GetStatus() string {
 // SessionControl (gap #1a) is the downlink that drives the agent's capture
 // loop. open starts capturing at fps (0 = agent default ~2 fps, capped at
 // 30); close stops it and releases the capture backend. A repeated open for
-// an active session with a changed fps live-adjusts the rate.
+// an active session with a changed fps live-adjusts the rate. Phase 2 adds
+// mouse/keyboard input relay for two-way remote control.
 type SessionControl struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Action:
 	//
 	//	*SessionControl_Open
 	//	*SessionControl_Close
+	//	*SessionControl_MouseEvent_
+	//	*SessionControl_KeyboardEvent_
 	Action        isSessionControl_Action `protobuf_oneof:"action"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -976,6 +1015,24 @@ func (x *SessionControl) GetClose() *SessionControl_CloseSession {
 	return nil
 }
 
+func (x *SessionControl) GetMouseEvent() *SessionControl_MouseEvent {
+	if x != nil {
+		if x, ok := x.Action.(*SessionControl_MouseEvent_); ok {
+			return x.MouseEvent
+		}
+	}
+	return nil
+}
+
+func (x *SessionControl) GetKeyboardEvent() *SessionControl_KeyboardEvent {
+	if x != nil {
+		if x, ok := x.Action.(*SessionControl_KeyboardEvent_); ok {
+			return x.KeyboardEvent
+		}
+	}
+	return nil
+}
+
 type isSessionControl_Action interface {
 	isSessionControl_Action()
 }
@@ -988,9 +1045,22 @@ type SessionControl_Close struct {
 	Close *SessionControl_CloseSession `protobuf:"bytes,2,opt,name=close,proto3,oneof"`
 }
 
+type SessionControl_MouseEvent_ struct {
+	// gap #1b: input relay frames (phase 2, two-way remote control).
+	MouseEvent *SessionControl_MouseEvent `protobuf:"bytes,10,opt,name=mouse_event,json=mouseEvent,proto3,oneof"`
+}
+
+type SessionControl_KeyboardEvent_ struct {
+	KeyboardEvent *SessionControl_KeyboardEvent `protobuf:"bytes,11,opt,name=keyboard_event,json=keyboardEvent,proto3,oneof"`
+}
+
 func (*SessionControl_Open) isSessionControl_Action() {}
 
 func (*SessionControl_Close) isSessionControl_Action() {}
+
+func (*SessionControl_MouseEvent_) isSessionControl_Action() {}
+
+func (*SessionControl_KeyboardEvent_) isSessionControl_Action() {}
 
 // FileChunk (gap #1a) is one block of a file transfer, MaxFileChunkBytes
 // (256 KiB) max. It rides BOTH directions of Stream: a file_pull streams the
@@ -1087,6 +1157,1008 @@ func (x *FileChunk) GetSourceMode() uint32 {
 	return 0
 }
 
+// InventoryReport is the agent's response to an inventory collection command.
+// It contains all inventory categories for this device, collected atomically.
+type InventoryReport struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The command_id that triggered this report (for correlation).
+	CommandId string `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	// Unix ms when collection started.
+	CollectedAtMs int64 `protobuf:"varint,2,opt,name=collected_at_ms,json=collectedAtMs,proto3" json:"collected_at_ms,omitempty"`
+	// Collected inventory categories (all populated by default).
+	Hardware      *HardwareInfo   `protobuf:"bytes,10,opt,name=hardware,proto3" json:"hardware,omitempty"`
+	Software      []*SoftwareInfo `protobuf:"bytes,11,rep,name=software,proto3" json:"software,omitempty"`
+	Services      []*ServiceInfo  `protobuf:"bytes,12,rep,name=services,proto3" json:"services,omitempty"`
+	Users         []*UserAccount  `protobuf:"bytes,13,rep,name=users,proto3" json:"users,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InventoryReport) Reset() {
+	*x = InventoryReport{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InventoryReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InventoryReport) ProtoMessage() {}
+
+func (x *InventoryReport) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InventoryReport.ProtoReflect.Descriptor instead.
+func (*InventoryReport) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *InventoryReport) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *InventoryReport) GetCollectedAtMs() int64 {
+	if x != nil {
+		return x.CollectedAtMs
+	}
+	return 0
+}
+
+func (x *InventoryReport) GetHardware() *HardwareInfo {
+	if x != nil {
+		return x.Hardware
+	}
+	return nil
+}
+
+func (x *InventoryReport) GetSoftware() []*SoftwareInfo {
+	if x != nil {
+		return x.Software
+	}
+	return nil
+}
+
+func (x *InventoryReport) GetServices() []*ServiceInfo {
+	if x != nil {
+		return x.Services
+	}
+	return nil
+}
+
+func (x *InventoryReport) GetUsers() []*UserAccount {
+	if x != nil {
+		return x.Users
+	}
+	return nil
+}
+
+// HardwareInfo captures the device's hardware inventory.
+type HardwareInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CpuModel      string                 `protobuf:"bytes,1,opt,name=cpu_model,json=cpuModel,proto3" json:"cpu_model,omitempty"`
+	CpuVendor     string                 `protobuf:"bytes,2,opt,name=cpu_vendor,json=cpuVendor,proto3" json:"cpu_vendor,omitempty"`
+	CpuCores      uint32                 `protobuf:"varint,3,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	CpuLogical    uint32                 `protobuf:"varint,4,opt,name=cpu_logical,json=cpuLogical,proto3" json:"cpu_logical,omitempty"`
+	RamTotalBytes uint64                 `protobuf:"varint,5,opt,name=ram_total_bytes,json=ramTotalBytes,proto3" json:"ram_total_bytes,omitempty"`
+	RamModel      string                 `protobuf:"bytes,6,opt,name=ram_model,json=ramModel,proto3" json:"ram_model,omitempty"`
+	OsName        string                 `protobuf:"bytes,7,opt,name=os_name,json=osName,proto3" json:"os_name,omitempty"`
+	OsVersion     string                 `protobuf:"bytes,8,opt,name=os_version,json=osVersion,proto3" json:"os_version,omitempty"`
+	OsArch        string                 `protobuf:"bytes,9,opt,name=os_arch,json=osArch,proto3" json:"os_arch,omitempty"`
+	Hostname      string                 `protobuf:"bytes,10,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Domains       []*DomainInfo          `protobuf:"bytes,11,rep,name=domains,proto3" json:"domains,omitempty"`
+	Disks         []*DiskInfo            `protobuf:"bytes,12,rep,name=disks,proto3" json:"disks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HardwareInfo) Reset() {
+	*x = HardwareInfo{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HardwareInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HardwareInfo) ProtoMessage() {}
+
+func (x *HardwareInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HardwareInfo.ProtoReflect.Descriptor instead.
+func (*HardwareInfo) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *HardwareInfo) GetCpuModel() string {
+	if x != nil {
+		return x.CpuModel
+	}
+	return ""
+}
+
+func (x *HardwareInfo) GetCpuVendor() string {
+	if x != nil {
+		return x.CpuVendor
+	}
+	return ""
+}
+
+func (x *HardwareInfo) GetCpuCores() uint32 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *HardwareInfo) GetCpuLogical() uint32 {
+	if x != nil {
+		return x.CpuLogical
+	}
+	return 0
+}
+
+func (x *HardwareInfo) GetRamTotalBytes() uint64 {
+	if x != nil {
+		return x.RamTotalBytes
+	}
+	return 0
+}
+
+func (x *HardwareInfo) GetRamModel() string {
+	if x != nil {
+		return x.RamModel
+	}
+	return ""
+}
+
+func (x *HardwareInfo) GetOsName() string {
+	if x != nil {
+		return x.OsName
+	}
+	return ""
+}
+
+func (x *HardwareInfo) GetOsVersion() string {
+	if x != nil {
+		return x.OsVersion
+	}
+	return ""
+}
+
+func (x *HardwareInfo) GetOsArch() string {
+	if x != nil {
+		return x.OsArch
+	}
+	return ""
+}
+
+func (x *HardwareInfo) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+func (x *HardwareInfo) GetDomains() []*DomainInfo {
+	if x != nil {
+		return x.Domains
+	}
+	return nil
+}
+
+func (x *HardwareInfo) GetDisks() []*DiskInfo {
+	if x != nil {
+		return x.Disks
+	}
+	return nil
+}
+
+// DomainInfo describes AD/MDM affiliation.
+type DomainInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"` // "active_directory" | "apple_business_manager" | "local"
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Workgroup     string                 `protobuf:"bytes,3,opt,name=workgroup,proto3" json:"workgroup,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DomainInfo) Reset() {
+	*x = DomainInfo{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DomainInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DomainInfo) ProtoMessage() {}
+
+func (x *DomainInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DomainInfo.ProtoReflect.Descriptor instead.
+func (*DomainInfo) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *DomainInfo) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *DomainInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DomainInfo) GetWorkgroup() string {
+	if x != nil {
+		return x.Workgroup
+	}
+	return ""
+}
+
+// DiskInfo describes a physical disk's geometry and serial.
+type DiskInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Device        string                 `protobuf:"bytes,1,opt,name=device,proto3" json:"device,omitempty"`
+	Model         string                 `protobuf:"bytes,2,opt,name=model,proto3" json:"model,omitempty"`
+	Serial        string                 `protobuf:"bytes,3,opt,name=serial,proto3" json:"serial,omitempty"`
+	Size          uint64                 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
+	Type          string                 `protobuf:"bytes,5,opt,name=type,proto3" json:"type,omitempty"` // "hdd" | "ssd" | "unknown"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiskInfo) Reset() {
+	*x = DiskInfo{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiskInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiskInfo) ProtoMessage() {}
+
+func (x *DiskInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiskInfo.ProtoReflect.Descriptor instead.
+func (*DiskInfo) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *DiskInfo) GetDevice() string {
+	if x != nil {
+		return x.Device
+	}
+	return ""
+}
+
+func (x *DiskInfo) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *DiskInfo) GetSerial() string {
+	if x != nil {
+		return x.Serial
+	}
+	return ""
+}
+
+func (x *DiskInfo) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *DiskInfo) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+// SoftwareInfo describes an installed application.
+type SoftwareInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Vendor        string                 `protobuf:"bytes,3,opt,name=vendor,proto3" json:"vendor,omitempty"`
+	InstallDate   string                 `protobuf:"bytes,4,opt,name=install_date,json=installDate,proto3" json:"install_date,omitempty"`
+	Arch          string                 `protobuf:"bytes,5,opt,name=arch,proto3" json:"arch,omitempty"`
+	Path          string                 `protobuf:"bytes,6,opt,name=path,proto3" json:"path,omitempty"`
+	Source        string                 `protobuf:"bytes,7,opt,name=source,proto3" json:"source,omitempty"` // "dpkg" | "rpm" | "msi" | "registry" | "homebrew" | "pkg"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SoftwareInfo) Reset() {
+	*x = SoftwareInfo{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SoftwareInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SoftwareInfo) ProtoMessage() {}
+
+func (x *SoftwareInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SoftwareInfo.ProtoReflect.Descriptor instead.
+func (*SoftwareInfo) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *SoftwareInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetVendor() string {
+	if x != nil {
+		return x.Vendor
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetInstallDate() string {
+	if x != nil {
+		return x.InstallDate
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *SoftwareInfo) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+// ServiceInfo describes an installed system service.
+type ServiceInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"` // "running" | "stopped" | "paused" | "unknown"
+	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`     // "systemd" | "launchd" | "windows_service"
+	Enabled       bool                   `protobuf:"varint,5,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServiceInfo) Reset() {
+	*x = ServiceInfo{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServiceInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServiceInfo) ProtoMessage() {}
+
+func (x *ServiceInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServiceInfo.ProtoReflect.Descriptor instead.
+func (*ServiceInfo) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ServiceInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ServiceInfo) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *ServiceInfo) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ServiceInfo) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *ServiceInfo) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+// UserAccount describes a local user account on the device.
+type UserAccount struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Uid           string                 `protobuf:"bytes,3,opt,name=uid,proto3" json:"uid,omitempty"`
+	Sid           string                 `protobuf:"bytes,4,opt,name=sid,proto3" json:"sid,omitempty"` // Windows SID
+	HomeDir       string                 `protobuf:"bytes,5,opt,name=home_dir,json=homeDir,proto3" json:"home_dir,omitempty"`
+	Shell         string                 `protobuf:"bytes,6,opt,name=shell,proto3" json:"shell,omitempty"`
+	Enabled       bool                   `protobuf:"varint,7,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	AccountType   string                 `protobuf:"bytes,8,opt,name=account_type,json=accountType,proto3" json:"account_type,omitempty"` // "user" | "admin" | "system"
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserAccount) Reset() {
+	*x = UserAccount{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserAccount) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserAccount) ProtoMessage() {}
+
+func (x *UserAccount) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserAccount.ProtoReflect.Descriptor instead.
+func (*UserAccount) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *UserAccount) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *UserAccount) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *UserAccount) GetUid() string {
+	if x != nil {
+		return x.Uid
+	}
+	return ""
+}
+
+func (x *UserAccount) GetSid() string {
+	if x != nil {
+		return x.Sid
+	}
+	return ""
+}
+
+func (x *UserAccount) GetHomeDir() string {
+	if x != nil {
+		return x.HomeDir
+	}
+	return ""
+}
+
+func (x *UserAccount) GetShell() string {
+	if x != nil {
+		return x.Shell
+	}
+	return ""
+}
+
+func (x *UserAccount) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *UserAccount) GetAccountType() string {
+	if x != nil {
+		return x.AccountType
+	}
+	return ""
+}
+
+// PatchStatus is the agent's response to a patch query/operation.
+type PatchStatus struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	CommandId  string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	StatusAtMs int64                  `protobuf:"varint,2,opt,name=status_at_ms,json=statusAtMs,proto3" json:"status_at_ms,omitempty"`
+	// Query results (patch_query commands).
+	Query *PatchQueryResult `protobuf:"bytes,10,opt,name=query,proto3" json:"query,omitempty"`
+	// Apply progress (patch_apply commands).
+	Apply         *PatchApplyProgress `protobuf:"bytes,11,opt,name=apply,proto3" json:"apply,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PatchStatus) Reset() {
+	*x = PatchStatus{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatchStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatchStatus) ProtoMessage() {}
+
+func (x *PatchStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatchStatus.ProtoReflect.Descriptor instead.
+func (*PatchStatus) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *PatchStatus) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *PatchStatus) GetStatusAtMs() int64 {
+	if x != nil {
+		return x.StatusAtMs
+	}
+	return 0
+}
+
+func (x *PatchStatus) GetQuery() *PatchQueryResult {
+	if x != nil {
+		return x.Query
+	}
+	return nil
+}
+
+func (x *PatchStatus) GetApply() *PatchApplyProgress {
+	if x != nil {
+		return x.Apply
+	}
+	return nil
+}
+
+// PatchQueryResult contains the results of a patch query.
+type PatchQueryResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Available     []*AvailablePatch      `protobuf:"bytes,1,rep,name=available,proto3" json:"available,omitempty"`
+	Installed     []*InstalledPatch      `protobuf:"bytes,2,rep,name=installed,proto3" json:"installed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PatchQueryResult) Reset() {
+	*x = PatchQueryResult{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatchQueryResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatchQueryResult) ProtoMessage() {}
+
+func (x *PatchQueryResult) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatchQueryResult.ProtoReflect.Descriptor instead.
+func (*PatchQueryResult) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *PatchQueryResult) GetAvailable() []*AvailablePatch {
+	if x != nil {
+		return x.Available
+	}
+	return nil
+}
+
+func (x *PatchQueryResult) GetInstalled() []*InstalledPatch {
+	if x != nil {
+		return x.Installed
+	}
+	return nil
+}
+
+// AvailablePatch describes a patch that can be applied.
+type AvailablePatch struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Title          string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Description    string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Severity       string                 `protobuf:"bytes,4,opt,name=severity,proto3" json:"severity,omitempty"`                    // "critical" | "important" | "moderate" | "low" | "unrated"
+	KbArticle      string                 `protobuf:"bytes,5,opt,name=kb_article,json=kbArticle,proto3" json:"kb_article,omitempty"` // Windows KB number, or CVE identifier
+	RebootRequired bool                   `protobuf:"varint,6,opt,name=reboot_required,json=rebootRequired,proto3" json:"reboot_required,omitempty"`
+	DownloadUrl    string                 `protobuf:"bytes,7,opt,name=download_url,json=downloadUrl,proto3" json:"download_url,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AvailablePatch) Reset() {
+	*x = AvailablePatch{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AvailablePatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AvailablePatch) ProtoMessage() {}
+
+func (x *AvailablePatch) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AvailablePatch.ProtoReflect.Descriptor instead.
+func (*AvailablePatch) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *AvailablePatch) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *AvailablePatch) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *AvailablePatch) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *AvailablePatch) GetSeverity() string {
+	if x != nil {
+		return x.Severity
+	}
+	return ""
+}
+
+func (x *AvailablePatch) GetKbArticle() string {
+	if x != nil {
+		return x.KbArticle
+	}
+	return ""
+}
+
+func (x *AvailablePatch) GetRebootRequired() bool {
+	if x != nil {
+		return x.RebootRequired
+	}
+	return false
+}
+
+func (x *AvailablePatch) GetDownloadUrl() string {
+	if x != nil {
+		return x.DownloadUrl
+	}
+	return ""
+}
+
+// InstalledPatch describes a patch that has already been applied.
+type InstalledPatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	InstallDate   string                 `protobuf:"bytes,3,opt,name=install_date,json=installDate,proto3" json:"install_date,omitempty"`
+	KbArticle     string                 `protobuf:"bytes,4,opt,name=kb_article,json=kbArticle,proto3" json:"kb_article,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstalledPatch) Reset() {
+	*x = InstalledPatch{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstalledPatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstalledPatch) ProtoMessage() {}
+
+func (x *InstalledPatch) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstalledPatch.ProtoReflect.Descriptor instead.
+func (*InstalledPatch) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *InstalledPatch) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *InstalledPatch) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *InstalledPatch) GetInstallDate() string {
+	if x != nil {
+		return x.InstallDate
+	}
+	return ""
+}
+
+func (x *InstalledPatch) GetKbArticle() string {
+	if x != nil {
+		return x.KbArticle
+	}
+	return ""
+}
+
+// PatchApplyProgress reports the progress of a patch apply operation.
+type PatchApplyProgress struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Phase           string                 `protobuf:"bytes,1,opt,name=phase,proto3" json:"phase,omitempty"` // "downloading" | "installing" | "completed" | "failed"
+	Message         string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	ProgressPercent uint32                 `protobuf:"varint,3,opt,name=progress_percent,json=progressPercent,proto3" json:"progress_percent,omitempty"`
+	RebootRequired  bool                   `protobuf:"varint,4,opt,name=reboot_required,json=rebootRequired,proto3" json:"reboot_required,omitempty"`
+	Installed       []*InstalledPatch      `protobuf:"bytes,5,rep,name=installed,proto3" json:"installed,omitempty"`
+	Errors          []string               `protobuf:"bytes,6,rep,name=errors,proto3" json:"errors,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *PatchApplyProgress) Reset() {
+	*x = PatchApplyProgress{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PatchApplyProgress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PatchApplyProgress) ProtoMessage() {}
+
+func (x *PatchApplyProgress) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PatchApplyProgress.ProtoReflect.Descriptor instead.
+func (*PatchApplyProgress) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *PatchApplyProgress) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *PatchApplyProgress) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *PatchApplyProgress) GetProgressPercent() uint32 {
+	if x != nil {
+		return x.ProgressPercent
+	}
+	return 0
+}
+
+func (x *PatchApplyProgress) GetRebootRequired() bool {
+	if x != nil {
+		return x.RebootRequired
+	}
+	return false
+}
+
+func (x *PatchApplyProgress) GetInstalled() []*InstalledPatch {
+	if x != nil {
+		return x.Installed
+	}
+	return nil
+}
+
+func (x *PatchApplyProgress) GetErrors() []string {
+	if x != nil {
+		return x.Errors
+	}
+	return nil
+}
+
 type SessionControl_OpenSession struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Server-minted session id; echoed in every SessionFrame.
@@ -1099,7 +2171,7 @@ type SessionControl_OpenSession struct {
 
 func (x *SessionControl_OpenSession) Reset() {
 	*x = SessionControl_OpenSession{}
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[11]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1111,7 +2183,7 @@ func (x *SessionControl_OpenSession) String() string {
 func (*SessionControl_OpenSession) ProtoMessage() {}
 
 func (x *SessionControl_OpenSession) ProtoReflect() protoreflect.Message {
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[11]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1150,7 +2222,7 @@ type SessionControl_CloseSession struct {
 
 func (x *SessionControl_CloseSession) Reset() {
 	*x = SessionControl_CloseSession{}
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[12]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1162,7 +2234,7 @@ func (x *SessionControl_CloseSession) String() string {
 func (*SessionControl_CloseSession) ProtoMessage() {}
 
 func (x *SessionControl_CloseSession) ProtoReflect() protoreflect.Message {
-	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[12]
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1183,6 +2255,170 @@ func (x *SessionControl_CloseSession) GetSessionId() string {
 		return x.SessionId
 	}
 	return ""
+}
+
+// Mouse event to relay to the remote desktop. Coordinates are absolute
+// within the captured display (origin at top-left, x grows right, y grows
+// down). Buttons follow standard button numbers: left=0, middle=1, right=2.
+type SessionControl_MouseEvent struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Event type.
+	EventType string `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"` // "move" | "down" | "up" | "click" | "wheel"
+	X         int32  `protobuf:"varint,3,opt,name=x,proto3" json:"x,omitempty"`
+	Y         int32  `protobuf:"varint,4,opt,name=y,proto3" json:"y,omitempty"`
+	// Button number (0=left, 1=middle, 2=right); 0 for move/wheel events.
+	Button int32 `protobuf:"varint,5,opt,name=button,proto3" json:"button,omitempty"`
+	// Wheel delta (positive=up, negative=down); 0 for non-wheel events.
+	WheelDelta    int32 `protobuf:"varint,6,opt,name=wheel_delta,json=wheelDelta,proto3" json:"wheel_delta,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionControl_MouseEvent) Reset() {
+	*x = SessionControl_MouseEvent{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionControl_MouseEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionControl_MouseEvent) ProtoMessage() {}
+
+func (x *SessionControl_MouseEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionControl_MouseEvent.ProtoReflect.Descriptor instead.
+func (*SessionControl_MouseEvent) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{9, 2}
+}
+
+func (x *SessionControl_MouseEvent) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionControl_MouseEvent) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *SessionControl_MouseEvent) GetX() int32 {
+	if x != nil {
+		return x.X
+	}
+	return 0
+}
+
+func (x *SessionControl_MouseEvent) GetY() int32 {
+	if x != nil {
+		return x.Y
+	}
+	return 0
+}
+
+func (x *SessionControl_MouseEvent) GetButton() int32 {
+	if x != nil {
+		return x.Button
+	}
+	return 0
+}
+
+func (x *SessionControl_MouseEvent) GetWheelDelta() int32 {
+	if x != nil {
+		return x.WheelDelta
+	}
+	return 0
+}
+
+// Keyboard event to relay. Uses Unicode codepoint representation for
+// portability across locales. Modifier keys are sent as separate events.
+type SessionControl_KeyboardEvent struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Event type.
+	EventType string `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"` // "down" | "up" | "key"
+	// Unicode codepoint of the character (e.g. 65 for 'A'). 0 for
+	// modifier-only events (shift, ctrl, alt, etc.).
+	Codepoint uint32 `protobuf:"varint,3,opt,name=codepoint,proto3" json:"codepoint,omitempty"`
+	// Modifier bitmask: shift=1, ctrl=2, alt=4, meta/windows=8.
+	Modifiers     uint32 `protobuf:"varint,4,opt,name=modifiers,proto3" json:"modifiers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionControl_KeyboardEvent) Reset() {
+	*x = SessionControl_KeyboardEvent{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionControl_KeyboardEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionControl_KeyboardEvent) ProtoMessage() {}
+
+func (x *SessionControl_KeyboardEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionControl_KeyboardEvent.ProtoReflect.Descriptor instead.
+func (*SessionControl_KeyboardEvent) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{9, 3}
+}
+
+func (x *SessionControl_KeyboardEvent) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionControl_KeyboardEvent) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *SessionControl_KeyboardEvent) GetCodepoint() uint32 {
+	if x != nil {
+		return x.Codepoint
+	}
+	return 0
+}
+
+func (x *SessionControl_KeyboardEvent) GetModifiers() uint32 {
+	if x != nil {
+		return x.Modifiers
+	}
+	return 0
 }
 
 var File_rmmway_agent_v1_agent_proto protoreflect.FileDescriptor
@@ -1216,7 +2452,7 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\fleaf_key_pem\x18\x02 \x01(\tR\n" +
 	"leafKeyPem\x12\x1d\n" +
 	"\n" +
-	"expires_ms\x18\x03 \x01(\x03R\texpiresMs\"\x8d\x03\n" +
+	"expires_ms\x18\x03 \x01(\x03R\texpiresMs\"\x9f\x04\n" +
 	"\rStreamRequest\x12:\n" +
 	"\theartbeat\x18\x01 \x01(\v2\x1a.rmmway.agent.v1.HeartbeatH\x00R\theartbeat\x128\n" +
 	"\ametrics\x18\x02 \x01(\v2\x1c.rmmway.agent.v1.MetricBatchH\x00R\ametrics\x12G\n" +
@@ -1224,7 +2460,9 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\x04logs\x18\x04 \x01(\v2\x19.rmmway.agent.v1.LogBatchH\x00R\x04logs\x12D\n" +
 	"\rsession_frame\x18\x05 \x01(\v2\x1d.rmmway.agent.v1.SessionFrameH\x00R\fsessionFrame\x12;\n" +
 	"\n" +
-	"file_chunk\x18\x06 \x01(\v2\x1a.rmmway.agent.v1.FileChunkH\x00R\tfileChunkB\t\n" +
+	"file_chunk\x18\x06 \x01(\v2\x1a.rmmway.agent.v1.FileChunkH\x00R\tfileChunk\x12M\n" +
+	"\x10inventory_report\x18\a \x01(\v2 .rmmway.agent.v1.InventoryReportH\x00R\x0finventoryReport\x12A\n" +
+	"\fpatch_status\x18\b \x01(\v2\x1c.rmmway.agent.v1.PatchStatusH\x00R\vpatchStatusB\t\n" +
 	"\apayload\"\xa0\x02\n" +
 	"\x0eStreamResponse\x12D\n" +
 	"\rheartbeat_ack\x18\x01 \x01(\v2\x1d.rmmway.agent.v1.HeartbeatAckH\x00R\fheartbeatAck\x124\n" +
@@ -1254,17 +2492,39 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\x06height\x18\x05 \x01(\rR\x06height\x12\x12\n" +
 	"\x04jpeg\x18\x06 \x01(\fR\x04jpeg\x12\"\n" +
 	"\rcapture_ts_ms\x18\a \x01(\x03R\vcaptureTsMs\x12\x16\n" +
-	"\x06status\x18\b \x01(\tR\x06status\"\x92\x02\n" +
+	"\x06status\x18\b \x01(\tR\x06status\"\xe7\x05\n" +
 	"\x0eSessionControl\x12A\n" +
 	"\x04open\x18\x01 \x01(\v2+.rmmway.agent.v1.SessionControl.OpenSessionH\x00R\x04open\x12D\n" +
-	"\x05close\x18\x02 \x01(\v2,.rmmway.agent.v1.SessionControl.CloseSessionH\x00R\x05close\x1a>\n" +
+	"\x05close\x18\x02 \x01(\v2,.rmmway.agent.v1.SessionControl.CloseSessionH\x00R\x05close\x12M\n" +
+	"\vmouse_event\x18\n" +
+	" \x01(\v2*.rmmway.agent.v1.SessionControl.MouseEventH\x00R\n" +
+	"mouseEvent\x12V\n" +
+	"\x0ekeyboard_event\x18\v \x01(\v2-.rmmway.agent.v1.SessionControl.KeyboardEventH\x00R\rkeyboardEvent\x1a>\n" +
 	"\vOpenSession\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x10\n" +
 	"\x03fps\x18\x02 \x01(\x05R\x03fps\x1a-\n" +
 	"\fCloseSession\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionIdB\b\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x1a\x9f\x01\n" +
+	"\n" +
+	"MouseEvent\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x02 \x01(\tR\teventType\x12\f\n" +
+	"\x01x\x18\x03 \x01(\x05R\x01x\x12\f\n" +
+	"\x01y\x18\x04 \x01(\x05R\x01y\x12\x16\n" +
+	"\x06button\x18\x05 \x01(\x05R\x06button\x12\x1f\n" +
+	"\vwheel_delta\x18\x06 \x01(\x05R\n" +
+	"wheelDelta\x1a\x89\x01\n" +
+	"\rKeyboardEvent\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x02 \x01(\tR\teventType\x12\x1c\n" +
+	"\tcodepoint\x18\x03 \x01(\rR\tcodepoint\x12\x1c\n" +
+	"\tmodifiers\x18\x04 \x01(\rR\tmodifiersB\b\n" +
 	"\x06action\"\xa4\x01\n" +
 	"\tFileChunk\x12\x1d\n" +
 	"\n" +
@@ -1275,7 +2535,100 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\vtotal_bytes\x18\x05 \x01(\x03R\n" +
 	"totalBytes\x12\x1f\n" +
 	"\vsource_mode\x18\x06 \x01(\rR\n" +
-	"sourceMode2\x82\x02\n" +
+	"sourceMode\"\xbc\x02\n" +
+	"\x0fInventoryReport\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12&\n" +
+	"\x0fcollected_at_ms\x18\x02 \x01(\x03R\rcollectedAtMs\x129\n" +
+	"\bhardware\x18\n" +
+	" \x01(\v2\x1d.rmmway.agent.v1.HardwareInfoR\bhardware\x129\n" +
+	"\bsoftware\x18\v \x03(\v2\x1d.rmmway.agent.v1.SoftwareInfoR\bsoftware\x128\n" +
+	"\bservices\x18\f \x03(\v2\x1c.rmmway.agent.v1.ServiceInfoR\bservices\x122\n" +
+	"\x05users\x18\r \x03(\v2\x1c.rmmway.agent.v1.UserAccountR\x05users\"\xa2\x03\n" +
+	"\fHardwareInfo\x12\x1b\n" +
+	"\tcpu_model\x18\x01 \x01(\tR\bcpuModel\x12\x1d\n" +
+	"\n" +
+	"cpu_vendor\x18\x02 \x01(\tR\tcpuVendor\x12\x1b\n" +
+	"\tcpu_cores\x18\x03 \x01(\rR\bcpuCores\x12\x1f\n" +
+	"\vcpu_logical\x18\x04 \x01(\rR\n" +
+	"cpuLogical\x12&\n" +
+	"\x0fram_total_bytes\x18\x05 \x01(\x04R\rramTotalBytes\x12\x1b\n" +
+	"\tram_model\x18\x06 \x01(\tR\bramModel\x12\x17\n" +
+	"\aos_name\x18\a \x01(\tR\x06osName\x12\x1d\n" +
+	"\n" +
+	"os_version\x18\b \x01(\tR\tosVersion\x12\x17\n" +
+	"\aos_arch\x18\t \x01(\tR\x06osArch\x12\x1a\n" +
+	"\bhostname\x18\n" +
+	" \x01(\tR\bhostname\x125\n" +
+	"\adomains\x18\v \x03(\v2\x1b.rmmway.agent.v1.DomainInfoR\adomains\x12/\n" +
+	"\x05disks\x18\f \x03(\v2\x19.rmmway.agent.v1.DiskInfoR\x05disks\"R\n" +
+	"\n" +
+	"DomainInfo\x12\x12\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
+	"\tworkgroup\x18\x03 \x01(\tR\tworkgroup\"x\n" +
+	"\bDiskInfo\x12\x16\n" +
+	"\x06device\x18\x01 \x01(\tR\x06device\x12\x14\n" +
+	"\x05model\x18\x02 \x01(\tR\x05model\x12\x16\n" +
+	"\x06serial\x18\x03 \x01(\tR\x06serial\x12\x12\n" +
+	"\x04size\x18\x04 \x01(\x04R\x04size\x12\x12\n" +
+	"\x04type\x18\x05 \x01(\tR\x04type\"\xb7\x01\n" +
+	"\fSoftwareInfo\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
+	"\x06vendor\x18\x03 \x01(\tR\x06vendor\x12!\n" +
+	"\finstall_date\x18\x04 \x01(\tR\vinstallDate\x12\x12\n" +
+	"\x04arch\x18\x05 \x01(\tR\x04arch\x12\x12\n" +
+	"\x04path\x18\x06 \x01(\tR\x04path\x12\x16\n" +
+	"\x06source\x18\a \x01(\tR\x06source\"\x8a\x01\n" +
+	"\vServiceInfo\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x16\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status\x12\x12\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\x12\x18\n" +
+	"\aenabled\x18\x05 \x01(\bR\aenabled\"\xcf\x01\n" +
+	"\vUserAccount\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
+	"\x03uid\x18\x03 \x01(\tR\x03uid\x12\x10\n" +
+	"\x03sid\x18\x04 \x01(\tR\x03sid\x12\x19\n" +
+	"\bhome_dir\x18\x05 \x01(\tR\ahomeDir\x12\x14\n" +
+	"\x05shell\x18\x06 \x01(\tR\x05shell\x12\x18\n" +
+	"\aenabled\x18\a \x01(\bR\aenabled\x12!\n" +
+	"\faccount_type\x18\b \x01(\tR\vaccountType\"\xc2\x01\n" +
+	"\vPatchStatus\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12 \n" +
+	"\fstatus_at_ms\x18\x02 \x01(\x03R\n" +
+	"statusAtMs\x127\n" +
+	"\x05query\x18\n" +
+	" \x01(\v2!.rmmway.agent.v1.PatchQueryResultR\x05query\x129\n" +
+	"\x05apply\x18\v \x01(\v2#.rmmway.agent.v1.PatchApplyProgressR\x05apply\"\x90\x01\n" +
+	"\x10PatchQueryResult\x12=\n" +
+	"\tavailable\x18\x01 \x03(\v2\x1f.rmmway.agent.v1.AvailablePatchR\tavailable\x12=\n" +
+	"\tinstalled\x18\x02 \x03(\v2\x1f.rmmway.agent.v1.InstalledPatchR\tinstalled\"\xdf\x01\n" +
+	"\x0eAvailablePatch\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12 \n" +
+	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1a\n" +
+	"\bseverity\x18\x04 \x01(\tR\bseverity\x12\x1d\n" +
+	"\n" +
+	"kb_article\x18\x05 \x01(\tR\tkbArticle\x12'\n" +
+	"\x0freboot_required\x18\x06 \x01(\bR\x0erebootRequired\x12!\n" +
+	"\fdownload_url\x18\a \x01(\tR\vdownloadUrl\"x\n" +
+	"\x0eInstalledPatch\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05title\x18\x02 \x01(\tR\x05title\x12!\n" +
+	"\finstall_date\x18\x03 \x01(\tR\vinstallDate\x12\x1d\n" +
+	"\n" +
+	"kb_article\x18\x04 \x01(\tR\tkbArticle\"\xef\x01\n" +
+	"\x12PatchApplyProgress\x12\x14\n" +
+	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12)\n" +
+	"\x10progress_percent\x18\x03 \x01(\rR\x0fprogressPercent\x12'\n" +
+	"\x0freboot_required\x18\x04 \x01(\bR\x0erebootRequired\x12=\n" +
+	"\tinstalled\x18\x05 \x03(\v2\x1f.rmmway.agent.v1.InstalledPatchR\tinstalled\x12\x16\n" +
+	"\x06errors\x18\x06 \x03(\tR\x06errors2\x82\x02\n" +
 	"\fAgentService\x12I\n" +
 	"\x06Enroll\x12\x1e.rmmway.agent.v1.EnrollRequest\x1a\x1f.rmmway.agent.v1.EnrollResponse\x12M\n" +
 	"\x06Stream\x12\x1e.rmmway.agent.v1.StreamRequest\x1a\x1f.rmmway.agent.v1.StreamResponse(\x010\x01\x12X\n" +
@@ -1293,51 +2646,80 @@ func file_rmmway_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_rmmway_agent_v1_agent_proto_rawDescData
 }
 
-var file_rmmway_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_rmmway_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_rmmway_agent_v1_agent_proto_goTypes = []any{
-	(*EnrollRequest)(nil),               // 0: rmmway.agent.v1.EnrollRequest
-	(*EnrollResponse)(nil),              // 1: rmmway.agent.v1.EnrollResponse
-	(*RefreshLeafRequest)(nil),          // 2: rmmway.agent.v1.RefreshLeafRequest
-	(*RefreshLeafResponse)(nil),         // 3: rmmway.agent.v1.RefreshLeafResponse
-	(*StreamRequest)(nil),               // 4: rmmway.agent.v1.StreamRequest
-	(*StreamResponse)(nil),              // 5: rmmway.agent.v1.StreamResponse
-	(*Heartbeat)(nil),                   // 6: rmmway.agent.v1.Heartbeat
-	(*HeartbeatAck)(nil),                // 7: rmmway.agent.v1.HeartbeatAck
-	(*SessionFrame)(nil),                // 8: rmmway.agent.v1.SessionFrame
-	(*SessionControl)(nil),              // 9: rmmway.agent.v1.SessionControl
-	(*FileChunk)(nil),                   // 10: rmmway.agent.v1.FileChunk
-	(*SessionControl_OpenSession)(nil),  // 11: rmmway.agent.v1.SessionControl.OpenSession
-	(*SessionControl_CloseSession)(nil), // 12: rmmway.agent.v1.SessionControl.CloseSession
-	(*MetricBatch)(nil),                 // 13: rmmway.agent.v1.MetricBatch
-	(*CommandResult)(nil),               // 14: rmmway.agent.v1.CommandResult
-	(*LogBatch)(nil),                    // 15: rmmway.agent.v1.LogBatch
-	(*Command)(nil),                     // 16: rmmway.agent.v1.Command
+	(*EnrollRequest)(nil),                // 0: rmmway.agent.v1.EnrollRequest
+	(*EnrollResponse)(nil),               // 1: rmmway.agent.v1.EnrollResponse
+	(*RefreshLeafRequest)(nil),           // 2: rmmway.agent.v1.RefreshLeafRequest
+	(*RefreshLeafResponse)(nil),          // 3: rmmway.agent.v1.RefreshLeafResponse
+	(*StreamRequest)(nil),                // 4: rmmway.agent.v1.StreamRequest
+	(*StreamResponse)(nil),               // 5: rmmway.agent.v1.StreamResponse
+	(*Heartbeat)(nil),                    // 6: rmmway.agent.v1.Heartbeat
+	(*HeartbeatAck)(nil),                 // 7: rmmway.agent.v1.HeartbeatAck
+	(*SessionFrame)(nil),                 // 8: rmmway.agent.v1.SessionFrame
+	(*SessionControl)(nil),               // 9: rmmway.agent.v1.SessionControl
+	(*FileChunk)(nil),                    // 10: rmmway.agent.v1.FileChunk
+	(*InventoryReport)(nil),              // 11: rmmway.agent.v1.InventoryReport
+	(*HardwareInfo)(nil),                 // 12: rmmway.agent.v1.HardwareInfo
+	(*DomainInfo)(nil),                   // 13: rmmway.agent.v1.DomainInfo
+	(*DiskInfo)(nil),                     // 14: rmmway.agent.v1.DiskInfo
+	(*SoftwareInfo)(nil),                 // 15: rmmway.agent.v1.SoftwareInfo
+	(*ServiceInfo)(nil),                  // 16: rmmway.agent.v1.ServiceInfo
+	(*UserAccount)(nil),                  // 17: rmmway.agent.v1.UserAccount
+	(*PatchStatus)(nil),                  // 18: rmmway.agent.v1.PatchStatus
+	(*PatchQueryResult)(nil),             // 19: rmmway.agent.v1.PatchQueryResult
+	(*AvailablePatch)(nil),               // 20: rmmway.agent.v1.AvailablePatch
+	(*InstalledPatch)(nil),               // 21: rmmway.agent.v1.InstalledPatch
+	(*PatchApplyProgress)(nil),           // 22: rmmway.agent.v1.PatchApplyProgress
+	(*SessionControl_OpenSession)(nil),   // 23: rmmway.agent.v1.SessionControl.OpenSession
+	(*SessionControl_CloseSession)(nil),  // 24: rmmway.agent.v1.SessionControl.CloseSession
+	(*SessionControl_MouseEvent)(nil),    // 25: rmmway.agent.v1.SessionControl.MouseEvent
+	(*SessionControl_KeyboardEvent)(nil), // 26: rmmway.agent.v1.SessionControl.KeyboardEvent
+	(*MetricBatch)(nil),                  // 27: rmmway.agent.v1.MetricBatch
+	(*CommandResult)(nil),                // 28: rmmway.agent.v1.CommandResult
+	(*LogBatch)(nil),                     // 29: rmmway.agent.v1.LogBatch
+	(*Command)(nil),                      // 30: rmmway.agent.v1.Command
 }
 var file_rmmway_agent_v1_agent_proto_depIdxs = []int32{
 	6,  // 0: rmmway.agent.v1.StreamRequest.heartbeat:type_name -> rmmway.agent.v1.Heartbeat
-	13, // 1: rmmway.agent.v1.StreamRequest.metrics:type_name -> rmmway.agent.v1.MetricBatch
-	14, // 2: rmmway.agent.v1.StreamRequest.command_result:type_name -> rmmway.agent.v1.CommandResult
-	15, // 3: rmmway.agent.v1.StreamRequest.logs:type_name -> rmmway.agent.v1.LogBatch
+	27, // 1: rmmway.agent.v1.StreamRequest.metrics:type_name -> rmmway.agent.v1.MetricBatch
+	28, // 2: rmmway.agent.v1.StreamRequest.command_result:type_name -> rmmway.agent.v1.CommandResult
+	29, // 3: rmmway.agent.v1.StreamRequest.logs:type_name -> rmmway.agent.v1.LogBatch
 	8,  // 4: rmmway.agent.v1.StreamRequest.session_frame:type_name -> rmmway.agent.v1.SessionFrame
 	10, // 5: rmmway.agent.v1.StreamRequest.file_chunk:type_name -> rmmway.agent.v1.FileChunk
-	7,  // 6: rmmway.agent.v1.StreamResponse.heartbeat_ack:type_name -> rmmway.agent.v1.HeartbeatAck
-	16, // 7: rmmway.agent.v1.StreamResponse.command:type_name -> rmmway.agent.v1.Command
-	9,  // 8: rmmway.agent.v1.StreamResponse.session_control:type_name -> rmmway.agent.v1.SessionControl
-	10, // 9: rmmway.agent.v1.StreamResponse.file_chunk:type_name -> rmmway.agent.v1.FileChunk
-	13, // 10: rmmway.agent.v1.Heartbeat.metrics:type_name -> rmmway.agent.v1.MetricBatch
-	11, // 11: rmmway.agent.v1.SessionControl.open:type_name -> rmmway.agent.v1.SessionControl.OpenSession
-	12, // 12: rmmway.agent.v1.SessionControl.close:type_name -> rmmway.agent.v1.SessionControl.CloseSession
-	0,  // 13: rmmway.agent.v1.AgentService.Enroll:input_type -> rmmway.agent.v1.EnrollRequest
-	4,  // 14: rmmway.agent.v1.AgentService.Stream:input_type -> rmmway.agent.v1.StreamRequest
-	2,  // 15: rmmway.agent.v1.AgentService.RefreshLeaf:input_type -> rmmway.agent.v1.RefreshLeafRequest
-	1,  // 16: rmmway.agent.v1.AgentService.Enroll:output_type -> rmmway.agent.v1.EnrollResponse
-	5,  // 17: rmmway.agent.v1.AgentService.Stream:output_type -> rmmway.agent.v1.StreamResponse
-	3,  // 18: rmmway.agent.v1.AgentService.RefreshLeaf:output_type -> rmmway.agent.v1.RefreshLeafResponse
-	16, // [16:19] is the sub-list for method output_type
-	13, // [13:16] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	11, // 6: rmmway.agent.v1.StreamRequest.inventory_report:type_name -> rmmway.agent.v1.InventoryReport
+	18, // 7: rmmway.agent.v1.StreamRequest.patch_status:type_name -> rmmway.agent.v1.PatchStatus
+	7,  // 8: rmmway.agent.v1.StreamResponse.heartbeat_ack:type_name -> rmmway.agent.v1.HeartbeatAck
+	30, // 9: rmmway.agent.v1.StreamResponse.command:type_name -> rmmway.agent.v1.Command
+	9,  // 10: rmmway.agent.v1.StreamResponse.session_control:type_name -> rmmway.agent.v1.SessionControl
+	10, // 11: rmmway.agent.v1.StreamResponse.file_chunk:type_name -> rmmway.agent.v1.FileChunk
+	27, // 12: rmmway.agent.v1.Heartbeat.metrics:type_name -> rmmway.agent.v1.MetricBatch
+	23, // 13: rmmway.agent.v1.SessionControl.open:type_name -> rmmway.agent.v1.SessionControl.OpenSession
+	24, // 14: rmmway.agent.v1.SessionControl.close:type_name -> rmmway.agent.v1.SessionControl.CloseSession
+	25, // 15: rmmway.agent.v1.SessionControl.mouse_event:type_name -> rmmway.agent.v1.SessionControl.MouseEvent
+	26, // 16: rmmway.agent.v1.SessionControl.keyboard_event:type_name -> rmmway.agent.v1.SessionControl.KeyboardEvent
+	12, // 17: rmmway.agent.v1.InventoryReport.hardware:type_name -> rmmway.agent.v1.HardwareInfo
+	15, // 18: rmmway.agent.v1.InventoryReport.software:type_name -> rmmway.agent.v1.SoftwareInfo
+	16, // 19: rmmway.agent.v1.InventoryReport.services:type_name -> rmmway.agent.v1.ServiceInfo
+	17, // 20: rmmway.agent.v1.InventoryReport.users:type_name -> rmmway.agent.v1.UserAccount
+	13, // 21: rmmway.agent.v1.HardwareInfo.domains:type_name -> rmmway.agent.v1.DomainInfo
+	14, // 22: rmmway.agent.v1.HardwareInfo.disks:type_name -> rmmway.agent.v1.DiskInfo
+	19, // 23: rmmway.agent.v1.PatchStatus.query:type_name -> rmmway.agent.v1.PatchQueryResult
+	22, // 24: rmmway.agent.v1.PatchStatus.apply:type_name -> rmmway.agent.v1.PatchApplyProgress
+	20, // 25: rmmway.agent.v1.PatchQueryResult.available:type_name -> rmmway.agent.v1.AvailablePatch
+	21, // 26: rmmway.agent.v1.PatchQueryResult.installed:type_name -> rmmway.agent.v1.InstalledPatch
+	21, // 27: rmmway.agent.v1.PatchApplyProgress.installed:type_name -> rmmway.agent.v1.InstalledPatch
+	0,  // 28: rmmway.agent.v1.AgentService.Enroll:input_type -> rmmway.agent.v1.EnrollRequest
+	4,  // 29: rmmway.agent.v1.AgentService.Stream:input_type -> rmmway.agent.v1.StreamRequest
+	2,  // 30: rmmway.agent.v1.AgentService.RefreshLeaf:input_type -> rmmway.agent.v1.RefreshLeafRequest
+	1,  // 31: rmmway.agent.v1.AgentService.Enroll:output_type -> rmmway.agent.v1.EnrollResponse
+	5,  // 32: rmmway.agent.v1.AgentService.Stream:output_type -> rmmway.agent.v1.StreamResponse
+	3,  // 33: rmmway.agent.v1.AgentService.RefreshLeaf:output_type -> rmmway.agent.v1.RefreshLeafResponse
+	31, // [31:34] is the sub-list for method output_type
+	28, // [28:31] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_rmmway_agent_v1_agent_proto_init() }
@@ -1355,6 +2737,8 @@ func file_rmmway_agent_v1_agent_proto_init() {
 		(*StreamRequest_Logs)(nil),
 		(*StreamRequest_SessionFrame)(nil),
 		(*StreamRequest_FileChunk)(nil),
+		(*StreamRequest_InventoryReport)(nil),
+		(*StreamRequest_PatchStatus)(nil),
 	}
 	file_rmmway_agent_v1_agent_proto_msgTypes[5].OneofWrappers = []any{
 		(*StreamResponse_HeartbeatAck)(nil),
@@ -1365,6 +2749,8 @@ func file_rmmway_agent_v1_agent_proto_init() {
 	file_rmmway_agent_v1_agent_proto_msgTypes[9].OneofWrappers = []any{
 		(*SessionControl_Open)(nil),
 		(*SessionControl_Close)(nil),
+		(*SessionControl_MouseEvent_)(nil),
+		(*SessionControl_KeyboardEvent_)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1372,7 +2758,7 @@ func file_rmmway_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rmmway_agent_v1_agent_proto_rawDesc), len(file_rmmway_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

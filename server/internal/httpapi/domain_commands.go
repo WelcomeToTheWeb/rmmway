@@ -201,8 +201,37 @@ func buildCommandAction(in dispatchRequest) (any, error) {
 			push.Mode = in.Mode
 		}
 		return &agentv1.Command_FilePush{FilePush: push}, nil
+	case "collect_inventory": // gap #4
+		return &agentv1.Command_CollectInventory{CollectInventory: &agentv1.CollectInventory{}}, nil
+	case "patch_query": // gap #4
+		return &agentv1.Command_PatchQuery{PatchQuery: &agentv1.PatchQuery{
+			SeverityFilter: in.Path, // severity filter via path field
+		}}, nil
+	case "patch_apply": // gap #4
+		patchIDs := []string{}
+		if in.Script != "" {
+			// patch_ids passed as base64 JSON array
+			decoded, err := base64.StdEncoding.DecodeString(in.Script)
+			if err != nil {
+				return nil, fmt.Errorf("patch_ids must be base64 JSON array: %v", err)
+			}
+			if err := json.Unmarshal(decoded, &patchIDs); err != nil {
+				return nil, fmt.Errorf("patch_ids must decode to string array: %v", err)
+			}
+		}
+		scheduleReboot := false
+		rebootDelay := uint32(0)
+		if in.TimeoutS > 0 {
+			scheduleReboot = true
+			rebootDelay = uint32(in.TimeoutS)
+		}
+		return &agentv1.Command_PatchApply{PatchApply: &agentv1.PatchApply{
+			PatchIds:             patchIDs,
+			ScheduleReboot:       scheduleReboot,
+			RebootDelaySeconds:   rebootDelay,
+		}}, nil
 	default:
-		return nil, fmt.Errorf("unknown action %q (want run_script|reboot|file_pull|file_push)", in.Action)
+		return nil, fmt.Errorf("unknown action %q (want run_script|reboot|file_pull|file_push|collect_inventory|patch_query|patch_apply)", in.Action)
 	}
 }
 
