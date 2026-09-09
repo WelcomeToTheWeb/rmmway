@@ -8,6 +8,15 @@ const DIST = process.env.DIST;
 const PORT = Number(process.env.PORT || 8123);
 
 // ---- fixtures ---------------------------------------------------------------
+// gap #10a (lane C, wave 2): client_id added to the device fixtures + a
+// /api/clients route + ?client= scoping (see the /api/devices handler), so
+// the device table's Client column + client filter can be evidenced.
+// Additive only — the original before/after screenshots predate this.
+const CLIENTS = [
+  { id: "clt-acme", name: "Acme Corp", description: "", device_count: 2 },
+  { id: "clt-globex", name: "Globex", description: "", device_count: 1 },
+  { id: "unassigned", name: "Unassigned", description: "", device_count: 1 },
+];
 const DEVICES = [
   {
     id: "dev-web01",
@@ -20,6 +29,7 @@ const DEVICES = [
     online: true,
     first_seen: "2026-05-02T09:14:00Z",
     last_seen: new Date(Date.now() - 4000).toISOString(),
+    client_id: "clt-acme",
   },
   {
     id: "dev-db01",
@@ -32,6 +42,7 @@ const DEVICES = [
     online: true,
     first_seen: "2026-05-02T09:20:00Z",
     last_seen: new Date(Date.now() - 6000).toISOString(),
+    client_id: "clt-acme",
   },
   {
     id: "dev-fs01",
@@ -44,6 +55,7 @@ const DEVICES = [
     online: true,
     first_seen: "2026-05-15T11:02:00Z",
     last_seen: new Date(Date.now() - 9000).toISOString(),
+    client_id: "clt-globex",
   },
   {
     id: "dev-gw03",
@@ -51,11 +63,12 @@ const DEVICES = [
     os: "linux",
     arch: "arm64",
     agent_version: "0.4.1",
-    interfaces: ["10.0.9.3"],
+    interfaces: ["10.0.9.3", "10.0.9.4", "fe80::1"],
     tags: ["iot"],
     online: false,
     first_seen: "2026-06-01T08:00:00Z",
     last_seen: new Date(Date.now() - 42 * 60 * 60 * 1000).toISOString(),
+    client_id: null,
   },
 ];
 const SERIES = [
@@ -232,7 +245,18 @@ http
           });
         return json(res, { error: "invalid username or password" }, 401);
       }
-      if (p === "/api/devices") return json(res, DEVICES);
+      if (p === "/api/clients") return json(res, CLIENTS);
+      if (p === "/api/devices") {
+        const client = url.searchParams.get("client") || "";
+        const list = client
+          ? DEVICES.filter((d) =>
+              client === "unassigned"
+                ? d.client_id == null
+                : d.client_id === client,
+            )
+          : DEVICES;
+        return json(res, list);
+      }
       if (p === "/api/alerts/counts")
         return json(res, { open: 2, acked: 1, resolved: 0 });
       if (p.startsWith("/api/alerts")) return json(res, []);
