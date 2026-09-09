@@ -39,6 +39,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
 	"github.com/welcometotheweb/rmmway/server/internal/users"
 	"github.com/welcometotheweb/rmmway/server/internal/releases"
+	"github.com/welcometotheweb/rmmway/server/internal/sessionrelay"
 	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 	"github.com/welcometotheweb/rmmway/server/internal/webhook"
@@ -118,6 +119,9 @@ type Server struct {
 	// (RMMWAY_PUBLIC_URL). The Add Device UI reads this via
 	// GET /api/public-url to prefill the server URL field.
 	publicURL string
+	// gap #1a: remote session support.
+	sessions           *sessionrelay.Registry
+	sendSessionControl func(deviceID string, sc *agentv1.SessionControl) bool
 }
 
 // Config wires a Server. AdminPassword is hashed with a fresh per-boot salt
@@ -197,6 +201,12 @@ type Config struct {
 	// /api/login. Defaults to true; tests that hammer the login route set
 	// it false.
 	LoginRateLimit *bool
+	// gap #1a: remote session support.
+	// Sessions is the frame relay registry; nil disables /api/devices/{id}/session/*.
+	Sessions *sessionrelay.Registry
+	// SendSessionControl pushes a SessionControl downlink (open/close);
+	// nil disables session start/stop.
+	SendSessionControl func(deviceID string, sc *agentv1.SessionControl) bool
 }
 
 // New builds a Server. A nil Devices falls back to an in-memory store.
@@ -257,8 +267,10 @@ func New(cfg Config) *Server {
 		setup:         cfg.Setup,
 		clients:       cfg.Clients,
 		users:         cfg.Users,
-		rbac:          &users.RBAC{Secret: cfg.JWTSecret, Users: cfg.Users},
-		publicURL:     cfg.PublicURL,
+		rbac:               &users.RBAC{Secret: cfg.JWTSecret, Users: cfg.Users},
+		publicURL:          cfg.PublicURL,
+		sessions:           cfg.Sessions,
+		sendSessionControl: cfg.SendSessionControl,
 	}
 }
 
@@ -282,7 +294,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	registerCommands(s, mux)
 	registerSettings(s, mux)
 	registerClients(s, mux)
-	registerUsers(s, mux) // gap #3: operator accounts + API tokens (admin-only)
+	registerUsers(s, mux)      // gap #3: operator accounts + API tokens (admin-only)
+	registerSession(s, mux)    // gap #1a: remote session + file download routes
 }
 
 type loginRequest struct {

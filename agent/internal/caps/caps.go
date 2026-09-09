@@ -34,6 +34,9 @@ import (
 const (
 	CapRunScript = "rmmway.run_script"
 	CapReboot    = "rmmway.reboot"
+	// gap #1a: file transfer.
+	CapFilePull = "rmmway.file_pull"
+	CapFilePush = "rmmway.file_push"
 
 	// TokenIssuer is the `iss` claim of every capability token.
 	TokenIssuer = "rmmway"
@@ -121,6 +124,10 @@ func ForCommand(cmd *agentv1.Command) (capability, token string, ok bool) {
 		return CapRunScript, a.RunScript.GetCapabilityToken(), true
 	case *agentv1.Command_Reboot:
 		return CapReboot, a.Reboot.GetCapabilityToken(), true
+	case *agentv1.Command_FilePull: // gap #1a
+		return CapFilePull, a.FilePull.GetCapabilityToken(), true
+	case *agentv1.Command_FilePush: // gap #1a
+		return CapFilePush, a.FilePush.GetCapabilityToken(), true
 	default:
 		return "", "", false
 	}

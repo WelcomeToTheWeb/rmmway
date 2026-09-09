@@ -33,6 +33,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
 	"github.com/welcometotheweb/rmmway/server/internal/setup"
+	"github.com/welcometotheweb/rmmway/server/internal/sessionrelay"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -770,9 +771,12 @@ func main() {
 		})
 	}
 
+	// gap #1a: session relay registry (shared between ingest and httpapi).
+	sessionRelay := sessionrelay.New()
+
 	// ---- gRPC ingest (W1-5) + mTLS agent channel (W3-1) ---------------
 	svc, grpcServer, mtlsServer := wireIngest(version, jwtSecret, grpcAddr, grpcMTLSAddr, httpAddr,
-		indexer, caMgr, capsIssuer, logSink, flowBus, publishEvent, metricsSink, devicesStore)
+		indexer, caMgr, capsIssuer, logSink, flowBus, publishEvent, metricsSink, devicesStore, sessionRelay)
 
 	// ---- self-healing playbook engine (W5-1) ---------------------------
 	healEngine := wireHealEngine(hasPG, pgPool, svc, publishEvent)
@@ -829,6 +833,10 @@ func main() {
 		JWTSecret:     jwtSecret,
 		AdminUser:     adminUser,
 		AdminPassword: adminPassword,
+		Sessions:      sessionRelay,
+		SendSessionControl: func(deviceID string, sc *agentv1.SessionControl) bool {
+			return svc.SendSessionControl(deviceID, sc)
+		},
 		MintBootstrap: svc.MintBootstrapToken,
 		Enroll:        svc.Enroll,
 		Dispatch:      svc.Dispatcher().Dispatch,

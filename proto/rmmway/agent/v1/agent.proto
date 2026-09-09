@@ -123,6 +123,15 @@ message StreamRequest {
     // log and ships each batch here AND to Loki). Server-side dedup by
     // entry id makes the at-least-once replay safe.
     LogBatch logs = 4;
+    // gap #1a: one screen frame of a live remote session (view-only,
+    // phase 1). The agent streams these at the SessionControl.open rate
+    // while a session is active; the server relays only the latest frame
+    // per session (drop-old) to browser viewers.
+    SessionFrame session_frame = 5;
+    // gap #1a: one block of a file transfer (a file_pull payload, or a
+    // file_push payload when the push is chunked rather than inline).
+    // Correlated to its dispatching command by command_id.
+    FileChunk file_chunk = 6;
   }
 }
 
@@ -131,6 +140,10 @@ message StreamResponse {
   oneof payload {
     HeartbeatAck heartbeat_ack = 1;
     Command command = 2;
+    // gap #1a: open/close the agent's capture loop.
+    SessionControl session_control = 3;
+    // gap #1a: one block of an incoming file (a chunked file_push).
+    FileChunk file_chunk = 4;
   }
 }
 
@@ -158,4 +171,74 @@ message HeartbeatAck {
   // keeps heartbeating never hits the expiry wall. Empty = no renewal this
   // beat (the current token still has plenty of life).
   string jwt = 4;
+}
+
+// SessionFrame (gap #1a, phase 1 = view-only) is one captured screen frame
+// of a live remote session. Phase 1 ships JPEG over the existing mTLS
+// Stream (no new channel): a frame is a few hundred KB at most, the agent
+// captures at the opened rate, and the server relays only the LATEST frame
+// per session to its viewers (drop-old) — a slow browser simply sees a
+// lower rate, it never backs the agent up.
+message SessionFrame {
+  // Echo of the SessionControl.open session_id (one session per device in
+  // phase 1; the id lets a viewer validate it is following the right feed).
+  string session_id = 1;
+  // Monotonic frame counter for this session (resets per open). Viewers use
+  // it to detect drops.
+  uint64 seq = 2;
+  // Codec hint; phase 1 is always "jpeg".
+  string codec = 3;
+  uint32 width = 4;
+  uint32 height = 5;
+  // The frame (empty on a status frame below).
+  bytes jpeg = 6;
+  // Agent wall clock (Unix ms) at capture.
+  int64 capture_ts_ms = 7;
+  // Non-empty = capture-unavailable STATUS frame (jpeg is empty): the
+  // viewer renders the status instead of a frame. Phase 1 values:
+  // "vnc_required" — no local display to capture (e.g. a headless Linux
+  // box); opening a local VNC session makes frames follow; "unavailable"
+  // — the capture backend errored. Status frames are throttled on the
+  // agent (not one per tick) so they cannot crowd out real frames.
+  string status = 8;
+}
+
+// SessionControl (gap #1a) is the downlink that drives the agent's capture
+// loop. open starts capturing at fps (0 = agent default ~2 fps, capped at
+// 30); close stops it and releases the capture backend. A repeated open for
+// an active session with a changed fps live-adjusts the rate.
+message SessionControl {
+  oneof action {
+    OpenSession open = 1;
+    CloseSession close = 2;
+  }
+  message OpenSession {
+    // Server-minted session id; echoed in every SessionFrame.
+    string session_id = 1;
+    // Frame-rate hint (frames per second; 0 = agent default).
+    int32 fps = 2;
+  }
+  message CloseSession {
+    string session_id = 1;
+  }
+}
+
+// FileChunk (gap #1a) is one block of a file transfer, MaxFileChunkBytes
+// (256 KiB) max. It rides BOTH directions of Stream: a file_pull streams the
+// source file UP (agent -> server); a chunked file_push streams the content
+// DOWN (server -> agent) — an inline push (FilePush.content_b64) uses no
+// chunks at all. Correlation: command_id is the dispatching Command's id;
+// seq is 0-based and ordered; the eof chunk carries the final (possibly
+// empty) block and closes the transfer.
+message FileChunk {
+  string command_id = 1;
+  uint64 seq = 2;
+  bytes data = 3;
+  bool eof = 4;
+  // file_pull only: the source file's total size (from stat) so the server
+  // can report progress. 0 = unknown.
+  int64 total_bytes = 5;
+  // file_pull only: the source file's mode (as an octal int, e.g. 0644).
+  // The server records it for the download (phase 1 does not re-apply it).
+  uint32 source_mode = 6;
 }

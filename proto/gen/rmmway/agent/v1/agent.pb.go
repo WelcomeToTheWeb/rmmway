@@ -362,6 +362,8 @@ type StreamRequest struct {
 	//	*StreamRequest_Metrics
 	//	*StreamRequest_CommandResult
 	//	*StreamRequest_Logs
+	//	*StreamRequest_SessionFrame
+	//	*StreamRequest_FileChunk
 	Payload       isStreamRequest_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -440,6 +442,24 @@ func (x *StreamRequest) GetLogs() *LogBatch {
 	return nil
 }
 
+func (x *StreamRequest) GetSessionFrame() *SessionFrame {
+	if x != nil {
+		if x, ok := x.Payload.(*StreamRequest_SessionFrame); ok {
+			return x.SessionFrame
+		}
+	}
+	return nil
+}
+
+func (x *StreamRequest) GetFileChunk() *FileChunk {
+	if x != nil {
+		if x, ok := x.Payload.(*StreamRequest_FileChunk); ok {
+			return x.FileChunk
+		}
+	}
+	return nil
+}
+
 type isStreamRequest_Payload interface {
 	isStreamRequest_Payload()
 }
@@ -468,6 +488,21 @@ type StreamRequest_Logs struct {
 	Logs *LogBatch `protobuf:"bytes,4,opt,name=logs,proto3,oneof"`
 }
 
+type StreamRequest_SessionFrame struct {
+	// gap #1a: one screen frame of a live remote session (view-only,
+	// phase 1). The agent streams these at the SessionControl.open rate
+	// while a session is active; the server relays only the latest frame
+	// per session (drop-old) to browser viewers.
+	SessionFrame *SessionFrame `protobuf:"bytes,5,opt,name=session_frame,json=sessionFrame,proto3,oneof"`
+}
+
+type StreamRequest_FileChunk struct {
+	// gap #1a: one block of a file transfer (a file_pull payload, or a
+	// file_push payload when the push is chunked rather than inline).
+	// Correlated to its dispatching command by command_id.
+	FileChunk *FileChunk `protobuf:"bytes,6,opt,name=file_chunk,json=fileChunk,proto3,oneof"`
+}
+
 func (*StreamRequest_Heartbeat) isStreamRequest_Payload() {}
 
 func (*StreamRequest_Metrics) isStreamRequest_Payload() {}
@@ -476,6 +511,10 @@ func (*StreamRequest_CommandResult) isStreamRequest_Payload() {}
 
 func (*StreamRequest_Logs) isStreamRequest_Payload() {}
 
+func (*StreamRequest_SessionFrame) isStreamRequest_Payload() {}
+
+func (*StreamRequest_FileChunk) isStreamRequest_Payload() {}
+
 // StreamResponse is one downlink frame on Stream.
 type StreamResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -483,6 +522,8 @@ type StreamResponse struct {
 	//
 	//	*StreamResponse_HeartbeatAck
 	//	*StreamResponse_Command
+	//	*StreamResponse_SessionControl
+	//	*StreamResponse_FileChunk
 	Payload       isStreamResponse_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -543,6 +584,24 @@ func (x *StreamResponse) GetCommand() *Command {
 	return nil
 }
 
+func (x *StreamResponse) GetSessionControl() *SessionControl {
+	if x != nil {
+		if x, ok := x.Payload.(*StreamResponse_SessionControl); ok {
+			return x.SessionControl
+		}
+	}
+	return nil
+}
+
+func (x *StreamResponse) GetFileChunk() *FileChunk {
+	if x != nil {
+		if x, ok := x.Payload.(*StreamResponse_FileChunk); ok {
+			return x.FileChunk
+		}
+	}
+	return nil
+}
+
 type isStreamResponse_Payload interface {
 	isStreamResponse_Payload()
 }
@@ -555,9 +614,23 @@ type StreamResponse_Command struct {
 	Command *Command `protobuf:"bytes,2,opt,name=command,proto3,oneof"`
 }
 
+type StreamResponse_SessionControl struct {
+	// gap #1a: open/close the agent's capture loop.
+	SessionControl *SessionControl `protobuf:"bytes,3,opt,name=session_control,json=sessionControl,proto3,oneof"`
+}
+
+type StreamResponse_FileChunk struct {
+	// gap #1a: one block of an incoming file (a chunked file_push).
+	FileChunk *FileChunk `protobuf:"bytes,4,opt,name=file_chunk,json=fileChunk,proto3,oneof"`
+}
+
 func (*StreamResponse_HeartbeatAck) isStreamResponse_Payload() {}
 
 func (*StreamResponse_Command) isStreamResponse_Payload() {}
+
+func (*StreamResponse_SessionControl) isStreamResponse_Payload() {}
+
+func (*StreamResponse_FileChunk) isStreamResponse_Payload() {}
 
 // Heartbeat keeps the device "online" and can piggyback metrics to save
 // round-trips.
@@ -714,6 +787,404 @@ func (x *HeartbeatAck) GetJwt() string {
 	return ""
 }
 
+// SessionFrame (gap #1a, phase 1 = view-only) is one captured screen frame
+// of a live remote session. Phase 1 ships JPEG over the existing mTLS
+// Stream (no new channel): a frame is a few hundred KB at most, the agent
+// captures at the opened rate, and the server relays only the LATEST frame
+// per session to its viewers (drop-old) — a slow browser simply sees a
+// lower rate, it never backs the agent up.
+type SessionFrame struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Echo of the SessionControl.open session_id (one session per device in
+	// phase 1; the id lets a viewer validate it is following the right feed).
+	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Monotonic frame counter for this session (resets per open). Viewers use
+	// it to detect drops.
+	Seq uint64 `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
+	// Codec hint; phase 1 is always "jpeg".
+	Codec  string `protobuf:"bytes,3,opt,name=codec,proto3" json:"codec,omitempty"`
+	Width  uint32 `protobuf:"varint,4,opt,name=width,proto3" json:"width,omitempty"`
+	Height uint32 `protobuf:"varint,5,opt,name=height,proto3" json:"height,omitempty"`
+	// The frame (empty on a status frame below).
+	Jpeg []byte `protobuf:"bytes,6,opt,name=jpeg,proto3" json:"jpeg,omitempty"`
+	// Agent wall clock (Unix ms) at capture.
+	CaptureTsMs int64 `protobuf:"varint,7,opt,name=capture_ts_ms,json=captureTsMs,proto3" json:"capture_ts_ms,omitempty"`
+	// Non-empty = capture-unavailable STATUS frame (jpeg is empty): the
+	// viewer renders the status instead of a frame. Phase 1 values:
+	// "vnc_required" — no local display to capture (e.g. a headless Linux
+	// box); opening a local VNC session makes frames follow; "unavailable"
+	// — the capture backend errored. Status frames are throttled on the
+	// agent (not one per tick) so they cannot crowd out real frames.
+	Status        string `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionFrame) Reset() {
+	*x = SessionFrame{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionFrame) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionFrame) ProtoMessage() {}
+
+func (x *SessionFrame) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionFrame.ProtoReflect.Descriptor instead.
+func (*SessionFrame) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SessionFrame) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionFrame) GetSeq() uint64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *SessionFrame) GetCodec() string {
+	if x != nil {
+		return x.Codec
+	}
+	return ""
+}
+
+func (x *SessionFrame) GetWidth() uint32 {
+	if x != nil {
+		return x.Width
+	}
+	return 0
+}
+
+func (x *SessionFrame) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *SessionFrame) GetJpeg() []byte {
+	if x != nil {
+		return x.Jpeg
+	}
+	return nil
+}
+
+func (x *SessionFrame) GetCaptureTsMs() int64 {
+	if x != nil {
+		return x.CaptureTsMs
+	}
+	return 0
+}
+
+func (x *SessionFrame) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+// SessionControl (gap #1a) is the downlink that drives the agent's capture
+// loop. open starts capturing at fps (0 = agent default ~2 fps, capped at
+// 30); close stops it and releases the capture backend. A repeated open for
+// an active session with a changed fps live-adjusts the rate.
+type SessionControl struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Action:
+	//
+	//	*SessionControl_Open
+	//	*SessionControl_Close
+	Action        isSessionControl_Action `protobuf_oneof:"action"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionControl) Reset() {
+	*x = SessionControl{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionControl) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionControl) ProtoMessage() {}
+
+func (x *SessionControl) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionControl.ProtoReflect.Descriptor instead.
+func (*SessionControl) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SessionControl) GetAction() isSessionControl_Action {
+	if x != nil {
+		return x.Action
+	}
+	return nil
+}
+
+func (x *SessionControl) GetOpen() *SessionControl_OpenSession {
+	if x != nil {
+		if x, ok := x.Action.(*SessionControl_Open); ok {
+			return x.Open
+		}
+	}
+	return nil
+}
+
+func (x *SessionControl) GetClose() *SessionControl_CloseSession {
+	if x != nil {
+		if x, ok := x.Action.(*SessionControl_Close); ok {
+			return x.Close
+		}
+	}
+	return nil
+}
+
+type isSessionControl_Action interface {
+	isSessionControl_Action()
+}
+
+type SessionControl_Open struct {
+	Open *SessionControl_OpenSession `protobuf:"bytes,1,opt,name=open,proto3,oneof"`
+}
+
+type SessionControl_Close struct {
+	Close *SessionControl_CloseSession `protobuf:"bytes,2,opt,name=close,proto3,oneof"`
+}
+
+func (*SessionControl_Open) isSessionControl_Action() {}
+
+func (*SessionControl_Close) isSessionControl_Action() {}
+
+// FileChunk (gap #1a) is one block of a file transfer, MaxFileChunkBytes
+// (256 KiB) max. It rides BOTH directions of Stream: a file_pull streams the
+// source file UP (agent -> server); a chunked file_push streams the content
+// DOWN (server -> agent) — an inline push (FilePush.content_b64) uses no
+// chunks at all. Correlation: command_id is the dispatching Command's id;
+// seq is 0-based and ordered; the eof chunk carries the final (possibly
+// empty) block and closes the transfer.
+type FileChunk struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	CommandId string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	Seq       uint64                 `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
+	Data      []byte                 `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
+	Eof       bool                   `protobuf:"varint,4,opt,name=eof,proto3" json:"eof,omitempty"`
+	// file_pull only: the source file's total size (from stat) so the server
+	// can report progress. 0 = unknown.
+	TotalBytes int64 `protobuf:"varint,5,opt,name=total_bytes,json=totalBytes,proto3" json:"total_bytes,omitempty"`
+	// file_pull only: the source file's mode (as an octal int, e.g. 0644).
+	// The server records it for the download (phase 1 does not re-apply it).
+	SourceMode    uint32 `protobuf:"varint,6,opt,name=source_mode,json=sourceMode,proto3" json:"source_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileChunk) Reset() {
+	*x = FileChunk{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileChunk) ProtoMessage() {}
+
+func (x *FileChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileChunk.ProtoReflect.Descriptor instead.
+func (*FileChunk) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *FileChunk) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *FileChunk) GetSeq() uint64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *FileChunk) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *FileChunk) GetEof() bool {
+	if x != nil {
+		return x.Eof
+	}
+	return false
+}
+
+func (x *FileChunk) GetTotalBytes() int64 {
+	if x != nil {
+		return x.TotalBytes
+	}
+	return 0
+}
+
+func (x *FileChunk) GetSourceMode() uint32 {
+	if x != nil {
+		return x.SourceMode
+	}
+	return 0
+}
+
+type SessionControl_OpenSession struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Server-minted session id; echoed in every SessionFrame.
+	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Frame-rate hint (frames per second; 0 = agent default).
+	Fps           int32 `protobuf:"varint,2,opt,name=fps,proto3" json:"fps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionControl_OpenSession) Reset() {
+	*x = SessionControl_OpenSession{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionControl_OpenSession) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionControl_OpenSession) ProtoMessage() {}
+
+func (x *SessionControl_OpenSession) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionControl_OpenSession.ProtoReflect.Descriptor instead.
+func (*SessionControl_OpenSession) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{9, 0}
+}
+
+func (x *SessionControl_OpenSession) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionControl_OpenSession) GetFps() int32 {
+	if x != nil {
+		return x.Fps
+	}
+	return 0
+}
+
+type SessionControl_CloseSession struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionControl_CloseSession) Reset() {
+	*x = SessionControl_CloseSession{}
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionControl_CloseSession) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionControl_CloseSession) ProtoMessage() {}
+
+func (x *SessionControl_CloseSession) ProtoReflect() protoreflect.Message {
+	mi := &file_rmmway_agent_v1_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionControl_CloseSession.ProtoReflect.Descriptor instead.
+func (*SessionControl_CloseSession) Descriptor() ([]byte, []int) {
+	return file_rmmway_agent_v1_agent_proto_rawDescGZIP(), []int{9, 1}
+}
+
+func (x *SessionControl_CloseSession) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
 var File_rmmway_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
@@ -745,16 +1216,22 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\fleaf_key_pem\x18\x02 \x01(\tR\n" +
 	"leafKeyPem\x12\x1d\n" +
 	"\n" +
-	"expires_ms\x18\x03 \x01(\x03R\texpiresMs\"\x8a\x02\n" +
+	"expires_ms\x18\x03 \x01(\x03R\texpiresMs\"\x8d\x03\n" +
 	"\rStreamRequest\x12:\n" +
 	"\theartbeat\x18\x01 \x01(\v2\x1a.rmmway.agent.v1.HeartbeatH\x00R\theartbeat\x128\n" +
 	"\ametrics\x18\x02 \x01(\v2\x1c.rmmway.agent.v1.MetricBatchH\x00R\ametrics\x12G\n" +
 	"\x0ecommand_result\x18\x03 \x01(\v2\x1e.rmmway.agent.v1.CommandResultH\x00R\rcommandResult\x12/\n" +
-	"\x04logs\x18\x04 \x01(\v2\x19.rmmway.agent.v1.LogBatchH\x00R\x04logsB\t\n" +
-	"\apayload\"\x97\x01\n" +
+	"\x04logs\x18\x04 \x01(\v2\x19.rmmway.agent.v1.LogBatchH\x00R\x04logs\x12D\n" +
+	"\rsession_frame\x18\x05 \x01(\v2\x1d.rmmway.agent.v1.SessionFrameH\x00R\fsessionFrame\x12;\n" +
+	"\n" +
+	"file_chunk\x18\x06 \x01(\v2\x1a.rmmway.agent.v1.FileChunkH\x00R\tfileChunkB\t\n" +
+	"\apayload\"\xa0\x02\n" +
 	"\x0eStreamResponse\x12D\n" +
 	"\rheartbeat_ack\x18\x01 \x01(\v2\x1d.rmmway.agent.v1.HeartbeatAckH\x00R\fheartbeatAck\x124\n" +
-	"\acommand\x18\x02 \x01(\v2\x18.rmmway.agent.v1.CommandH\x00R\acommandB\t\n" +
+	"\acommand\x18\x02 \x01(\v2\x18.rmmway.agent.v1.CommandH\x00R\acommand\x12J\n" +
+	"\x0fsession_control\x18\x03 \x01(\v2\x1f.rmmway.agent.v1.SessionControlH\x00R\x0esessionControl\x12;\n" +
+	"\n" +
+	"file_chunk\x18\x04 \x01(\v2\x1a.rmmway.agent.v1.FileChunkH\x00R\tfileChunkB\t\n" +
 	"\apayload\"\xc4\x01\n" +
 	"\tHeartbeat\x12!\n" +
 	"\ftimestamp_ms\x18\x01 \x01(\x03R\vtimestampMs\x12\x1f\n" +
@@ -767,7 +1244,38 @@ const file_rmmway_agent_v1_agent_proto_rawDesc = "" +
 	"\x0eserver_time_ms\x18\x01 \x01(\x03R\fserverTimeMs\x120\n" +
 	"\x14heartbeat_interval_s\x18\x02 \x01(\x05R\x12heartbeatIntervalS\x12*\n" +
 	"\x11metric_interval_s\x18\x03 \x01(\x05R\x0fmetricIntervalS\x12\x10\n" +
-	"\x03jwt\x18\x04 \x01(\tR\x03jwt2\x82\x02\n" +
+	"\x03jwt\x18\x04 \x01(\tR\x03jwt\"\xd3\x01\n" +
+	"\fSessionFrame\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x10\n" +
+	"\x03seq\x18\x02 \x01(\x04R\x03seq\x12\x14\n" +
+	"\x05codec\x18\x03 \x01(\tR\x05codec\x12\x14\n" +
+	"\x05width\x18\x04 \x01(\rR\x05width\x12\x16\n" +
+	"\x06height\x18\x05 \x01(\rR\x06height\x12\x12\n" +
+	"\x04jpeg\x18\x06 \x01(\fR\x04jpeg\x12\"\n" +
+	"\rcapture_ts_ms\x18\a \x01(\x03R\vcaptureTsMs\x12\x16\n" +
+	"\x06status\x18\b \x01(\tR\x06status\"\x92\x02\n" +
+	"\x0eSessionControl\x12A\n" +
+	"\x04open\x18\x01 \x01(\v2+.rmmway.agent.v1.SessionControl.OpenSessionH\x00R\x04open\x12D\n" +
+	"\x05close\x18\x02 \x01(\v2,.rmmway.agent.v1.SessionControl.CloseSessionH\x00R\x05close\x1a>\n" +
+	"\vOpenSession\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x10\n" +
+	"\x03fps\x18\x02 \x01(\x05R\x03fps\x1a-\n" +
+	"\fCloseSession\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionIdB\b\n" +
+	"\x06action\"\xa4\x01\n" +
+	"\tFileChunk\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x10\n" +
+	"\x03seq\x18\x02 \x01(\x04R\x03seq\x12\x12\n" +
+	"\x04data\x18\x03 \x01(\fR\x04data\x12\x10\n" +
+	"\x03eof\x18\x04 \x01(\bR\x03eof\x12\x1f\n" +
+	"\vtotal_bytes\x18\x05 \x01(\x03R\n" +
+	"totalBytes\x12\x1f\n" +
+	"\vsource_mode\x18\x06 \x01(\rR\n" +
+	"sourceMode2\x82\x02\n" +
 	"\fAgentService\x12I\n" +
 	"\x06Enroll\x12\x1e.rmmway.agent.v1.EnrollRequest\x1a\x1f.rmmway.agent.v1.EnrollResponse\x12M\n" +
 	"\x06Stream\x12\x1e.rmmway.agent.v1.StreamRequest\x1a\x1f.rmmway.agent.v1.StreamResponse(\x010\x01\x12X\n" +
@@ -785,40 +1293,51 @@ func file_rmmway_agent_v1_agent_proto_rawDescGZIP() []byte {
 	return file_rmmway_agent_v1_agent_proto_rawDescData
 }
 
-var file_rmmway_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_rmmway_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_rmmway_agent_v1_agent_proto_goTypes = []any{
-	(*EnrollRequest)(nil),       // 0: rmmway.agent.v1.EnrollRequest
-	(*EnrollResponse)(nil),      // 1: rmmway.agent.v1.EnrollResponse
-	(*RefreshLeafRequest)(nil),  // 2: rmmway.agent.v1.RefreshLeafRequest
-	(*RefreshLeafResponse)(nil), // 3: rmmway.agent.v1.RefreshLeafResponse
-	(*StreamRequest)(nil),       // 4: rmmway.agent.v1.StreamRequest
-	(*StreamResponse)(nil),      // 5: rmmway.agent.v1.StreamResponse
-	(*Heartbeat)(nil),           // 6: rmmway.agent.v1.Heartbeat
-	(*HeartbeatAck)(nil),        // 7: rmmway.agent.v1.HeartbeatAck
-	(*MetricBatch)(nil),         // 8: rmmway.agent.v1.MetricBatch
-	(*CommandResult)(nil),       // 9: rmmway.agent.v1.CommandResult
-	(*LogBatch)(nil),            // 10: rmmway.agent.v1.LogBatch
-	(*Command)(nil),             // 11: rmmway.agent.v1.Command
+	(*EnrollRequest)(nil),               // 0: rmmway.agent.v1.EnrollRequest
+	(*EnrollResponse)(nil),              // 1: rmmway.agent.v1.EnrollResponse
+	(*RefreshLeafRequest)(nil),          // 2: rmmway.agent.v1.RefreshLeafRequest
+	(*RefreshLeafResponse)(nil),         // 3: rmmway.agent.v1.RefreshLeafResponse
+	(*StreamRequest)(nil),               // 4: rmmway.agent.v1.StreamRequest
+	(*StreamResponse)(nil),              // 5: rmmway.agent.v1.StreamResponse
+	(*Heartbeat)(nil),                   // 6: rmmway.agent.v1.Heartbeat
+	(*HeartbeatAck)(nil),                // 7: rmmway.agent.v1.HeartbeatAck
+	(*SessionFrame)(nil),                // 8: rmmway.agent.v1.SessionFrame
+	(*SessionControl)(nil),              // 9: rmmway.agent.v1.SessionControl
+	(*FileChunk)(nil),                   // 10: rmmway.agent.v1.FileChunk
+	(*SessionControl_OpenSession)(nil),  // 11: rmmway.agent.v1.SessionControl.OpenSession
+	(*SessionControl_CloseSession)(nil), // 12: rmmway.agent.v1.SessionControl.CloseSession
+	(*MetricBatch)(nil),                 // 13: rmmway.agent.v1.MetricBatch
+	(*CommandResult)(nil),               // 14: rmmway.agent.v1.CommandResult
+	(*LogBatch)(nil),                    // 15: rmmway.agent.v1.LogBatch
+	(*Command)(nil),                     // 16: rmmway.agent.v1.Command
 }
 var file_rmmway_agent_v1_agent_proto_depIdxs = []int32{
 	6,  // 0: rmmway.agent.v1.StreamRequest.heartbeat:type_name -> rmmway.agent.v1.Heartbeat
-	8,  // 1: rmmway.agent.v1.StreamRequest.metrics:type_name -> rmmway.agent.v1.MetricBatch
-	9,  // 2: rmmway.agent.v1.StreamRequest.command_result:type_name -> rmmway.agent.v1.CommandResult
-	10, // 3: rmmway.agent.v1.StreamRequest.logs:type_name -> rmmway.agent.v1.LogBatch
-	7,  // 4: rmmway.agent.v1.StreamResponse.heartbeat_ack:type_name -> rmmway.agent.v1.HeartbeatAck
-	11, // 5: rmmway.agent.v1.StreamResponse.command:type_name -> rmmway.agent.v1.Command
-	8,  // 6: rmmway.agent.v1.Heartbeat.metrics:type_name -> rmmway.agent.v1.MetricBatch
-	0,  // 7: rmmway.agent.v1.AgentService.Enroll:input_type -> rmmway.agent.v1.EnrollRequest
-	4,  // 8: rmmway.agent.v1.AgentService.Stream:input_type -> rmmway.agent.v1.StreamRequest
-	2,  // 9: rmmway.agent.v1.AgentService.RefreshLeaf:input_type -> rmmway.agent.v1.RefreshLeafRequest
-	1,  // 10: rmmway.agent.v1.AgentService.Enroll:output_type -> rmmway.agent.v1.EnrollResponse
-	5,  // 11: rmmway.agent.v1.AgentService.Stream:output_type -> rmmway.agent.v1.StreamResponse
-	3,  // 12: rmmway.agent.v1.AgentService.RefreshLeaf:output_type -> rmmway.agent.v1.RefreshLeafResponse
-	10, // [10:13] is the sub-list for method output_type
-	7,  // [7:10] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	13, // 1: rmmway.agent.v1.StreamRequest.metrics:type_name -> rmmway.agent.v1.MetricBatch
+	14, // 2: rmmway.agent.v1.StreamRequest.command_result:type_name -> rmmway.agent.v1.CommandResult
+	15, // 3: rmmway.agent.v1.StreamRequest.logs:type_name -> rmmway.agent.v1.LogBatch
+	8,  // 4: rmmway.agent.v1.StreamRequest.session_frame:type_name -> rmmway.agent.v1.SessionFrame
+	10, // 5: rmmway.agent.v1.StreamRequest.file_chunk:type_name -> rmmway.agent.v1.FileChunk
+	7,  // 6: rmmway.agent.v1.StreamResponse.heartbeat_ack:type_name -> rmmway.agent.v1.HeartbeatAck
+	16, // 7: rmmway.agent.v1.StreamResponse.command:type_name -> rmmway.agent.v1.Command
+	9,  // 8: rmmway.agent.v1.StreamResponse.session_control:type_name -> rmmway.agent.v1.SessionControl
+	10, // 9: rmmway.agent.v1.StreamResponse.file_chunk:type_name -> rmmway.agent.v1.FileChunk
+	13, // 10: rmmway.agent.v1.Heartbeat.metrics:type_name -> rmmway.agent.v1.MetricBatch
+	11, // 11: rmmway.agent.v1.SessionControl.open:type_name -> rmmway.agent.v1.SessionControl.OpenSession
+	12, // 12: rmmway.agent.v1.SessionControl.close:type_name -> rmmway.agent.v1.SessionControl.CloseSession
+	0,  // 13: rmmway.agent.v1.AgentService.Enroll:input_type -> rmmway.agent.v1.EnrollRequest
+	4,  // 14: rmmway.agent.v1.AgentService.Stream:input_type -> rmmway.agent.v1.StreamRequest
+	2,  // 15: rmmway.agent.v1.AgentService.RefreshLeaf:input_type -> rmmway.agent.v1.RefreshLeafRequest
+	1,  // 16: rmmway.agent.v1.AgentService.Enroll:output_type -> rmmway.agent.v1.EnrollResponse
+	5,  // 17: rmmway.agent.v1.AgentService.Stream:output_type -> rmmway.agent.v1.StreamResponse
+	3,  // 18: rmmway.agent.v1.AgentService.RefreshLeaf:output_type -> rmmway.agent.v1.RefreshLeafResponse
+	16, // [16:19] is the sub-list for method output_type
+	13, // [13:16] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_rmmway_agent_v1_agent_proto_init() }
@@ -834,10 +1353,18 @@ func file_rmmway_agent_v1_agent_proto_init() {
 		(*StreamRequest_Metrics)(nil),
 		(*StreamRequest_CommandResult)(nil),
 		(*StreamRequest_Logs)(nil),
+		(*StreamRequest_SessionFrame)(nil),
+		(*StreamRequest_FileChunk)(nil),
 	}
 	file_rmmway_agent_v1_agent_proto_msgTypes[5].OneofWrappers = []any{
 		(*StreamResponse_HeartbeatAck)(nil),
 		(*StreamResponse_Command)(nil),
+		(*StreamResponse_SessionControl)(nil),
+		(*StreamResponse_FileChunk)(nil),
+	}
+	file_rmmway_agent_v1_agent_proto_msgTypes[9].OneofWrappers = []any{
+		(*SessionControl_Open)(nil),
+		(*SessionControl_Close)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -845,7 +1372,7 @@ func file_rmmway_agent_v1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rmmway_agent_v1_agent_proto_rawDesc), len(file_rmmway_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

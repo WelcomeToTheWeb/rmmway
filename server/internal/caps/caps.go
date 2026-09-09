@@ -33,6 +33,9 @@ import (
 const (
 	CapRunScript = "rmmway.run_script"
 	CapReboot    = "rmmway.reboot"
+	// gap #1a: file transfer.
+	CapFilePull = "rmmway.file_pull"
+	CapFilePush = "rmmway.file_push"
 
 	// TokenIssuer is the `iss` claim of every capability token.
 	TokenIssuer = "rmmway"
@@ -40,7 +43,7 @@ const (
 
 // AllCapabilities is the full Phase 1 capability set (the default admin
 // grant). New actions must add their capability here.
-var AllCapabilities = []string{CapRunScript, CapReboot}
+var AllCapabilities = []string{CapRunScript, CapReboot, CapFilePull, CapFilePush}
 
 // ForAction maps a dispatch action (the Command oneof member) to the
 // capability it requires. Unknown actions are reported (ok=false).
@@ -50,6 +53,10 @@ func ForAction(action any) (string, bool) {
 		return CapRunScript, true
 	case *agentv1.Command_Reboot:
 		return CapReboot, true
+	case *agentv1.Command_FilePull: // gap #1a
+		return CapFilePull, true
+	case *agentv1.Command_FilePush: // gap #1a
+		return CapFilePush, true
 	default:
 		return "", false
 	}

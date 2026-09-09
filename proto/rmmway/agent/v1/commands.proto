@@ -31,6 +31,9 @@ message Command {
     Reboot reboot = 11;
     // Reserved range 20-29: inventory / log-collection commands (W6-1).
     // Reserved range 30-39: remediation actions (W5-1 playbooks).
+    // gap #1a: file transfer (range 50-59).
+    FilePull file_pull = 50;
+    FilePush file_push = 51;
   }
 
   // Max seconds before the server considers this command failed. 0 = agent
@@ -54,6 +57,35 @@ message RunScript {
 message Reboot {
   int32 delay_s = 1;    // 0 = immediate
   string capability_token = 2;
+}
+
+// FilePull (gap #1a) copies ONE file from the agent host to the server.
+// The agent reads path in 256 KiB blocks and ships each as a FileChunk
+// frame (command_id correlation, 0-based seq, eof on the final chunk),
+// then reports SUCCEEDED (stdout_tail = "<bytes> bytes") or FAILED.
+// Capability: rmmway.file_pull.
+message FilePull {
+  // Absolute path on the agent host.
+  string path = 1;
+  // W3-3: capability token (cap=rmmway.file_pull).
+  string capability_token = 2;
+}
+
+// FilePush (gap #1a) writes a file on the agent host, replacing any
+// existing file. The content rides either inline (content_b64 — small
+// files, the server caps this) or as FileChunk downlink frames (a chunked
+// push dispatches the command first and streams the blocks immediately
+// after; the agent blocks on the eof chunk). mode is an octal string
+// ("0644"); empty = the platform default. Capability: rmmway.file_push.
+message FilePush {
+  string path = 1;
+  // Inline content (base64). Empty = the push is chunked (FileChunk frames
+  // follow the command on the same stream).
+  string content_b64 = 2;
+  // Octal mode, e.g. "0644" (applied when non-empty and parseable).
+  string mode = 3;
+  // W3-3: capability token (cap=rmmway.file_push).
+  string capability_token = 4;
 }
 
 // CommandResult is the agent's report back (sent as a future StreamRequest
