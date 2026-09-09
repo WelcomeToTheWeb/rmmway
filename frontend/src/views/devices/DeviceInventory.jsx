@@ -2,6 +2,7 @@
 // Renders inside the expanded device row (DeviceDetail.jsx composes it).
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api.js";
+import DevicePatches from "./DevicePatches.jsx";
 
 const SECTION_TITLE = {
   hardware: "Hardware",
@@ -160,6 +161,7 @@ export default function DeviceInventory({ token, device, onUnauthorized }) {
           Last collected: {new Date(inventory.collected_at).toLocaleString()}
         </p>
       )}
+      <DevicePatches token={token} device={device} onUnauthorized={onUnauthorized} />
     </div>
   );
 }
