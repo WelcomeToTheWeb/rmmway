@@ -216,12 +216,16 @@ func TestW14EndToEnd(t *testing.T) {
 		Logger:            discardLogger(t),
 	}, uplink.WithCollector(coll.Collect))
 
-	rctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	// The first heartbeat is preceded by a full Collect() pass, which the
+	// expanded wave-2 collector set (top-N processes, disk IO, cert scan,
+	// exec probes) stretches to ~100-250ms on a loaded host. Keep the window
+	// generous enough to be load-immune while still failing fast on regressions.
+	rctx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer cancel()
 	go func() { _ = u.Run(rctx) }()
 
 	// wait for at least one server-side heartbeat
-	deadline := time.Now().Add(280 * time.Millisecond)
+	deadline := time.Now().Add(2400 * time.Millisecond)
 	for {
 		srv.streamMu.Lock()
 		n := len(srv.hbReceived)

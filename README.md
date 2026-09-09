@@ -17,6 +17,12 @@ automation all stay under your control.
   launchd / SCM) and reports `service.status` (1 = running, 0 = stopped) per
   service — the trigger for the seeded `service.down` self-healing playbook,
   which restarts a stopped service and re-measures before counting it healed
+- **Deep monitoring** — beyond CPU / memory / disk / network: load averages +
+  swap, per-device disk I/O + SMART health (via `smartctl` when present),
+  top-N processes by CPU (`RMMWAY_TOP_PROCS`), certificate expiry
+  (`RMMWAY_CERT_DIRS`), and OS event-log tailing (systemd journal / Windows
+  Event Log / macOS unified log) shipped into the same per-device log store
+  as the agent's own logs
 - **Dynamic baselining** — every metric is scored against *that device's own*
   seasonal + trend baseline (a robust 45-day day-of-week/hour channel plus a
   same-day trend channel). No thresholds to tune, no ML dependencies.

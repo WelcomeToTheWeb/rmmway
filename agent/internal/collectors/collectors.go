@@ -4,7 +4,29 @@
 //	Family                     source
 //	cpu.utilization_percent    ""  (host-wide, 0–100)
 //	memory.used_percent        ""  (0–100, excluding cached/buffered)
+//	swap.used_percent          ""  (0–100; omitted on hosts without swap)
+//	load.avg1 / load.avg5 /    ""  (host-wide load averages; a value the
+//	load.avg15                 platform cannot report is omitted)
 //	disk.used_percent          <device>@<mountpoint> (per mounted volume, 0–100)
+//	disk.io_read_bytes_total /  <device> (cumulative since boot, per real
+//	disk.io_write_bytes_total,    device — loop/ram/zram pseudo-devices
+//	disk.io_reads_total /        excluded; cumulative counters, same
+//	disk.io_writes_total          convention as net.bytes_total)
+//	smart.health                 <device> (1 = SMART self-assessment PASSED,
+//	                             0 = failure predicted; needs the smartctl
+//	                             binary — absent or unreadable device means
+//	                             no sample, not an error)
+//	smart.reallocated_sectors    <device> (SMART attribute 5 raw value)
+//	process.cpu_percent          <process name> (top N by CPU%, per-name
+//	                             aggregate; N = RMMWAY_TOP_PROCS, default
+//	                             10, cap 50 — first heartbeat after start
+//	                             has no delta and omits this family)
+//	process.memory_rss_bytes     <process name> (top N, RSS bytes)
+//	cert.days_to_expiry          <cert file path> (per PEM certificate found
+//	                             under RMMWAY_CERT_DIRS, default
+//	                             /etc/ssl/certs, scan capped at
+//	                             RMMWAY_CERT_SCAN_CAP — negative when
+//	                             already expired)
 //	net.bytes_total            <iface> (total rx+tx bytes since boot, per
 //	                           interface — loopback excluded)
 //	system.uptime_seconds      ""
@@ -23,7 +45,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -44,6 +68,10 @@ type Collector interface {
 // inject a fake without sleeping.
 type cpuMeasure func(interval time.Duration, percpu bool) ([]float64, error)
 
+// memMeasure abstracts the host memory sample (used_percent + swap) so
+// tests never read the host's real memory state.
+type memMeasure func(ctx context.Context) (*mem.VirtualMemoryStat, error)
+
 // ErrServiceUnknown is returned by a ServiceSampler for a name the host has
 // no such service under. It is NOT a probe failure: the sample is simply
 // omitted, so an allowlist entry that references a since-removed service
@@ -62,8 +90,20 @@ const maxMonitoredServices = 50
 
 type defaultCollector struct {
 	cpu      cpuMeasure
+	memory   memMeasure
 	services []string
 	service  ServiceSampler
+	load     LoadSampler
+	diskIO   DiskIOSampler
+	smart    SmartSampler
+	procs    ProcSampler
+	topN     int
+	now      func() time.Time
+	certDirs []string
+	certCap  int
+
+	procMu   sync.Mutex
+	procPrev map[string]procPrev
 }
 
 // NewCollector returns the production collector (real gopsutil CPU window;
@@ -76,19 +116,110 @@ func NewCollector() Collector {
 		cpu:      cpu.Percent,
 		services: parseServiceList(os.Getenv("RMMWAY_SERVICES")),
 		service:  defaultServiceSampler,
+		load:     defaultLoadSampler,
+		diskIO:   defaultDiskIOSampler,
+		smart:    defaultSmartSampler,
+		procs:    defaultProcSampler,
+		topN:     parseTopProcs(os.Getenv("RMMWAY_TOP_PROCS")),
+		certDirs: parseCertDirs(os.Getenv("RMMWAY_CERT_DIRS")),
+		certCap:  parseCertScanCap(os.Getenv("RMMWAY_CERT_SCAN_CAP")),
+		now:      time.Now,
 	}
+}
+
+// parseTopProcs reads RMMWAY_TOP_PROCS (default 10; invalid values fall
+// back to the default rather than erroring at agent startup).
+func parseTopProcs(raw string) int {
+	if raw == "" {
+		return defaultTopProcs
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return defaultTopProcs
+	}
+	return n
+}
+
+// Samplers bundles every injectable probe for tests. A nil sampler falls
+// back to the production default; an unset list/cap keeps its default
+// (zero TopN/CertCap = the built-in defaults). Production wiring uses
+// NewCollector, not this struct.
+type Samplers struct {
+	CPU      cpuMeasure
+	Memory   memMeasure
+	Services []string
+	Service  ServiceSampler
+	Load     LoadSampler
+	DiskIO   DiskIOSampler
+	Smart    SmartSampler
+	Procs    ProcSampler
+	TopN     int
+	Now      func() time.Time
+	CertDirs []string
+	CertCap  int
+}
+
+// NewCollectorWithSamplers returns a collector with the given probes
+// injected; nil fields keep the production defaults.
+func NewCollectorWithSamplers(s Samplers) Collector {
+	c := NewCollector().(*defaultCollector)
+	if s.CPU != nil {
+		c.cpu = s.CPU
+	}
+	if s.Memory != nil {
+		c.memory = s.Memory
+	}
+	if s.Services != nil {
+		c.services = s.Services
+	}
+	if s.Service != nil {
+		c.service = s.Service
+	}
+	if s.Load != nil {
+		c.load = s.Load
+	}
+	if s.DiskIO != nil {
+		c.diskIO = s.DiskIO
+	}
+	if s.Smart != nil {
+		c.smart = s.Smart
+	}
+	if s.Procs != nil {
+		c.procs = s.Procs
+	}
+	if s.TopN > 0 {
+		c.topN = s.TopN
+	}
+	if s.Now != nil {
+		c.now = s.Now
+	}
+	if s.CertDirs != nil {
+		c.certDirs = s.CertDirs
+	}
+	if s.CertCap > 0 {
+		c.certCap = s.CertCap
+	}
+	return c
 }
 
 // NewCollectorWithCPU returns a collector with an injected CPU sampler
 // (used by tests to avoid the real sleep window).
 func NewCollectorWithCPU(sample cpuMeasure) Collector {
-	return &defaultCollector{cpu: sample}
+	return &defaultCollector{cpu: sample, now: time.Now}
 }
 
 // NewCollectorWithCPUServices returns a collector with injected CPU and
 // service samplers (tests: no real CPU window, no host service manager).
 func NewCollectorWithCPUServices(cpu cpuMeasure, services []string, svc ServiceSampler) Collector {
-	return &defaultCollector{cpu: cpu, services: services, service: svc}
+	return NewCollectorWithCPUServicesLoad(cpu, services, svc, nil)
+}
+
+// NewCollectorWithCPUServicesLoad returns a collector with injected CPU,
+// service and load samplers (tests: no real CPU window, no host service
+// manager, no host load averages). A nil load sampler emits no
+// load.avg* samples.
+func NewCollectorWithCPUServicesLoad(cpu cpuMeasure, services []string, svc ServiceSampler, ld LoadSampler) Collector {
+	return &defaultCollector{cpu: cpu, services: services, service: svc, load: ld, now: time.Now}
 }
 
 // Collect samples every family and packages them as one MetricBatch.
@@ -119,11 +250,16 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 	}
 
 	// 2. Memory — used_percent excludes buffers/cache (what RMM cares about).
-	vm, err := mem.VirtualMemoryWithContext(ctx)
+	memFn := c.memory
+	if memFn == nil {
+		memFn = mem.VirtualMemoryWithContext
+	}
+	vm, err := memFn(ctx)
 	if err != nil {
 		errs = append(errs, "memory: "+err.Error())
 	} else {
 		add("memory.used_percent", "", vm.UsedPercent)
+		emitSwap(vm.SwapTotal, vm.SwapFree, add)
 	}
 
 	// 3. Disk — per mounted volume. L9: source is device@mountpoint — the
@@ -180,6 +316,49 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 				continue
 			}
 			add("service.status", name, v)
+		}
+	}
+
+	// 7. Disk I/O + SMART — per-device cumulative counters and SMART health
+	// (loop/ram/zram pseudo-devices excluded; smartctl absence is silent).
+	if c.diskIO != nil {
+		counters, err := c.diskIO(ctx)
+		if err != nil {
+			errs = append(errs, "diskio: "+err.Error())
+		} else {
+			emitDiskIOStats(counters, add)
+			if c.smart != nil {
+				for _, dev := range realDevices(counters) {
+					res, sErr := c.smart(ctx, dev)
+					if serr := emitSmart(res, sErr, dev, add); serr != nil {
+						errs = append(errs, "smart["+dev+"]: "+serr.Error())
+					}
+				}
+			}
+		}
+	}
+
+	// 8. Load averages — 1/5/15 min (host-wide; no source).
+	if cerr := c.emitLoad(ctx, add); cerr != nil {
+		errs = append(errs, "load: "+cerr.Error())
+	}
+
+	// 9. Top-N processes — CPU% from deltas between consecutive collects;
+	// the first collect ranks by RSS and emits no process.cpu_percent.
+	if c.procs != nil {
+		stats, err := c.procs(ctx)
+		if err != nil {
+			errs = append(errs, "procs: "+err.Error())
+		} else {
+			c.emitTopProcs(stats, add)
+		}
+	}
+
+	// 10. Certificate expiry — PEM scan of RMMWAY_CERT_DIRS (default
+	// /etc/ssl/certs); absent dirs and non-cert files are skipped silently.
+	if c.certDirs != nil {
+		if cerr := c.emitCerts(add); cerr != nil {
+			errs = append(errs, "certs: "+cerr.Error())
 		}
 	}
 
