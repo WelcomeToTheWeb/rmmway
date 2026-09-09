@@ -587,4 +587,16 @@ export const api = {
   // POST /api/reports/generate { report_type, client_id?, device_id?, output_format? }
   generateReport: (token, body) =>
     request("/api/reports/generate", { method: "POST", token, body }),
+
+  // ---- gap #1a: remote session (Lane A owns backend, Lane C owns viewer) ---
+  // POST /api/devices/{id}/session/start { fps? } -> { session_id, fps, device_id }
+  startSession: (token, deviceID, body) =>
+    request(`/api/devices/${deviceID}/session/start`, { method: "POST", token, body }),
+
+  // POST /api/devices/{id}/session/stop { session_id } -> { stopped: true }
+  stopSession: (token, deviceID, body) =>
+    request(`/api/devices/${deviceID}/session/stop`, { method: "POST", token, body }),
+
+  // SSE stream: GET /api/devices/{id}/session/stream?token=... -> text/event-stream
+  // (handled directly by EventSource in SessionViewer.jsx)
 };

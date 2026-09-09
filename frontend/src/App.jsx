@@ -14,6 +14,7 @@ import Heal from "./Heal.jsx";
 import Webhooks from "./Webhooks.jsx";
 import Baseline from "./Baseline.jsx";
 import Reports from "./Reports.jsx";
+import SessionViewer from "./SessionViewer.jsx";
 import Settings from "./Settings.jsx";
 import Palette from "./Palette.jsx";
 import { ThemeToggle } from "./ui/theme.jsx";
@@ -433,6 +434,13 @@ function Shell() {
             />
           ) : route === "reports" ? (
             <Reports token={token} onUnauthorized={logout} />
+          ) : route.startsWith("session/") ? (
+            <SessionViewer
+              deviceID={route.slice("session/".length)}
+              token={token}
+              onClose={() => setRoute("devices")}
+              onUnauthorized={logout}
+            />
           ) : route === "settings" ? (
             <Settings token={token} onUnauthorized={logout} />
           ) : (
