@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
 import { api } from "./api.js";
 import DeviceDetail from "./views/devices/DeviceDetail.jsx";
+import { Menu } from "./ui/index.js";
 
 // ---- shareable table state (gap #10a, wave 2, lane C) -----------------------
 // The device table's view state lives in the URL hash, AFTER the route:
@@ -739,6 +740,16 @@ export default function Devices({
       return { ...prev, sort: next };
     });
   };
+  // Column show/hide — writes the hidden= URL state. host is never
+  // hideable, so the table can't be reduced to nothing.
+  const toggleColumn = (key) => {
+    setTableState((prev) => {
+      const h = new Set(prev.hidden);
+      if (h.has(key)) h.delete(key);
+      else h.add(key);
+      return { ...prev, hidden: h };
+    });
+  };
   const onlineCount = (devices || []).filter((d) => d.online).length;
   const total = (devices || []).length;
   const clientLabel = client
@@ -805,6 +816,28 @@ export default function Devices({
           <button className="btn" onClick={load} title="Refresh now">
             ↻ refresh
           </button>
+          <Menu
+            label="▤ columns"
+            title="Show or hide columns — Host is always visible"
+          >
+            {COLUMNS.filter((c) => c.hideable).map((c) => {
+              const off = hidden.has(c.key);
+              return (
+                <button
+                  key={c.key}
+                  className={"menu-item" + (off ? " off" : "")}
+                  role="menuitemcheckbox"
+                  aria-checked={!off}
+                  onClick={() => toggleColumn(c.key)}
+                >
+                  <span className="menu-check" aria-hidden="true">
+                    {off ? "·" : "✓"}
+                  </span>
+                  {c.label}
+                </button>
+              );
+            })}
+          </Menu>
         </div>
       </div>
 

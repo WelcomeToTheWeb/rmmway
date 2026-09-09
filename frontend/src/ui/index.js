@@ -6,6 +6,7 @@ export { default as IconButton } from "./IconButton.jsx";
 export { Badge, StatusPill, Score, scoreTone, fmtNum } from "./Badge.jsx";
 export { default as Tabs } from "./Tabs.jsx";
 export { default as Modal } from "./Modal.jsx";
+export { default as Menu } from "./Menu.jsx";
 export { default as Banner } from "./Banner.jsx";
 export { default as Field } from "./Field.jsx";
 export { default as Table } from "./Table.jsx";
