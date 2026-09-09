@@ -146,11 +146,14 @@ func (s *Server) dispatchCommand(w http.ResponseWriter, r *http.Request, deviceI
 
 // dispatchRequest is the JSON body for POST /api/devices/{id}/commands.
 type dispatchRequest struct {
-	Action   string   `json:"action"`
-	Lang     string   `json:"lang"`
-	Script   string   `json:"script"` // base64
-	Args     []string `json:"args"`
-	TimeoutS int32    `json:"timeout_s"`
+	Action     string   `json:"action"`
+	Lang       string   `json:"lang"`
+	Script     string   `json:"script"` // base64
+	Args       []string `json:"args"`
+	TimeoutS   int32    `json:"timeout_s"`
+	Path       string   `json:"path"`       // gap #1a: file path for pull/push
+	ContentB64 string   `json:"content_b64"` // gap #1a: inline content for push
+	Mode       string   `json:"mode"`       // gap #1a: octal mode for push
 }
 
 // buildCommandAction maps the JSON body onto the proto oneof action.
@@ -176,8 +179,30 @@ func buildCommandAction(in dispatchRequest) (any, error) {
 		}}, nil
 	case "reboot":
 		return &agentv1.Command_Reboot{Reboot: &agentv1.Reboot{DelayS: 0}}, nil
+	case "file_pull": // gap #1a
+		if in.Path == "" {
+			return nil, fmt.Errorf("file_pull requires path")
+		}
+		return &agentv1.Command_FilePull{FilePull: &agentv1.FilePull{
+			Path: in.Path,
+		}}, nil
+	case "file_push": // gap #1a
+		if in.Path == "" {
+			return nil, fmt.Errorf("file_push requires path")
+		}
+		push := &agentv1.FilePush{Path: in.Path}
+		if in.ContentB64 != "" {
+			if _, err := base64.StdEncoding.DecodeString(in.ContentB64); err != nil {
+				return nil, fmt.Errorf("file_push content_b64 must be valid base64: %v", err)
+			}
+			push.ContentB64 = in.ContentB64
+		}
+		if in.Mode != "" {
+			push.Mode = in.Mode
+		}
+		return &agentv1.Command_FilePush{FilePush: push}, nil
 	default:
-		return nil, fmt.Errorf("unknown action %q (want run_script|reboot)", in.Action)
+		return nil, fmt.Errorf("unknown action %q (want run_script|reboot|file_pull|file_push)", in.Action)
 	}
 }
 

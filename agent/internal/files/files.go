@@ -34,6 +34,7 @@ func SendPull(ctx context.Context, cmdID, path string, send func(*agentv1.FileCh
 	if err != nil {
 		return 0, 0, fmt.Errorf("stat %s: %w", path, err)
 	}
+	fmt.Fprintf(os.Stderr, "SendPull: stat %s size=%d\n", path, fi.Size())
 	if !fi.Mode().IsRegular() {
 		return 0, 0, fmt.Errorf("%s is not a regular file", path)
 	}

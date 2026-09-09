@@ -15,6 +15,7 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
+	"github.com/welcometotheweb/rmmway/server/internal/sessionrelay"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -35,6 +36,7 @@ func wireIngest(
 	publishEvent func(subject, deviceID, message string, data map[string]any),
 	metricsSink store.MetricsSink,
 	devicesStore store.DeviceStore,
+	sessionRelay *sessionrelay.Registry, // gap #1a: frame relay + file transfer state
 ) (*ingest.Service, *grpc.Server, *grpc.Server) {
 	svc := ingest.NewService(ingest.Config{JWTSecret: jwtSecret, Indexer: indexer, OrgCA: caMgr, Caps: capsIssuer, Logs: logSink,
 		OnCommandResult: func(res *agentv1.CommandResult) {
@@ -51,6 +53,7 @@ func wireIngest(
 				At:        time.Now().UTC(),
 			})
 		},
+		Sessions: sessionRelay,
 		OnDeviceEvent: func(action string, payload map[string]any) {
 			// W6-2: inventory events (created / online) onto the bus.
 			devID, _ := payload["device_id"].(string)

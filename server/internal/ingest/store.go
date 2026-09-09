@@ -72,6 +72,10 @@ func (d *Dispatcher) dispatch(deviceID string, action any, explicitToken string,
 		cmd.Action = a
 	case *agentv1.Command_Reboot:
 		cmd.Action = a
+	case *agentv1.Command_FilePull: // gap #1a
+		cmd.Action = a
+	case *agentv1.Command_FilePush: // gap #1a
+		cmd.Action = a
 	default:
 		return "", fmt.Errorf("unsupported action type %T", action)
 	}
@@ -103,6 +107,10 @@ func (d *Dispatcher) dispatch(deviceID string, action any, explicitToken string,
 			a.RunScript.CapabilityToken = tok
 		case *agentv1.Command_Reboot:
 			a.Reboot.CapabilityToken = tok
+		case *agentv1.Command_FilePull: // gap #1a
+			a.FilePull.CapabilityToken = tok
+		case *agentv1.Command_FilePush: // gap #1a
+			a.FilePush.CapabilityToken = tok
 		}
 	}
 

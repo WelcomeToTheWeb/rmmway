@@ -20,6 +20,7 @@ import (
 	agentv1 "github.com/welcometotheweb/rmmway/proto/gen/rmmway/agent/v1"
 	"github.com/welcometotheweb/rmmway/server/internal/ca"
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
+	"github.com/welcometotheweb/rmmway/server/internal/sessionrelay"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -61,6 +62,10 @@ type Config struct {
 	// payload carries device_id + (for created) identity fields.
 	// Nil = no hook (tests).
 	OnDeviceEvent func(action string, payload map[string]any)
+	// Sessions (gap #1a) is the session relay registry. OnFrame/OnChunk
+	// callbacks are wired here; nil disables session/file handling
+	// (pre-#1a servers keep working).
+	Sessions *sessionrelay.Registry
 }
 
 func (c *Config) withDefaults() {
@@ -163,6 +168,22 @@ func (s *Service) Push(deviceID string, cmd *agentv1.Command) bool {
 			return true
 		default:
 			return false // agent's stream is backed up — treat as unreachable
+		}
+	}
+	return false
+}
+
+// SendSessionControl (gap #1a) pushes a SessionControl downlink to the
+// device's live stream. Returns false if the device is offline.
+func (s *Service) SendSessionControl(deviceID string, sc *agentv1.SessionControl) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if w, ok := s.streamW[deviceID]; ok {
+		select {
+		case w.ch <- &agentv1.StreamResponse{Payload: &agentv1.StreamResponse_SessionControl{SessionControl: sc}}:
+			return true
+		default:
+			return false // stream is backed up — treat as unreachable
 		}
 	}
 	return false
@@ -667,6 +688,21 @@ func (s *Service) Stream(stream agentv1.AgentService_StreamServer) error {
 			if b := p.Logs; b != nil && len(b.GetEntries()) > 0 && s.cfg.Logs != nil {
 				if werr := s.cfg.Logs.Write(ctx, devID, b); werr != nil {
 					log.Printf("log events write %s: %v", devID, werr)
+				}
+			}
+		case *agentv1.StreamRequest_SessionFrame: // gap #1a
+			// One screen frame from an active remote session. Relay to the
+			// session relay for viewers (drop-old semantics).
+			if f := p.SessionFrame; f != nil && s.cfg.Sessions != nil {
+				s.cfg.Sessions.OnFrame(devID, f)
+			}
+		case *agentv1.StreamRequest_FileChunk: // gap #1a
+			// One block of an in-progress file_pull. Accumulate in the
+			// session relay until the eof chunk arrives.
+			if c := p.FileChunk; c != nil {
+				s.log.Printf("ingest: file_chunk dev=%s cmd=%s seq=%d eof=%v", devID, c.GetCommandId(), c.GetSeq(), c.GetEof())
+				if s.cfg.Sessions != nil {
+					s.cfg.Sessions.OnChunk(devID, c)
 				}
 			}
 		}

@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -55,8 +56,6 @@ func (c *linuxCapturer) Capture(ctx context.Context) (*Frame, error) {
 	}
 	img, err := c.getImage()
 	if err != nil {
-		// Drop the connection; the next tick re-dials (the X server may
-		// have restarted, or the display may have gone away).
 		c.resetConn()
 		return &Frame{Status: "unavailable"}, nil
 	}
@@ -67,8 +66,6 @@ func (c *linuxCapturer) Capture(ctx context.Context) (*Frame, error) {
 	return &Frame{JPEG: buf.Bytes(), Width: img.Bounds().Dx(), Height: img.Bounds().Dy(), TSMS: nowMS()}, nil
 }
 
-// ensureConn dials + handshakes the X server once per capturer lifetime.
-// display strings look like ":0", ":1.0", or "host:0".
 func (c *linuxCapturer) ensureConn() error {
 	if c.conn != nil {
 		return nil
@@ -111,35 +108,45 @@ func (c *linuxCapturer) ensureConn() error {
 		conn.Close()
 		return err
 	}
-	ord := binary.LittleEndian
+	var ord binary.ByteOrder = binary.LittleEndian
 	if hdr[7] == 0 { // format: 0 = big-endian server
 		ord = binary.BigEndian
 	}
+	// SetupReply: 8 bytes fixed header + 256 bytes fixed body + screens
+	// array. Read the fixed portion (264 bytes), then peek at screens[0].
 	var setup [264]byte
 	if _, err := readFull(conn, setup[:]); err != nil {
 		conn.Close()
 		return err
 	}
-	// Setup: offset 8 = root window of screen 0; offsets 268/270 = its
-	// width/height (first entry of the screens array).
-	root := ord.Uint32(setup[8:12])
-	c.screenW = int(ord.Uint16(setup[268:270]))
-	c.screenH = int(ord.Uint16(setup[270:272]))
-	c.conn, c.ord, c.root, c.xid = conn, ord, root, 0
+	// Root window of screen 0 is at offset 12 in the fixed body.
+	root := ord.Uint32(setup[12:16])
+	// Screens array starts after the fixed portion; width at offset 264+0.
+	var screenHdr [8]byte
+	if _, err := readFull(conn, screenHdr[:]); err != nil {
+		conn.Close()
+		return err
+	}
+	c.screenW = int(ord.Uint16(screenHdr[0:2]))
+	c.screenH = int(ord.Uint16(screenHdr[2:4]))
+	c.conn = conn
+	c.ord = ord
+	c.root = root
 	return nil
 }
 
 func (c *linuxCapturer) resetConn() {
 	if c.conn != nil {
 		c.conn.Close()
+		c.conn = nil
 	}
-	c.conn = nil
 }
 
-func (c *linuxCapturer) Close() error { return c.resetConn() }
+func (c *linuxCapturer) Close() error {
+	c.resetConn()
+	return nil
+}
 
-// getImage sends one GetImage request and decodes its 24-bit reply into an
-// image.RGBA (BGR triples as X depth-24 visuals pack them).
 func (c *linuxCapturer) getImage() (*image.RGBA, error) {
 	w, h := c.screenW, c.screenH
 	if w <= 0 || w > maxCapWidth {
@@ -149,22 +156,33 @@ func (c *linuxCapturer) getImage() (*image.RGBA, error) {
 		h = maxCapHeight
 	}
 	c.xid++
+	// GetImage request: 9 words (36 bytes)
 	req := make([]byte, 36)
 	ord := c.ord
-	req[0] = 0 // data request
-	req[1] = 78 // GetImage
-	ord.PutUint32(req[2:6], 6) // data length (in 4-byte units)
+	req[0] = 0
+	req[1] = 78 // GetImage opcode
 	ord.PutUint32(req[4:8], c.xid)
 	ord.PutUint32(req[8:12], c.root)
-	ord.PutUint32(req[12:16], 0) // x
-	ord.PutUint32(req[16:20], 0) // y
-	ord.PutUint32(req[20:24], uint32(w))
-	ord.PutUint32(req[24:28], uint32(h))
-	ord.PutUint32(req[28:32], 24) // depth
-	ord.PutUint32(req[32:36], 24) // format: 24-bit packed
+	ord.PutUint32(req[16:20], uint32(w))
+	ord.PutUint32(req[20:24], uint32(h))
+	ord.PutUint32(req[24:28], 24) // depth
+	ord.PutUint32(req[28:32], 24) // format
 	if _, err := c.conn.Write(req); err != nil {
 		return nil, err
 	}
+	// Read reply header (32 bytes).
+	var reply [32]byte
+	if _, err := readFull(c.conn, reply[:]); err != nil {
+		return nil, err
+	}
+	if reply[0] != 1 {
+		return nil, fmt.Errorf("X error reply: code %d", reply[1])
+	}
+	rw, rh := int(ord.Uint16(reply[20:22])), int(ord.Uint16(reply[22:24]))
+	if rw != w || rh != h {
+		return nil, fmt.Errorf("GetImage returned wrong size (%d,%d)", rw, rh)
+	}
+	// Data length follows in next 4 bytes.
 	var lenBuf [4]byte
 	if _, err := readFull(c.conn, lenBuf[:]); err != nil {
 		return nil, err
@@ -174,24 +192,16 @@ func (c *linuxCapturer) getImage() (*image.RGBA, error) {
 	if _, err := readFull(c.conn, body); err != nil {
 		return nil, err
 	}
-	if len(body) < 20 || body[4] != 50 { // 50 = success reply type
-		if len(body) > 0 && body[0] == 0 {
-			return nil, fmt.Errorf("X error reply: code %d", body[1])
-		}
-		return nil, fmt.Errorf("short GetImage reply (%d bytes)", len(body))
+	rowBytes := (rw*3 + 3) &^ 3
+	if len(body) < rowBytes*rh {
+		return nil, fmt.Errorf("short GetImage data (%d < %d)", len(body), rowBytes*rh)
 	}
-	rw, rh := int(ord.Uint16(body[8:10])), int(ord.Uint16(body[10:12]))
-	rowBytes := (rw*3 + 3) &^ 3 // server pads scanlines to a 32-bit boundary
-	if len(body) < 20+rowBytes*rh {
-		return nil, fmt.Errorf("short GetImage data (%d < %d)", len(body), 20+rowBytes*rh)
-	}
-	pix := body[20:]
+	pix := body
 	img := image.NewRGBA(image.Rect(0, 0, rw, rh))
 	for y := 0; y < rh; y++ {
-		src := pix[y*rowBytes : (y+1)*rw*3]
+		src := pix[y*rowBytes : (y+1)*rowBytes]
 		dst := img.Pix[y*rw*4 : (y+1)*rw*4]
 		for x := 0; x < rw; x++ {
-			// X depth-24 visuals are packed BGR.
 			b, g, r := src[x*3], src[x*3+1], src[x*3+2]
 			dst[x*4], dst[x*4+1], dst[x*4+2], dst[x*4+3] = r, g, b, 255
 		}
@@ -199,7 +209,6 @@ func (c *linuxCapturer) getImage() (*image.RGBA, error) {
 	return img, nil
 }
 
-// readFull reads exactly len(p) bytes (net.Conn is unbuffered).
 func readFull(conn net.Conn, p []byte) (int, error) {
 	total := 0
 	for total < len(p) {

@@ -142,6 +142,13 @@ func WithJWTChangeHook(fn func(string)) Option {
 	return func(u *Uplink) { u.jwtHook = fn }
 }
 
+// SetSessionDriver (gap #1a) wires the remote-session capture loop after
+// the uplink is created. Must be called before streamSession starts
+// (i.e. immediately after New()).
+func (u *Uplink) SetSessionDriver(d *session.Driver) {
+	u.sessions = d
+}
+
 // WithSessionDriver (gap #1a) wires the remote-session capture loop:
 // SessionControl downlink frames drive it and its frames ship as
 // SessionFrame uplink frames via PushSessionFrame. Nil = the agent ignores
@@ -516,6 +523,89 @@ func tail(b []byte) string {
 		b = b[len(b)-4096:]
 	}
 	return string(b)
+}
+
+// ---- gap #1a: file transfer commands ----
+
+// abandonAllPushes is called when the stream drops; in-flight chunked pushes
+// will never complete.
+func (u *Uplink) abandonAllPushes() {
+	u.pushMu.Lock()
+	defer u.pushMu.Unlock()
+	for id, p := range u.pushes {
+		p.Abandon()
+		delete(u.pushes, id)
+	}
+}
+
+// routeChunk delivers one FileChunk downlink frame to the matching push session.
+func (u *Uplink) routeChunk(chunk *agentv1.FileChunk) {
+	u.pushMu.Lock()
+	p, ok := u.pushes[chunk.GetCommandId()]
+	u.pushMu.Unlock()
+	if ok {
+		_ = p.Chunk(chunk)
+	}
+}
+
+// filePullCommand reads a file from the agent and streams it to the server.
+func (u *Uplink) filePullCommand(ctx context.Context, stream agentv1.AgentService_StreamClient, cmd *agentv1.Command) error {
+	pull := cmd.GetFilePull()
+	if pull == nil {
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, "nil file_pull")
+	}
+	u.cfg.Logger.Info("file_pull", "cmd", cmd.GetId(), "path", pull.GetPath())
+
+	sendChunk := func(chunk *agentv1.FileChunk) error {
+		return stream.Send(&agentv1.StreamRequest{
+			Payload: &agentv1.StreamRequest_FileChunk{FileChunk: chunk},
+		})
+	}
+
+	size, mode, err := files.SendPull(ctx, cmd.GetId(), pull.GetPath(), sendChunk)
+	if err != nil {
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, err.Error())
+	}
+	u.cfg.Logger.Info("file_pull complete", "cmd", cmd.GetId(), "size", size, "mode", mode)
+	return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_SUCCEEDED, 0, []byte(fmt.Sprintf("%d bytes", size)), nil, "")
+}
+
+// filePushCommand writes a file on the agent (inline or chunked).
+func (u *Uplink) filePushCommand(ctx context.Context, c *Commander, stream agentv1.AgentService_StreamClient, cmd *agentv1.Command) error {
+	push := cmd.GetFilePush()
+	if push == nil {
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, "nil file_push")
+	}
+	u.cfg.Logger.Info("file_push", "cmd", cmd.GetId(), "path", push.GetPath(), "inline", push.GetContentB64() != "")
+
+	// Inline push (small files).
+	if push.GetContentB64() != "" {
+		if err := files.InlinePush(cmd.GetId(), push.GetPath(), push.GetMode(), push.GetContentB64()); err != nil {
+			return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, err.Error())
+		}
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_SUCCEEDED, 0, nil, nil, "")
+	}
+
+	// Chunked push: register the session, wait for the eof chunk.
+	session, err := files.StartPush(cmd.GetId(), push.GetPath(), push.GetMode())
+	if err != nil {
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, err.Error())
+	}
+	u.pushMu.Lock()
+	u.pushes[cmd.GetId()] = session
+	u.pushMu.Unlock()
+	defer func() {
+		u.pushMu.Lock()
+		delete(u.pushes, cmd.GetId())
+		u.pushMu.Unlock()
+	}()
+
+	size, err := session.Wait(ctx)
+	if err != nil {
+		return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_FAILED, 0, nil, nil, err.Error())
+	}
+	u.cfg.Logger.Info("file_push complete", "cmd", cmd.GetId(), "size", size)
+	return u.sendResult(stream, cmd.GetId(), agentv1.CommandResult_SUCCEEDED, 0, []byte(fmt.Sprintf("%d bytes", size)), nil, "")
 }
 
 func itoa(n int) string { return fmt.Sprintf("%d", n) }

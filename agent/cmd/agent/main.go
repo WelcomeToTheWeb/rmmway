@@ -47,6 +47,7 @@ import (
 
 	"github.com/welcometotheweb/rmmway/agent/internal/caps"
 	"github.com/welcometotheweb/rmmway/agent/internal/collectors"
+	"github.com/welcometotheweb/rmmway/agent/internal/session"
 	"github.com/welcometotheweb/rmmway/agent/internal/enroll"
 	"github.com/welcometotheweb/rmmway/agent/internal/exec"
 	"github.com/welcometotheweb/rmmway/agent/internal/logship"
@@ -522,6 +523,13 @@ func runAgent(ctx context.Context, log *slog.Logger, cfg agentConfig, jsonl *log
 		uplink.WithCommander(commander),
 		uplink.WithJWTChangeHook(setJWT),
 	)
+
+	// gap #1a: wire the remote-session capture loop.
+	u.SetSessionDriver(session.NewDriver(session.DriverConfig{
+		SendFrame:   u.PushSessionFrame,
+		NewCapturer: session.NewCapturer,
+		Logger:      log,
+	}))
 
 	// W6-1: ship the structured log events (the tail of the JSON-lines file
 	// above) two ways: to Loki over its HTTP push API (RMMWAY_LOKI_URL,
