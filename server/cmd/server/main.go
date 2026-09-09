@@ -784,6 +784,9 @@ func main() {
 	ticketStore, _ := wireTickets(hasPG, pgPool)
 	defer func() { if ticketStore != nil { log.Println("tickets: shutdown") } }()
 
+	// gap #6: notification channels + policies (see wire_notify.go).
+	notifyStore, notifySender := wireNotify(hasPG, pgPool)
+
 	// ---- self-healing playbook engine (W5-1) ---------------------------
 	// When the ticket store is available, heal escalations create real
 	// tickets via the ticket notifier (gap #7).
@@ -880,6 +883,8 @@ func main() {
 		Clients:   clientsStore,
 		Users:     usersStore,
 		Tickets:   ticketStore,
+		NotifyStore:   notifyStore,
+		NotifySender:  notifySender,
 		PublicURL: publicURL(),
 	})
 	apiSrv.Register(mux)
