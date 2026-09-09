@@ -111,6 +111,9 @@ type Server struct {
 	// in-memory mode: /api/login delegates to the legacy env/admin_users
 	// path and scoping is off (every session is a grandfathered admin).
 	users store.UserStore
+	// tickets (gap #7) is the helpdesk ticket store (0012_tickets); nil =
+	// in-memory mode: /{api|admin}/tickets* returns 503.
+	tickets store.TicketStore
 	// rbac (gap #3) resolves session JWTs + rmm_ API tokens into scoped
 	// Sessions for the route gates (rbacGate/rbacScopeGate/rbacRoleGate
 	// in domain_users.go). Always built; the Users store may be nil.
@@ -192,6 +195,9 @@ type Config struct {
 	// in-memory mode: /api/login keeps the legacy behavior and every
 	// session is a grandfathered admin (no scoping).
 	Users store.UserStore
+	// Tickets (gap #7) is the helpdesk ticket store (0012_tickets). Nil =
+	// in-memory mode: /{api|admin}/tickets* returns 503.
+	Tickets store.TicketStore
 	// PublicURL (if set) is the operator's public URL (RMMWAY_PUBLIC_URL).
 	// Exposed via GET /api/public-url so the Add Device UI can prefill the
 	// server URL with the configured public target instead of guessing
@@ -267,6 +273,7 @@ func New(cfg Config) *Server {
 		setup:         cfg.Setup,
 		clients:       cfg.Clients,
 		users:         cfg.Users,
+		tickets:       cfg.Tickets,
 		rbac:               &users.RBAC{Secret: cfg.JWTSecret, Users: cfg.Users},
 		publicURL:          cfg.PublicURL,
 		sessions:           cfg.Sessions,
@@ -295,6 +302,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	registerSettings(s, mux)
 	registerClients(s, mux)
 	registerUsers(s, mux)      // gap #3: operator accounts + API tokens (admin-only)
+	registerTickets(s, mux)    // gap #7: helpdesk tickets (queue, SLA, notes)
 	registerSession(s, mux)    // gap #1a: remote session + file download routes
 }
 
