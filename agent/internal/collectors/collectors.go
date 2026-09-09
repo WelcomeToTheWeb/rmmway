@@ -4,6 +4,9 @@
 //	Family                     source
 //	cpu.utilization_percent    ""  (host-wide, 0–100)
 //	memory.used_percent        ""  (0–100, excluding cached/buffered)
+//	swap.used_percent          ""  (0–100; omitted on hosts without swap)
+//	load.avg1 / load.avg5 /    ""  (host-wide load averages; a value the
+//	load.avg15                 platform cannot report is omitted)
 //	disk.used_percent          <device>@<mountpoint> (per mounted volume, 0–100)
 //	net.bytes_total            <iface> (total rx+tx bytes since boot, per
 //	                           interface — loopback excluded)
@@ -44,6 +47,10 @@ type Collector interface {
 // inject a fake without sleeping.
 type cpuMeasure func(interval time.Duration, percpu bool) ([]float64, error)
 
+// memMeasure abstracts the host memory sample (used_percent + swap) so
+// tests never read the host's real memory state.
+type memMeasure func(ctx context.Context) (*mem.VirtualMemoryStat, error)
+
 // ErrServiceUnknown is returned by a ServiceSampler for a name the host has
 // no such service under. It is NOT a probe failure: the sample is simply
 // omitted, so an allowlist entry that references a since-removed service
@@ -62,8 +69,10 @@ const maxMonitoredServices = 50
 
 type defaultCollector struct {
 	cpu      cpuMeasure
+	memory   memMeasure
 	services []string
 	service  ServiceSampler
+	load     LoadSampler
 }
 
 // NewCollector returns the production collector (real gopsutil CPU window;
@@ -76,7 +85,42 @@ func NewCollector() Collector {
 		cpu:      cpu.Percent,
 		services: parseServiceList(os.Getenv("RMMWAY_SERVICES")),
 		service:  defaultServiceSampler,
+		load:     defaultLoadSampler,
 	}
+}
+
+// Samplers bundles every injectable probe for tests. A nil sampler falls
+// back to the production default; an unset list/cap keeps its default
+// (zero TopN/CertCap = the built-in defaults). Production wiring uses
+// NewCollector, not this struct.
+type Samplers struct {
+	CPU      cpuMeasure
+	Memory   memMeasure
+	Services []string
+	Service  ServiceSampler
+	Load     LoadSampler
+}
+
+// NewCollectorWithSamplers returns a collector with the given probes
+// injected; nil fields keep the production defaults.
+func NewCollectorWithSamplers(s Samplers) Collector {
+	c := NewCollector().(*defaultCollector)
+	if s.CPU != nil {
+		c.cpu = s.CPU
+	}
+	if s.Memory != nil {
+		c.memory = s.Memory
+	}
+	if s.Services != nil {
+		c.services = s.Services
+	}
+	if s.Service != nil {
+		c.service = s.Service
+	}
+	if s.Load != nil {
+		c.load = s.Load
+	}
+	return c
 }
 
 // NewCollectorWithCPU returns a collector with an injected CPU sampler
@@ -88,7 +132,15 @@ func NewCollectorWithCPU(sample cpuMeasure) Collector {
 // NewCollectorWithCPUServices returns a collector with injected CPU and
 // service samplers (tests: no real CPU window, no host service manager).
 func NewCollectorWithCPUServices(cpu cpuMeasure, services []string, svc ServiceSampler) Collector {
-	return &defaultCollector{cpu: cpu, services: services, service: svc}
+	return NewCollectorWithCPUServicesLoad(cpu, services, svc, nil)
+}
+
+// NewCollectorWithCPUServicesLoad returns a collector with injected CPU,
+// service and load samplers (tests: no real CPU window, no host service
+// manager, no host load averages). A nil load sampler emits no
+// load.avg* samples.
+func NewCollectorWithCPUServicesLoad(cpu cpuMeasure, services []string, svc ServiceSampler, ld LoadSampler) Collector {
+	return &defaultCollector{cpu: cpu, services: services, service: svc, load: ld}
 }
 
 // Collect samples every family and packages them as one MetricBatch.
@@ -119,11 +171,16 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 	}
 
 	// 2. Memory — used_percent excludes buffers/cache (what RMM cares about).
-	vm, err := mem.VirtualMemoryWithContext(ctx)
+	memFn := c.memory
+	if memFn == nil {
+		memFn = mem.VirtualMemoryWithContext
+	}
+	vm, err := memFn(ctx)
 	if err != nil {
 		errs = append(errs, "memory: "+err.Error())
 	} else {
 		add("memory.used_percent", "", vm.UsedPercent)
+		emitSwap(vm.SwapTotal, vm.SwapFree, add)
 	}
 
 	// 3. Disk — per mounted volume. L9: source is device@mountpoint — the
@@ -181,6 +238,11 @@ func (c *defaultCollector) Collect(ctx context.Context) (*agentv1.MetricBatch, e
 			}
 			add("service.status", name, v)
 		}
+	}
+
+	// 7. Load averages — 1/5/15 min (host-wide; no source).
+	if cerr := c.emitLoad(ctx, add); cerr != nil {
+		errs = append(errs, "load: "+cerr.Error())
 	}
 
 	if len(errs) > 0 {
