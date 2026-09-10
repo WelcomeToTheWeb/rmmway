@@ -17,6 +17,7 @@ import TimeSeriesChart, {
   metricCategory,
   METRIC_CATEGORY_ORDER,
 } from "../../ui/TimeSeriesChart.jsx";
+import Tabs from "../../ui/Tabs.jsx";
 import DeviceInventory from "./DeviceInventory.jsx";
 
 // ---- agent log (recent indexed events) ------------------------------------
@@ -711,40 +712,86 @@ export default function DeviceDetail({
   liveTick,
   onSaved,
 }) {
+  const [tab, setTab] = useState("overview");
+
+  const tabs = [
+    { key: "overview", label: "Overview" },
+    { key: "metrics", label: "Metrics" },
+    { key: "inventory", label: "Inventory" },
+    { key: "commands", label: "Commands" },
+    { key: "events", label: "Events" },
+  ];
+
   return (
     <div className="device-detail">
-      <DeviceExport
-        token={token}
-        device={device}
-        onUnauthorized={onUnauthorized}
-      />
-      <TagEditor
-        token={token}
-        device={device}
-        onUnauthorized={onUnauthorized}
-        onSaved={onSaved}
-      />
-      <DeviceMetrics
-        token={token}
-        device={device}
-        onUnauthorized={onUnauthorized}
-      />
-      <DeviceInventory
-        token={token}
-        device={device}
-        onUnauthorized={onUnauthorized}
-      />
-      <DeviceCommands
-        token={token}
-        deviceId={device.id}
-        onUnauthorized={onUnauthorized}
-        liveTick={liveTick}
-      />
-      <DeviceEvents
-        token={token}
-        deviceId={device.id}
-        onUnauthorized={onUnauthorized}
-      />
+      <div className="device-detail-actions">
+        <span className="muted">
+          Quick actions for {device.hostname || device.id}
+        </span>
+        <div className="device-detail-btns">
+          <a
+            href={`#/session/${device.id}`}
+            className="btn btn-primary"
+            title="Open a remote session to this device"
+          >
+            🔌 Connect
+          </a>
+          <a
+            href={`#/commands/${device.id}`}
+            className="btn"
+            title="Run commands on this device"
+          >
+            ⚡ Command
+          </a>
+        </div>
+      </div>
+      <Tabs tabs={tabs} value={tab} onChange={setTab} />
+      <div className="device-detail-tab-content">
+        {tab === "overview" && (
+          <>
+            <DeviceExport
+              token={token}
+              device={device}
+              onUnauthorized={onUnauthorized}
+            />
+            <TagEditor
+              token={token}
+              device={device}
+              onUnauthorized={onUnauthorized}
+              onSaved={onSaved}
+            />
+          </>
+        )}
+        {tab === "metrics" && (
+          <DeviceMetrics
+            token={token}
+            device={device}
+            onUnauthorized={onUnauthorized}
+          />
+        )}
+        {tab === "inventory" && (
+          <DeviceInventory
+            token={token}
+            device={device}
+            onUnauthorized={onUnauthorized}
+          />
+        )}
+        {tab === "commands" && (
+          <DeviceCommands
+            token={token}
+            deviceId={device.id}
+            onUnauthorized={onUnauthorized}
+            liveTick={liveTick}
+          />
+        )}
+        {tab === "events" && (
+          <DeviceEvents
+            token={token}
+            deviceId={device.id}
+            onUnauthorized={onUnauthorized}
+          />
+        )}
+      </div>
     </div>
   );
 }

@@ -195,8 +195,8 @@ export default function SessionViewer({
 
       <div className="session-footer">
         <p className="session-note">
-          Phase 1: read-only screen capture. Keyboard/mouse input (phase 2) is
-          not yet available.
+          Screen capture with Windows input support. Input events require the
+          agent's SendInput driver (Windows SendInput API).
         </p>
       </div>
     </div>

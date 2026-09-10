@@ -154,9 +154,7 @@ export default function Dashboard({ token, onUnauthorized }) {
   // Wave 3: tickets (gap #7) — live open/in_progress tickets + status counts.
   const loadTickets = useCallback(async () => {
     try {
-      const res = await api.get(
-        "/api/tickets?status=open,in_progress&limit=5",
-      );
+      const res = await api.get("/api/tickets?status=open,in_progress&limit=5");
       setTickets(res.data || []);
       setTicketsErr(null);
     } catch (e) {
@@ -168,9 +166,7 @@ export default function Dashboard({ token, onUnauthorized }) {
     let anyErr = false;
     for (const s of statuses) {
       try {
-        const res = await api.get(
-          `/api/tickets?status=${s}&limit=1000`,
-        );
+        const res = await api.get(`/api/tickets?status=${s}&limit=1000`);
         counts[s] = res.data ? res.data.length : 0;
       } catch (e) {
         if (!unauthorized(e)) {
@@ -212,7 +208,8 @@ export default function Dashboard({ token, onUnauthorized }) {
     const now = Date.now();
     const weekMs = 7 * 86400000;
     const withRecent = results.filter(
-      (r) => r.collected_at && now - new Date(r.collected_at).getTime() < weekMs,
+      (r) =>
+        r.collected_at && now - new Date(r.collected_at).getTime() < weekMs,
     ).length;
     setPatchInfo({
       devices_checked: results.length,
@@ -606,7 +603,9 @@ export default function Dashboard({ token, onUnauthorized }) {
                       <span className="muted a-name" title={t.title}>
                         {t.title || "(untitled)"}
                       </span>
-                      <span className="muted a-time">{relTime(t.created_at)}</span>
+                      <span className="muted a-time">
+                        {relTime(t.created_at)}
+                      </span>
                     </li>
                   ))}
                 </ul>

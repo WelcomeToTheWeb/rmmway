@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -312,6 +313,10 @@ func (d *PostgresDevices) GetDeviceHardware(ctx context.Context, deviceID string
 	err := row.Scan(&cpuModel, &cpuVendor, &cpuCores, &cpuLogical,
 		&ramTotal, &osName, &osVersion, &osArch, &hostname, &collectedAt)
 	if err != nil {
+		if err == pgx.ErrNoRows {
+			// No hardware row for this device (e.g. seeded device) — return empty map.
+			return hw, nil
+		}
 		return nil, err
 	}
 

@@ -188,6 +188,131 @@ wk  C                    B                    A
 
 ---
 
+## Phase 2 — Operational Maturity (Weeks 11-20)
+
+**Theme:** Turn RMMWay from a monitoring/remote-control tool into a complete MSP management platform. Three pillars: operational workflows (scripting, automation, software management), competitive feature parity (cross-platform patching, AD, security), and engineering excellence (observability, reliability, DX).
+
+Ten new gaps from MSP operational audit + competitor teardown (NinjaOne, Atera, ConnectWise, Datto):
+
+| # | Gap |
+| --- | ----- |
+| 11 | No remote scripting engine (PowerShell/Bash/Python ad-hoc + library) |
+| 12 | No remote control v2 (multi-viewer sessions, recording, Linux support, clipboard, chat) |
+| 13 | No macOS/Linux patch management (Windows only in v1.0) |
+| 14 | No runbook automation (repetitive tasks done manually) |
+| 15 | No software management (install/uninstall/deploy across fleet) |
+| 16 | No vulnerability scanning / CVE correlation |
+| 17 | No Active Directory management (users, groups, OUs, password reset) |
+| 18 | No backup status & orchestration dashboard |
+| 19 | No endpoint security monitoring (AV, firewall, security posture) |
+| 20 | No knowledge base / client-facing automated reporting / observability stack |
+
+---
+
+### Lane assignment — Phase 2
+
+#### A — Agent & Edge (Scripting, Remote Control v2, OS Patching, Vulnerabilities, Security)
+
+| Wave | Gap | Work | Est. |
+| ------ | ----- | ------ | ------ |
+| 1 | #11 | Remote scripting engine: agent-side exec sandbox for PowerShell (Windows), Bash (Linux/macOS), Python (all). Proto `ScriptCommand`/`ScriptOutput` with timeout, return-code, stdout/stderr capture. Agent-side `command` frame for quick ad-hoc commands with streaming output. Server relay + `/api/devices/{id}/scripts/{name}/run` endpoint. | 2.5 w |
+| 2 | #12 | Remote control v2: multi-viewer session support (multiple techs join), session recording/playback, remote clipboard sync, session chat/notes, improved Linux remote desktop (VNC integration), remote file drag-and-drop. Session metadata stored server-side for history/audit. | 2.0 w |
+| 3 | #13 | Cross-platform patch management: Linux collectors (apt/dnf/yum update query), macOS collector (softwareupdate + App Store). Proto expansion for OS-type routing. `/api/patches/summary` with per-OS breakdown. | 2.0 w |
+| 3 | #16 | Vulnerability scanning: agent-side CVE correlation against patch inventory (NVD API cache updated server-side, pushed via `VulnScanCommand`). `vulnerabilities` table + `/api/vulnerabilities` endpoint with severity filters. | 2.0 w |
+| 4 | #19 | Endpoint security status: collectors for AV/firewall status (Windows Defender, Linux firewalld, macOS firewall), threat detection. `security.{av_status,firewall_status,threats}` metric family. | 1.5 w |
+
+**A owns (new):** `agent/internal/{scripts,vulnscan,security}`, `proto/{scripts,vulnscan,security}.proto`, `server/internal/{scripts,vulnscan,security}`, `httpapi/domain_{scripts,vulnerabilities,security}.go`, frontend `Scripts.jsx`, `Vulnerabilities.jsx`, `Security.jsx`, migrations 0018-0019.
+
+#### B — People & MSP (AD Management, Software Mgmt, Runbooks Domain)
+
+| Wave | Gap | Work | Est. |
+| ------ | ----- | ------ | ------ |
+| 1 | #17 | Active Directory management: `ad_domain` collector on enrolled DCs (users, groups, OUs). Server-side `ad_*` tables + `/api/ad` endpoint with hierarchy navigation. AD UI with password reset action via scripting engine. | 2.5 w |
+| 2 | #15 | Software management domain: `software_catalog` (approved apps), `software_deployments` tracking, integration with inventory for install verification. Agent-side installer/uninstaller with progress reporting + reboot handling. `/api/software/*` endpoints. | 2.5 w |
+| 3 | #14 | Runbook automation: `runbooks` table with step DSL (sequential, conditions, variables). Execution engine using scripting engine + command API as step executors. Agent-side `runbook` frame type. `/api/runbooks` CRUD + `POST /api/runbooks/{id}/execute` with target selector. | 2.5 w |
+| 3 | #20b | Code health & reliability: comprehensive static analysis, race detector across test suite, collector failure isolation, exponential backoff, graceful restart with state restoration. | 1.5 w |
+
+**B owns (new):** `server/internal/{ad,software,runbooks}`, `proto/{runbook,software}.proto`, `httpapi/domain_{ad,software,runbooks}.go`, frontend `AD.jsx`, `Software.jsx`, `Runbooks.jsx`, migrations 0020-0022.
+
+#### C — Surfaces & Ops (UIs, Backup Dashboard, Knowledge Base, Observability)
+
+| Wave | Gap | Work | Est. |
+| ------ | ----- | ------ | ------ |
+| 1 | #18 | Backup status & orchestration: backup status collector (Veeam, Datto, Acronis APIs via scripting engine). `backups` table + `/api/backups` endpoint. Backup UI dashboard. | 2.0 w |
+| 1 | #20a | Database optimization: audit all queries, add missing indexes, profile slow queries, optimize N+1 patterns, add pagination + query timeout middleware. | 1.5 w |
+| 2 | #20a | Knowledge base: `kb_articles` table, markdown editor, tagging, Meilisearch integration, link articles to tickets/devices. `/api/kb` endpoints + `KnowledgeBase.jsx`. | 1.5 w |
+| 2 | #20a | Client-facing automated reports: branded report templates, scheduled email delivery, report history. Extend existing reports engine. | 1.5 w |
+| 3 | #20c | Observability stack: structured JSON logging with request ID propagation, Prometheus metrics for all key operations, OpenTelemetry tracing for major flows (enrollment, alerting, ticketing). | 2.5 w |
+| 4 | #20d | Test coverage & CI/CD: achieve >90% server, >85% agent, >80% frontend coverage. CI matrix expansion, parallel test execution, coverage upload, code health checks in pre-commit. | 2.0 w |
+
+**C owns (new):** `server/internal/{backups,kb,observability}`, `httpapi/domain_{backups,kb,client_reports}.go`, frontend `Backups.jsx`, `KnowledgeBase.jsx`, `ClientReports.jsx`, migrations 0023-0025.
+
+---
+
+### Dependency graph (Phase 2)
+
+```text
+#11 scripting engine (A, w1) ──> B: #17 AD mgmt (uses scripting for actions)
+#11 scripting engine (A, w1) ──> B: #15 software mgmt (uses scripting for installers)
+#11 scripting engine (A, w1) ──> C: #18 backup (uses scripting for API calls)
+#11 scripting engine (A, w1) ──> B: #14 runbooks (uses scripting as step executor)
+#1 remote session (Phase 1) ──> A: #12 remote control v2 (builds on session relay)
+#4 inventory (Phase 1) ──> A: #13 OS patching (needs software data)
+#4 inventory (Phase 1) ──> A: #16 vuln scanning (needs patch data)
+#7 tickets (Phase 1) ──> C: #20 knowledge base (link to tickets)
+#8 reports (Phase 1) ──> C: #20 client reports (extends reports engine)
+#20a DB optimization (C, w1) ──> all remaining work (performance foundation)
+```
+
+---
+
+### Milestones (Phase 2)
+
+| Gate | End of | Shipped |
+| ------ | -------- | --------- |
+| M6 | W13 | Remote scripting engine live (PowerShell/Bash/Python); AD management v1; database optimization complete |
+| M7 | W15 | Remote control v2 (multi-viewer, recording, Linux); backup status dashboard; knowledge base |
+| M8 | W17 | Cross-platform patching (macOS/Linux); software management (catalog + deploy + verify); runbook automation engine; client-facing reports |
+| M9 | W19 | Vulnerability scanning & CVE correlation; endpoint security monitoring; observability stack |
+| M10 | W20 | Test coverage targets met; CI/CD overhaul; code health audit; Phase 2 integration e2e; v2.0.0 release |
+
+---
+
+### Conflict map — Phase 2 additions
+
+| Artifact | Owner | Rule |
+| ---------- | ------- | ---------------- |
+| `proto/{scripts,vulnscan,security}.proto` | A | Only A commits; B/C review |
+| `proto/{runbook,software}.proto` | B | Only B commits; A/C review |
+| `agent/internal/{scripts,vulnscan,security}` | A | B/C never edit |
+| `server/internal/{ad,software,runbooks}` | B | A/C additive reviews only |
+| `server/internal/{backups,kb,observability}` | C | B/C split above |
+| `httpapi/domain_{scripts,vulnerabilities,security}.go` | A | New files = new owner |
+| `httpapi/domain_{ad,software,runbooks}.go` | B | New files = new owner |
+| `httpapi/domain_{backups,kb,client_reports}.go` | C | New files = new owner |
+| Migration numbers 0018–0025 | Ledger | Reserve in `MIGRATIONS.md` before PR |
+
+---
+
+### Week-by-week at a glance (Phase 2)
+
+```text
+wk   C                          B                          A
+11   #18 backup collector       #17 AD collectors          #11 scripting (agent-side)
+12   #18 backup API/UI          #17 AD tables/API          #11 scripting relay + API
+13   #20a DB indexes            #17 AD UI                  #11 scripting UI → M6
+14   #20a KB tables/API         #14 remote control v2      #12 multi-viewer sessions
+15   #20a KB UI                 #14 session recording      #12 Linux VNC integration
+16   #20b client reports        #15 software domain        #12 clipboard/chat → M7
+17   #20c structured logging    #15 software agent-side    #13 Linux patch collectors
+18   #20c Prometheus metrics    #15 software UI            #13 macOS patch collectors
+19   #20c OpenTelemetry tracing #15 software UI done       #13 OS patch API/UI → M8
+20   #20d test coverage, CI/CD  #16 vuln scanning          #16 vuln scanning (agent)
+20   M10: v2.0.0 release cut    M10: v2.0.0 release cut    M10: v2.0.0 release cut
+```
+
+---
+
 ## 9. Progress log
 
 ### 2026-09-08 — Wave 0 execution session (pi + 2 subagents)
@@ -515,3 +640,19 @@ viewer + #8b reports; Lane B #6 notifications).
   5 report types, 3-lane integration e2e test, 5k device load test, documentation,
   release prep (v1.0.0).
 - [todo] Push to origin, update Obsidian plan note, mark M4/M5 as complete.
+
+### 2026-09-10 — Phase 2 planning session (pi supervisor + 3 parallel worker subagents via Herdr)
+
+- Setup: 3 workers in isolated Herdr panes, each given a focused perspective for
+  Phase 2 design: roadmap (feature completeness vs competitors), engineering
+  (architecture, performance, testing, DX), operations (MSP day-to-day workflows).
+  Each produced a detailed Phase 2 proposal written to /tmp/phase2-*.md.
+- Supervisor synthesized the three proposals into a unified Phase 2 plan covering
+  10 new gaps (#11-#20): remote scripting engine, remote control v2 (multi-viewer,
+  recording, Linux VNC, clipboard, chat), cross-platform patching, runbook automation,
+  software management, vulnerability scanning, AD management, backup status dashboard,
+  endpoint security monitoring, knowledge base / client reports / observability stack.
+- Phase 2 plan appended to TEAM-PLAN.md with lane assignments, dependency graph,
+  milestones (M6-M10), conflict map, and week-by-week schedule for weeks 11-20.
+- v2.0.0 release targeted at M10 (week 20).
+- Sub-agents released; Phase 2 ready for kickoff after M5 integration complete.

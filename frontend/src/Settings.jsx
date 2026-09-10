@@ -383,7 +383,7 @@ export default function Settings({ token, onUnauthorized }) {
               <span className="muted">
                 {profile.mfa_enabled
                   ? "enabled"
-                  : "not yet enabled (arrives in wave 2)"}
+                  : "not yet enabled"}
               </span>
             </div>
           </section>
