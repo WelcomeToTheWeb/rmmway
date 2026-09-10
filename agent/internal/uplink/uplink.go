@@ -681,14 +681,13 @@ func (u *Uplink) collectInventoryCommand(ctx context.Context, stream agentv1.Age
 	// Users
 	if users, err := inventory.CollectUsers(ctx); err == nil {
 		for i := 0; i < len(users); i++ {
-			user := users[i]
 			inv.Users = append(inv.Users, &agentv1.UserAccount{
-				Username:    user.Username,
-				Uid:         user.Uid,
-				HomeDir:     user.HomeDir,
-				Shell:       user.Shell,
-				Enabled:     user.Enabled,
-				AccountType: user.AccountType,
+				Username:    users[i].Username,
+				Uid:         users[i].Uid,
+				HomeDir:     users[i].HomeDir,
+				Shell:       users[i].Shell,
+				Enabled:     users[i].Enabled,
+				AccountType: users[i].AccountType,
 			})
 		}
 	} else {
@@ -751,13 +750,13 @@ func (u *Uplink) patchApplyCommand(ctx context.Context, stream agentv1.AgentServ
 	u.cfg.Logger.Info("patch_apply", "cmd", cmd.GetId(), "schedule_reboot", apply.GetScheduleReboot())
 
 	pm := patchmanager.NewPatchManager()
-	progressCh := make(chan agentv1.PatchApplyProgress, 10)
+	progressCh := make(chan *agentv1.PatchApplyProgress, 10)
 
 	go func() {
 		defer close(progressCh)
 		err := pm.Apply(ctx, apply.GetPatchIds(), apply.GetScheduleReboot(), apply.GetRebootDelaySeconds(), func(p patchmanager.PatchApplyProgress) {
 			select {
-			case progressCh <- agentv1.PatchApplyProgress{
+			case progressCh <- &agentv1.PatchApplyProgress{
 				Phase:           p.Phase,
 				Message:         p.Message,
 				ProgressPercent: p.ProgressPercent,
@@ -768,7 +767,7 @@ func (u *Uplink) patchApplyCommand(ctx context.Context, stream agentv1.AgentServ
 			}
 		})
 		if err != nil {
-			progressCh <- agentv1.PatchApplyProgress{
+			progressCh <- &agentv1.PatchApplyProgress{
 				Phase:  "failed",
 				Errors: []string{err.Error()},
 			}
@@ -776,30 +775,17 @@ func (u *Uplink) patchApplyCommand(ctx context.Context, stream agentv1.AgentServ
 	}()
 
 	// Report progress
-	for {
-		select {
-		case progress, ok := <-progressCh:
-			if !ok {
-				goto done
-			}
-			status := &agentv1.PatchStatus{
-				CommandId:  cmd.GetId(),
-				StatusAtMs: time.Now().UnixMilli(),
-			}
-			status.Apply = &agentv1.PatchApplyProgress{
-				Phase:           progress.Phase,
-				Message:         progress.Message,
-				ProgressPercent: progress.ProgressPercent,
-				RebootRequired:  progress.RebootRequired,
-				Errors:          progress.Errors,
-			}
-			if err := stream.Send(&agentv1.StreamRequest{
-				Payload: &agentv1.StreamRequest_PatchStatus{PatchStatus: status},
-			}); err != nil {
-				return err
-			}
+	for progress := range progressCh {
+		status := &agentv1.PatchStatus{
+			CommandId:  cmd.GetId(),
+			StatusAtMs: time.Now().UnixMilli(),
 		}
-	done:
+		status.Apply = progress
+		if err := stream.Send(&agentv1.StreamRequest{
+			Payload: &agentv1.StreamRequest_PatchStatus{PatchStatus: status},
+		}); err != nil {
+			return err
+		}
 	}
 
 	u.cfg.Logger.Info("patch_apply: completed", "cmd", cmd.GetId())
