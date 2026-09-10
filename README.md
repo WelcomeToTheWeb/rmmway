@@ -83,6 +83,20 @@ automation all stay under your control.
 - Every release artifact is cryptographically signed (minisign / Sigstore) and
   ships with a CycloneDX SBOM
 
+## M4 Release Highlights
+
+The v1.0.0 (M4) release introduces:
+
+- **Fleet dashboard** with per-client summary tiles (online, alerts, uptime, patch compliance)
+- **Mobile-responsive UI** — the entire operator interface is usable on phones and tablets
+- **Scheduled and compliance reports** in CSV and PDF: fleet status, device, patch/license compliance, uptime/SLA
+- **Maintenance windows** — pause alerting for devices, tags, or clients during planned work
+- **Deep inventory and patch management** — hardware/software/service/user collection, Windows Update + third-party patch query/approve/apply
+- **Remote session** — live screen viewing of managed devices (view-only in v1.0.0)
+- **User management & RBAC** — multiple operator accounts with role-based access and TOTP MFA
+- **Ticketing** — alert-to-ticket escalation with assignment, SLA tracking, and resolution workflows
+- **Multi-channel notifications** — email, Slack, Teams, PagerDuty with per-client routing policies
+
 ## How it works
 
 ```
