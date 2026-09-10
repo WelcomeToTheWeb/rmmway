@@ -162,9 +162,9 @@ func main() {
 	} else {
 		// Create a test client
 		createClientBody, _ := json.Marshal(map[string]any{
-			"name":        "E2E Integration Client",
-			"website":     "https://example.com",
-			"contact_name": "E2E User",
+			"name":          "E2E Integration Client",
+			"website":       "https://example.com",
+			"contact_name":  "E2E User",
 			"contact_email": "e2e@example.com",
 		})
 		createReq, _ := http.NewRequest("POST", httpAddr+"/admin/clients", bytes.NewReader(createClientBody))
@@ -214,8 +214,8 @@ func main() {
 	now := time.Now().UnixMilli()
 	if err := stream.Send(&agentv1.StreamRequest{
 		Payload: &agentv1.StreamRequest_Heartbeat{Heartbeat: &agentv1.Heartbeat{
-			TimestampMs: now,
-			CpuPercent:  33.3,
+			TimestampMs:   now,
+			CpuPercent:    33.3,
 			MemoryPercent: 55.5,
 			Metrics: &agentv1.MetricBatch{
 				CollectedAtMs: now,
@@ -306,7 +306,7 @@ func main() {
 	// Step 9: Generate fleet status report (CSV)
 	step("Step 9: Generate fleet status report (CSV)")
 	reportBody, _ := json.Marshal(map[string]any{
-		"report_type": "fleet_status",
+		"report_type":   "fleet_status",
 		"output_format": "csv",
 	})
 	reportReq, _ := http.NewRequest("POST", httpAddr+"/api/reports/generate", bytes.NewReader(reportBody))
@@ -330,7 +330,7 @@ func main() {
 	// Step 10: Generate fleet status report (PDF)
 	step("Step 10: Generate fleet status report (PDF)")
 	pdfReportBody, _ := json.Marshal(map[string]any{
-		"report_type": "fleet_status",
+		"report_type":   "fleet_status",
 		"output_format": "pdf",
 	})
 	pdfReportReq, _ := http.NewRequest("POST", httpAddr+"/api/reports/generate", bytes.NewReader(pdfReportBody))

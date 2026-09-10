@@ -47,7 +47,7 @@ func (t *testCapturer) Capture(context.Context) (*Frame, error) {
 	// frame is visually distinct (frame-rate + drop detection).
 	s := t.seq
 	bx := int((s * 13) % (testWidth - 60))
-	by := int((s*7)%(testHeight-60))
+	by := int((s * 7) % (testHeight - 60))
 	by = (by / 30) * 30
 	block := image.NewUniform(color.RGBA{R: 250, G: 200, B: 40, A: 255})
 	draw.Draw(img, image.Rect(bx, by, bx+60, by+30), block, image.Point{}, draw.Over)
@@ -55,7 +55,7 @@ func (t *testCapturer) Capture(context.Context) (*Frame, error) {
 	// Frame-counter bar along the bottom: its length grows with seq mod
 	// 64, so a frozen feed is obvious in one glance.
 	bar := image.NewUniform(color.RGBA{R: 40, G: 220, B: 120, A: 255})
-	barLen := int(s % 64) * (testWidth / 64)
+	barLen := int(s%64) * (testWidth / 64)
 	draw.Draw(img, image.Rect(0, testHeight-8, barLen, testHeight), bar, image.Point{}, draw.Over)
 
 	var buf bytes.Buffer

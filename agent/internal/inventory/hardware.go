@@ -16,34 +16,34 @@ import (
 
 // HardwareInfo contains the collected hardware inventory.
 type HardwareInfo struct {
-	CPUModel    string
-	CPUVendor   string
-	CPUCores    uint32
-	CPULogical  uint32
-	RAMTotal    uint64
-	RAMModel    string // best-effort (DMSP on Windows, /sys on Linux)
-	OSName      string
-	OSVersion   string
-	OSArch      string
-	Hostname    string
-	Domains     []DomainInfo
-	Disks       []DiskInfo
+	CPUModel   string
+	CPUVendor  string
+	CPUCores   uint32
+	CPULogical uint32
+	RAMTotal   uint64
+	RAMModel   string // best-effort (DMSP on Windows, /sys on Linux)
+	OSName     string
+	OSVersion  string
+	OSArch     string
+	Hostname   string
+	Domains    []DomainInfo
+	Disks      []DiskInfo
 }
 
 // DomainInfo describes AD/MDM affiliation.
 type DomainInfo struct {
-	Type    string // "active_directory" | "apple_business_manager" | "local"
-	Name    string
+	Type      string // "active_directory" | "apple_business_manager" | "local"
+	Name      string
 	Workgroup string
 }
 
 // DiskInfo describes a physical disk's geometry and serial.
 type DiskInfo struct {
-	Device    string
-	Model     string
-	Serial    string
-	Size      uint64
-	Type      string // "hdd" | "ssd" | "unknown"
+	Device string
+	Model  string
+	Serial string
+	Size   uint64
+	Type   string // "hdd" | "ssd" | "unknown"
 }
 
 // CollectHardware gathers hardware inventory for this host.
@@ -123,8 +123,6 @@ func collectDiskInfo(ctx context.Context) []DiskInfo {
 	return disks
 }
 
-
-
 // diskSerials returns device->serial map via platform-specific means.
 func diskSerials(ctx context.Context) map[string]string {
 	return diskSerialsPlatform(ctx)
@@ -133,16 +131,16 @@ func diskSerials(ctx context.Context) map[string]string {
 // toProto converts HardwareInfo to the wire format.
 func (h *HardwareInfo) ToProto() *agentv1.HardwareInfo {
 	ph := &agentv1.HardwareInfo{
-		CpuModel:    h.CPUModel,
-		CpuVendor:   h.CPUVendor,
-		CpuCores:    h.CPUCores,
-		CpuLogical:  h.CPULogical,
+		CpuModel:      h.CPUModel,
+		CpuVendor:     h.CPUVendor,
+		CpuCores:      h.CPUCores,
+		CpuLogical:    h.CPULogical,
 		RamTotalBytes: h.RAMTotal,
-		RamModel:    h.RAMModel,
-		OsName:      h.OSName,
-		OsVersion:   h.OSVersion,
-		OsArch:      h.OSArch,
-		Hostname:    h.Hostname,
+		RamModel:      h.RAMModel,
+		OsName:        h.OSName,
+		OsVersion:     h.OSVersion,
+		OsArch:        h.OSArch,
+		Hostname:      h.Hostname,
 	}
 
 	for _, d := range h.Domains {

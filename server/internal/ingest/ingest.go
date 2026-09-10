@@ -745,15 +745,15 @@ func (s *Service) handleInventoryReport(ctx context.Context, deviceID string, re
 		// Store hardware info
 		hw := report.GetHardware()
 		if err := s.devices.SaveDeviceHardware(ctx, deviceID, map[string]any{
-			"cpu_model":         hw.GetCpuModel(),
-			"cpu_vendor":        hw.GetCpuVendor(),
-			"cpu_cores":         hw.GetCpuCores(),
-			"cpu_logical":       hw.GetCpuLogical(),
-			"ram_total_bytes":   hw.GetRamTotalBytes(),
-			"os_name":           hw.GetOsName(),
-			"os_version":        hw.GetOsVersion(),
-			"os_arch":           hw.GetOsArch(),
-			"hostname":          hw.GetHostname(),
+			"cpu_model":       hw.GetCpuModel(),
+			"cpu_vendor":      hw.GetCpuVendor(),
+			"cpu_cores":       hw.GetCpuCores(),
+			"cpu_logical":     hw.GetCpuLogical(),
+			"ram_total_bytes": hw.GetRamTotalBytes(),
+			"os_name":         hw.GetOsName(),
+			"os_version":      hw.GetOsVersion(),
+			"os_arch":         hw.GetOsArch(),
+			"hostname":        hw.GetHostname(),
 		}); err != nil {
 			return fmt.Errorf("save hardware: %w", err)
 		}

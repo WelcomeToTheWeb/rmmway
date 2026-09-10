@@ -44,17 +44,17 @@ const (
 // user32 is declared in capture_windows.go; we reuse it here via
 // syscall.NewLazyDLL in this file (each .go file needs its own declaration).
 var (
-	inputUser32 = syscall.NewLazyDLL("user32.dll")
-	procSendInput = inputUser32.NewProc("SendInput")
+	inputUser32    = syscall.NewLazyDLL("user32.dll")
+	procSendInput  = inputUser32.NewProc("SendInput")
 	procVkKeyScanW = inputUser32.NewProc("VkKeyScanW")
 )
 
 // INPUT is the Windows INPUT union (simplified for mouse/keyboard).
 type INPUT struct {
-	Type       uint32
-	Mouse      MOUSEINPUT
-	Keyboard   KEYBDINPUT
-	Hardware   [4]uint32 // Padding for HARDWAREINPUT
+	Type     uint32
+	Mouse    MOUSEINPUT
+	Keyboard KEYBDINPUT
+	Hardware [4]uint32 // Padding for HARDWAREINPUT
 }
 
 // MOUSEINPUT represents a mouse event.
@@ -78,14 +78,14 @@ type KEYBDINPUT struct {
 
 // windowsInputRelayer uses the Windows SendInput API.
 type windowsInputRelayer struct {
-	logger    *slog.Logger
-	screenW   int32
-	screenH   int32
+	logger  *slog.Logger
+	screenW int32
+	screenH int32
 }
 
 func newPlatformInputRelayer(cfg InputRelayerConfig) (InputRelayer, error) {
 	r := &windowsInputRelayer{
-		logger:  cfg.Logger,
+		logger: cfg.Logger,
 	}
 	// Get screen dimensions via GetSystemMetrics (declared in capture_windows.go).
 	// We call it via our own syscall declaration since capture_windows.go's
@@ -200,9 +200,9 @@ func (r *windowsInputRelayer) mouseWheel(x, y, delta int) error {
 	var inp INPUT
 	inp.Type = INPUT_MOUSE
 	inp.Mouse = MOUSEINPUT{
-		Dx:      int32(r.normalizeX(x)),
-		Dy:      int32(r.normalizeY(y)),
-		DwFlags: MOUSEEVENTF_WHEEL | MOUSEEVENTF_ABSOLUTE,
+		Dx:        int32(r.normalizeX(x)),
+		Dy:        int32(r.normalizeY(y)),
+		DwFlags:   MOUSEEVENTF_WHEEL | MOUSEEVENTF_ABSOLUTE,
 		MouseData: uint32(delta),
 	}
 	return r.sendInput(&inp)

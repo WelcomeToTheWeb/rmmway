@@ -45,11 +45,11 @@ type CompleteRequest struct {
 // Stored is what the wizard persisted (the API's read model). Password is
 // the only secret and is never included.
 type Stored struct {
-	Done            bool
-	AdminUser       string
-	OrgName         string
-	SMTP            smtp.Config
-	SMTPConfigured  bool
+	Done           bool
+	AdminUser      string
+	OrgName        string
+	SMTP           smtp.Config
+	SMTPConfigured bool
 }
 
 // Store persists the initialization state + the wizard's choices.

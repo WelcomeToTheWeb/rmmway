@@ -19,10 +19,10 @@ import (
 // they exit on their own (observed: a 300ms timeout took the full 5s).
 
 var (
-	kernel32                      = windows.NewLazySystemDLL("kernel32.dll")
-	procCreateJobObjectW          = kernel32.NewProc("CreateJobObjectW")
-	procSetInformationJobObject   = kernel32.NewProc("SetInformationJobObject")
-	procAssignProcessToJobObject  = kernel32.NewProc("AssignProcessToJobObject")
+	kernel32                     = windows.NewLazySystemDLL("kernel32.dll")
+	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
+	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
+	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 )
 
 type jobObject struct {

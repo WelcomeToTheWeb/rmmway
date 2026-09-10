@@ -9,21 +9,21 @@ import (
 
 // Policy defines routing rules for notification categories.
 type Policy struct {
-	ID         string         `json:"id"`
-	Category   string         `json:"category"`   // "alert" or "escalation"
-	ClientID   *string        `json:"client_id"`  // nil = all clients
-	Role       *string        `json:"role"`       // nil = all roles
-	Channels   []string       `json:"channels"`   // channel IDs to fire
-	Enabled    bool           `json:"enabled"`
+	ID       string   `json:"id"`
+	Category string   `json:"category"`  // "alert" or "escalation"
+	ClientID *string  `json:"client_id"` // nil = all clients
+	Role     *string  `json:"role"`      // nil = all roles
+	Channels []string `json:"channels"`  // channel IDs to fire
+	Enabled  bool     `json:"enabled"`
 }
 
 // Router consults notification policies to determine which channels to fire
 // for each event. Policies are loaded from the notification_policies table
 // (0016) and cached in memory.
 type Router struct {
-	sender    *Sender
-	policies  []*Policy
-	log       *log.Logger
+	sender   *Sender
+	policies []*Policy
+	log      *log.Logger
 }
 
 // NewRouter creates a notification router.

@@ -18,13 +18,13 @@ func TestFrameRelay(t *testing.T) {
 
 	// Send a frame.
 	r.OnFrame("dev-1", &agentv1.SessionFrame{
-		SessionId:    "sess-1",
-		Seq:          1,
-		Codec:        "jpeg",
-		Width:        640,
-		Height:       480,
-		Jpeg:         []byte{1, 2, 3},
-		CaptureTsMs:  123456,
+		SessionId:   "sess-1",
+		Seq:         1,
+		Codec:       "jpeg",
+		Width:       640,
+		Height:      480,
+		Jpeg:        []byte{1, 2, 3},
+		CaptureTsMs: 123456,
 	})
 
 	// Latest frame should be available.
@@ -153,7 +153,7 @@ func TestFormatBytes(t *testing.T) {
 	if got := FormatBytes(100); got != "100 B" {
 		t.Fatalf("FormatBytes(100) = %q", got)
 	}
-	if got := FormatBytes(1024*500); got != "500.0 KB" {
+	if got := FormatBytes(1024 * 500); got != "500.0 KB" {
 		t.Fatalf("FormatBytes(512000) = %q", got)
 	}
 }

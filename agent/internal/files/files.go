@@ -82,9 +82,9 @@ func SendPull(ctx context.Context, cmdID, path string, send func(*agentv1.FileCh
 		}
 		if errors.Is(rerr, io.EOF) {
 			// Zero-byte file: still send the (empty) eof chunk so the
-				// receiver finalizes the transfer.
+			// receiver finalizes the transfer.
 			chunk := &agentv1.FileChunk{
-				CommandId:  cmdID, Seq: seq, Eof: true,
+				CommandId: cmdID, Seq: seq, Eof: true,
 				TotalBytes: 0, SourceMode: uint32(fi.Mode().Perm()),
 			}
 			if err := send(chunk); err != nil {

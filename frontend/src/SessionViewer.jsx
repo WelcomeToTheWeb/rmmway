@@ -47,7 +47,7 @@ export default function SessionViewer({
 
     function connectStream() {
       const evtSource = new EventSource(
-        `/api/devices/${deviceID}/session/stream?token=${token}`
+        `/api/devices/${deviceID}/session/stream?token=${token}`,
       );
       streamRef.current = evtSource;
 

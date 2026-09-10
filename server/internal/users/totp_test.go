@@ -14,7 +14,7 @@ const appendixSecret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 // RFC 6238 appendix A, SHA-1 row. The spec publishes 8-digit values; the
 // 6-digit rendering is the trailing six (what authenticator apps show).
 var appendixA = []struct {
-	t    int64 // unix seconds
+	t    int64  // unix seconds
 	code string // 6 digits
 }{
 	{59, "287082"},

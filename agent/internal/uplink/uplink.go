@@ -66,22 +66,22 @@ func (c *Config) withDefaults() {
 
 // Uplink owns one authenticated Stream for a device.
 type Uplink struct {
-	client  Streamer
-	devID   string
-	jwtMu   sync.RWMutex // H3: guards jwt (it rotates in place via ack renewals)
-	jwt     string
-	jwtHook func(string) // H3: fired once per renewal (persist + share)
-	cfg     Config
-	collect func(ctx context.Context) (*agentv1.MetricBatch, error) // W1-2 collector
-	commander *Commander                                            // W3-3 (nil = legacy log-only)
-	sessions  *session.Driver                                       // gap #1a (nil = no remote session)
+	client    Streamer
+	devID     string
+	jwtMu     sync.RWMutex // H3: guards jwt (it rotates in place via ack renewals)
+	jwt       string
+	jwtHook   func(string) // H3: fired once per renewal (persist + share)
+	cfg       Config
+	collect   func(ctx context.Context) (*agentv1.MetricBatch, error) // W1-2 collector
+	commander *Commander                                              // W3-3 (nil = legacy log-only)
+	sessions  *session.Driver                                         // gap #1a (nil = no remote session)
 	rng       *rand.Rand
 
 	// pushes (gap #1a): in-flight chunked file_push transfers,
 	// command_id -> session. The downlink reader routes FileChunk frames
 	// to them; the command's finish goroutine waits for the eof chunk.
-	pushMu   sync.Mutex
-	pushes   map[string]*files.PushSession
+	pushMu sync.Mutex
+	pushes map[string]*files.PushSession
 
 	// acked (M3) is set once the current session has received a heartbeat
 	// ack — i.e. it was actually healthy. Run() uses it to reset the
@@ -668,10 +668,10 @@ func (u *Uplink) collectInventoryCommand(ctx context.Context, stream agentv1.Age
 	if svcs, err := inventory.CollectServices(ctx); err == nil {
 		for _, s := range svcs {
 			inv.Services = append(inv.Services, &agentv1.ServiceInfo{
-				Name:       s.Name,
-				Status:     s.Status,
-				Type:       s.Type,
-				Enabled:    s.Enabled,
+				Name:    s.Name,
+				Status:  s.Status,
+				Type:    s.Type,
+				Enabled: s.Enabled,
 			})
 		}
 	} else {
@@ -682,11 +682,11 @@ func (u *Uplink) collectInventoryCommand(ctx context.Context, stream agentv1.Age
 	if users, err := inventory.CollectUsers(ctx); err == nil {
 		for _, u := range users {
 			inv.Users = append(inv.Users, &agentv1.UserAccount{
-				Username:   u.Username,
-				Uid:        u.Uid,
-				HomeDir:    u.HomeDir,
-				Shell:      u.Shell,
-				Enabled:    u.Enabled,
+				Username:    u.Username,
+				Uid:         u.Uid,
+				HomeDir:     u.HomeDir,
+				Shell:       u.Shell,
+				Enabled:     u.Enabled,
 				AccountType: u.AccountType,
 			})
 		}
@@ -762,15 +762,15 @@ func (u *Uplink) patchApplyCommand(ctx context.Context, stream agentv1.AgentServ
 				ProgressPercent: p.ProgressPercent,
 				RebootRequired:  p.RebootRequired,
 				Errors:          p.Errors,
-				}:
+			}:
 			default:
 			}
 		})
 		if err != nil {
 			progressCh <- agentv1.PatchApplyProgress{
-			Phase:  "failed",
-			Errors: []string{err.Error()},
-		}
+				Phase:  "failed",
+				Errors: []string{err.Error()},
+			}
 		}
 	}()
 

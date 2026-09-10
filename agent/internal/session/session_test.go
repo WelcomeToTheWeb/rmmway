@@ -10,17 +10,17 @@ import (
 
 // mockInputRelayer records input events for test assertions.
 type mockInputRelayer struct {
-	mu        sync.Mutex
-	mouse     []mockMouseEvent
-	keyboard  []mockKeyboardEvent
-	mouseErr  error
+	mu          sync.Mutex
+	mouse       []mockMouseEvent
+	keyboard    []mockKeyboardEvent
+	mouseErr    error
 	keyboardErr error
 }
 
 type mockMouseEvent struct {
-	Type      string
-	X, Y      int
-	Button    int
+	Type       string
+	X, Y       int
+	Button     int
 	WheelDelta int
 }
 
@@ -163,7 +163,7 @@ func TestDriverInputRouting(t *testing.T) {
 func TestDriverInputRelayerErrors(t *testing.T) {
 	relayer := &mockInputRelayer{mouseErr: context.DeadlineExceeded, keyboardErr: context.DeadlineExceeded}
 	d := NewDriver(DriverConfig{
-		SendFrame: func(ctx context.Context, f *agentv1.SessionFrame) error { return nil },
+		SendFrame:   func(ctx context.Context, f *agentv1.SessionFrame) error { return nil },
 		NewCapturer: func() (Capturer, error) { return newTestCapturer(), nil },
 	})
 	d.input = relayer
@@ -197,7 +197,7 @@ func TestDriverInputRelayerErrors(t *testing.T) {
 // when no input relayer is configured (phase 1 view-only operation).
 func TestDriverInputRelayerNil(t *testing.T) {
 	d := NewDriver(DriverConfig{
-		SendFrame: func(ctx context.Context, f *agentv1.SessionFrame) error { return nil },
+		SendFrame:   func(ctx context.Context, f *agentv1.SessionFrame) error { return nil },
 		NewCapturer: func() (Capturer, error) { return newTestCapturer(), nil },
 	})
 	// No input relayer set.

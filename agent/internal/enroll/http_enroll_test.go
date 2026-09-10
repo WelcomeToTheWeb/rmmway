@@ -71,8 +71,8 @@ func TestHTTPEnroller_Success(t *testing.T) {
 // the plain gRPC channel).
 func TestHTTPEnroller_Transientness(t *testing.T) {
 	cases := []struct {
-		name    string
-		status  int
+		name      string
+		status    int
 		transient bool
 	}{
 		{"403 unknown token is definitive", http.StatusForbidden, false},

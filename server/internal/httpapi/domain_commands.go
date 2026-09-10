@@ -151,9 +151,9 @@ type dispatchRequest struct {
 	Script     string   `json:"script"` // base64
 	Args       []string `json:"args"`
 	TimeoutS   int32    `json:"timeout_s"`
-	Path       string   `json:"path"`       // gap #1a: file path for pull/push
+	Path       string   `json:"path"`        // gap #1a: file path for pull/push
 	ContentB64 string   `json:"content_b64"` // gap #1a: inline content for push
-	Mode       string   `json:"mode"`       // gap #1a: octal mode for push
+	Mode       string   `json:"mode"`        // gap #1a: octal mode for push
 }
 
 // buildCommandAction maps the JSON body onto the proto oneof action.
@@ -226,9 +226,9 @@ func buildCommandAction(in dispatchRequest) (any, error) {
 			rebootDelay = uint32(in.TimeoutS)
 		}
 		return &agentv1.Command_PatchApply{PatchApply: &agentv1.PatchApply{
-			PatchIds:             patchIDs,
-			ScheduleReboot:       scheduleReboot,
-			RebootDelaySeconds:   rebootDelay,
+			PatchIds:           patchIDs,
+			ScheduleReboot:     scheduleReboot,
+			RebootDelaySeconds: rebootDelay,
 		}}, nil
 	default:
 		return nil, fmt.Errorf("unknown action %q (want run_script|reboot|file_pull|file_push|collect_inventory|patch_query|patch_apply)", in.Action)

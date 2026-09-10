@@ -10,11 +10,11 @@ import (
 
 // ServiceInfo describes an installed system service.
 type ServiceInfo struct {
-	Name    string `json:"name"`
+	Name        string `json:"name"`
 	DisplayName string `json:"display_name,omitempty"`
-	Status  string `json:"status"` // "running" | "stopped" | "paused" | "unknown"
-	Type    string `json:"type,omitempty"` // "systemd" | "launchd" | "windows_service"
-	Enabled bool   `json:"enabled"` // auto-start on boot
+	Status      string `json:"status"`         // "running" | "stopped" | "paused" | "unknown"
+	Type        string `json:"type,omitempty"` // "systemd" | "launchd" | "windows_service"
+	Enabled     bool   `json:"enabled"`        // auto-start on boot
 }
 
 // CollectServices gathers all installed services.

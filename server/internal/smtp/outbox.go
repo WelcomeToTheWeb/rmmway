@@ -72,9 +72,9 @@ func (c Config) IsConfigured() bool {
 type SecurityMode int
 
 const (
-	Plain SecurityMode = iota // port 25 etc.
-	StartTLS                  // port 587
-	ImplicitTLS               // port 465
+	Plain       SecurityMode = iota // port 25 etc.
+	StartTLS                        // port 587
+	ImplicitTLS                     // port 465
 )
 
 func (c Config) SecurityMode() SecurityMode {

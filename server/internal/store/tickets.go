@@ -18,10 +18,10 @@ import (
 
 // Ticket statuses.
 const (
-	TicketStatusOpen      = "open"
+	TicketStatusOpen       = "open"
 	TicketStatusInProgress = "in_progress"
-	TicketStatusResolved  = "resolved"
-	TicketStatusClosed    = "closed"
+	TicketStatusResolved   = "resolved"
+	TicketStatusClosed     = "closed"
 )
 
 // Ticket priorities.
@@ -42,35 +42,35 @@ const (
 
 // Ticket is one helpdesk item.
 type Ticket struct {
-	ID                  string
-	Title               string
-	Description         string
-	Queue               string
-	Status              string
-	Priority            string
-	DeviceID            *string
-	ClientID            *string
-	AssignedTo          *string
-	Reporter            *string
-	FirstResponseDue    *time.Time
-	ResolutionDue       *time.Time
-	FirstResponseAt     *time.Time
-	ResolvedAt          *time.Time
-	ClosedAt            *time.Time
-	HealRunID           *int64
-	Source              string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID               string
+	Title            string
+	Description      string
+	Queue            string
+	Status           string
+	Priority         string
+	DeviceID         *string
+	ClientID         *string
+	AssignedTo       *string
+	Reporter         *string
+	FirstResponseDue *time.Time
+	ResolutionDue    *time.Time
+	FirstResponseAt  *time.Time
+	ResolvedAt       *time.Time
+	ClosedAt         *time.Time
+	HealRunID        *int64
+	Source           string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // TicketNote is one activity note on a ticket.
 type TicketNote struct {
-	ID          string
-	TicketID    string
-	Author      *string
-	Content     string
-	IsInternal  bool
-	CreatedAt   time.Time
+	ID         string
+	TicketID   string
+	Author     *string
+	Content    string
+	IsInternal bool
+	CreatedAt  time.Time
 }
 
 // ErrTicketNotFound is returned when a ticket is unknown.
@@ -131,15 +131,15 @@ type TicketListFilter struct {
 
 // TicketUpdate holds the fields to patch on an update.
 type TicketUpdate struct {
-	Title           *string
-	Description     *string
-	Queue           *string
-	Priority        *string
-	DeviceID        *string
-	ClientID        *string
-	AssignedTo      *string
+	Title            *string
+	Description      *string
+	Queue            *string
+	Priority         *string
+	DeviceID         *string
+	ClientID         *string
+	AssignedTo       *string
 	FirstResponseDue *time.Time
-	ResolutionDue   *time.Time
+	ResolutionDue    *time.Time
 }
 
 // ---- id mints ----------------------------------------------------------------

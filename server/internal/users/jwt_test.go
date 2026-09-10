@@ -32,10 +32,10 @@ func TestSessionJWTRoundtrip(t *testing.T) {
 }
 
 // TestSessionJWTLegacyCompatibility pins the cross-contract:
-//  - a legacy ingest.OperatorJWT (no role claim) parses as a session with
-//    Role "" → IdentityFromClaims normalizes to a grandfathered admin;
-//  - a session JWT parses through ingest.ParseOperatorJWT (the frozen
-//    httpapi requireOperator path) with its caps intact.
+//   - a legacy ingest.OperatorJWT (no role claim) parses as a session with
+//     Role "" → IdentityFromClaims normalizes to a grandfathered admin;
+//   - a session JWT parses through ingest.ParseOperatorJWT (the frozen
+//     httpapi requireOperator path) with its caps intact.
 func TestSessionJWTLegacyCompatibility(t *testing.T) {
 	legacy, err := ingest.MintOperatorJWT(testSecret, time.Hour, []string{"command.restart-service"})
 	if err != nil {

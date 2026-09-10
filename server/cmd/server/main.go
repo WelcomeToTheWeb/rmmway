@@ -33,8 +33,8 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/httpapi"
-	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/sessionrelay"
+	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
 )
 
@@ -782,7 +782,11 @@ func main() {
 	// gap #7: helpdesk ticketing (see wire_tickets.go). The ticket store
 	// is created early so heal escalations can create real tickets.
 	ticketStore, _ := wireTickets(hasPG, pgPool)
-	defer func() { if ticketStore != nil { log.Println("tickets: shutdown") } }()
+	defer func() {
+		if ticketStore != nil {
+			log.Println("tickets: shutdown")
+		}
+	}()
 
 	// gap #6: notification channels + policies (see wire_notify.go).
 	notifyStore, notifySender := wireNotify(hasPG, pgPool)
@@ -793,9 +797,9 @@ func main() {
 	var ticketNotifier heal.Notifier = nil
 	if ticketStore != nil {
 		ticketNotifier = ticketHealNotifier{
-			log:  log.New(os.Stderr, "selfheal: ", 0),
+			log:   log.New(os.Stderr, "selfheal: ", 0),
 			store: ticketStore,
-			pub: publishEvent,
+			pub:   publishEvent,
 		}
 	}
 	healEngine := wireHealEngine(hasPG, pgPool, svc, publishEvent, ticketNotifier)
@@ -877,23 +881,23 @@ func main() {
 		MetricSeries: func(deviceID, name, source string, since time.Time, bucket time.Duration) ([]store.MetricPoint, error) {
 			return metricsView.Series(context.Background(), deviceID, name, source, since, bucket)
 		},
-		AdminCaps: adminCaps(),
-		Baseline:  baselineJob,
-		Alerts:    alertStore,
-		Heal:      healEngine,
-		Releases:  relSrv,
-		Flows:     flowEngine,
-		Export:    exportSvc,
-		Webhooks:  webhookSvc,
-		Setup:     setupSvc,
-		Clients:   clientsStore,
-		Users:     usersStore,
-		Maint:         maintStore,
-		Reports:       reportsStore,
-		Tickets:       ticketStore,
-		NotifyStore:   notifyStore,
-		NotifySender:  notifySender,
-		PublicURL: publicURL(),
+		AdminCaps:    adminCaps(),
+		Baseline:     baselineJob,
+		Alerts:       alertStore,
+		Heal:         healEngine,
+		Releases:     relSrv,
+		Flows:        flowEngine,
+		Export:       exportSvc,
+		Webhooks:     webhookSvc,
+		Setup:        setupSvc,
+		Clients:      clientsStore,
+		Users:        usersStore,
+		Maint:        maintStore,
+		Reports:      reportsStore,
+		Tickets:      ticketStore,
+		NotifyStore:  notifyStore,
+		NotifySender: notifySender,
+		PublicURL:    publicURL(),
 	})
 	apiSrv.Register(mux)
 

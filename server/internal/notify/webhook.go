@@ -20,12 +20,12 @@ func newWebhookChannel(cfg *ChannelConfig) *webhookChannel {
 }
 
 type webhookPayload struct {
-	Category string                 `json:"category"`
-	Title    string                 `json:"title"`
-	Message  string                 `json:"message"`
-	Data     map[string]interface{} `json:"data,omitempty"`
-	Source   string                 `json:"source"`
-	Timestamp string                `json:"timestamp"`
+	Category  string                 `json:"category"`
+	Title     string                 `json:"title"`
+	Message   string                 `json:"message"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Source    string                 `json:"source"`
+	Timestamp string                 `json:"timestamp"`
 }
 
 func (c *webhookChannel) Send(ctx context.Context, req SendRequest) error {

@@ -35,16 +35,16 @@ import (
 	"github.com/welcometotheweb/rmmway/server/internal/caps"
 	"github.com/welcometotheweb/rmmway/server/internal/export"
 	"github.com/welcometotheweb/rmmway/server/internal/flow"
-	"github.com/welcometotheweb/rmmway/server/internal/maintenance"
-	"github.com/welcometotheweb/rmmway/server/internal/reports"
 	"github.com/welcometotheweb/rmmway/server/internal/heal"
 	"github.com/welcometotheweb/rmmway/server/internal/ingest"
+	"github.com/welcometotheweb/rmmway/server/internal/maintenance"
 	"github.com/welcometotheweb/rmmway/server/internal/notify"
-	"github.com/welcometotheweb/rmmway/server/internal/users"
 	"github.com/welcometotheweb/rmmway/server/internal/releases"
+	"github.com/welcometotheweb/rmmway/server/internal/reports"
 	"github.com/welcometotheweb/rmmway/server/internal/sessionrelay"
 	"github.com/welcometotheweb/rmmway/server/internal/setup"
 	"github.com/welcometotheweb/rmmway/server/internal/store"
+	"github.com/welcometotheweb/rmmway/server/internal/users"
 	"github.com/welcometotheweb/rmmway/server/internal/webhook"
 )
 
@@ -57,14 +57,14 @@ const (
 // Server owns the operator API state: credential material, the JWT secret,
 // and the data-layer handles it serves from.
 type Server struct {
-	devices  store.DeviceStore
-	search   *store.Meili
-	baseline *store.Baseline
-	alerts   *store.AlertStore
-	heal     *heal.Engine
-	releases *releases.Server
-	flows    *flow.Engine
-	maintStore *maintenance.Store
+	devices      store.DeviceStore
+	search       *store.Meili
+	baseline     *store.Baseline
+	alerts       *store.AlertStore
+	heal         *heal.Engine
+	releases     *releases.Server
+	flows        *flow.Engine
+	maintStore   *maintenance.Store
 	reportsStore *reports.Store
 
 	jwtSecret     []byte
@@ -270,37 +270,37 @@ func New(cfg Config) *Server {
 		panic("httpapi: generate salt: " + err.Error())
 	}
 	return &Server{
-		loginLimiter:  limiter,
-		devices:       devices,
-		search:        cfg.Search,
-		baseline:      cfg.Baseline,
-		alerts:        cfg.Alerts,
-		heal:          cfg.Heal,
-		releases:      cfg.Releases,
-		flows:         cfg.Flows,
-		jwtSecret:     cfg.JWTSecret,
-		tokenLifetime: cfg.TokenLifetime,
-		adminUser:     cfg.AdminUser,
-		adminSalt:     salt,
-		adminHash:     pbkdf2.Key([]byte(cfg.AdminPassword), salt, pbkdf2Iterations, pbkdf2KeyLen, sha256.New),
-		adminCaps:     cfg.AdminCaps,
-		mintBootstrap: cfg.MintBootstrap,
-		enroll:        cfg.Enroll,
-		dispatch:      cfg.Dispatch,
-		commandState:  cfg.CommandState,
-		export:        cfg.Export,
-		logEvents:     cfg.LogEvents,
-		metricNames:   cfg.MetricNames,
-		metricSeries:  cfg.MetricSeries,
-		webhooks:      cfg.Webhooks,
-		setup:         cfg.Setup,
-		clients:       cfg.Clients,
-		users:         cfg.Users,
-		maintStore:    cfg.Maint,
-		reportsStore:  cfg.Reports,
-		tickets:       cfg.Tickets,
-		notifyStore:   cfg.NotifyStore,
-		notifySender:  cfg.NotifySender,
+		loginLimiter:       limiter,
+		devices:            devices,
+		search:             cfg.Search,
+		baseline:           cfg.Baseline,
+		alerts:             cfg.Alerts,
+		heal:               cfg.Heal,
+		releases:           cfg.Releases,
+		flows:              cfg.Flows,
+		jwtSecret:          cfg.JWTSecret,
+		tokenLifetime:      cfg.TokenLifetime,
+		adminUser:          cfg.AdminUser,
+		adminSalt:          salt,
+		adminHash:          pbkdf2.Key([]byte(cfg.AdminPassword), salt, pbkdf2Iterations, pbkdf2KeyLen, sha256.New),
+		adminCaps:          cfg.AdminCaps,
+		mintBootstrap:      cfg.MintBootstrap,
+		enroll:             cfg.Enroll,
+		dispatch:           cfg.Dispatch,
+		commandState:       cfg.CommandState,
+		export:             cfg.Export,
+		logEvents:          cfg.LogEvents,
+		metricNames:        cfg.MetricNames,
+		metricSeries:       cfg.MetricSeries,
+		webhooks:           cfg.Webhooks,
+		setup:              cfg.Setup,
+		clients:            cfg.Clients,
+		users:              cfg.Users,
+		maintStore:         cfg.Maint,
+		reportsStore:       cfg.Reports,
+		tickets:            cfg.Tickets,
+		notifyStore:        cfg.NotifyStore,
+		notifySender:       cfg.NotifySender,
 		rbac:               &users.RBAC{Secret: cfg.JWTSecret, Users: cfg.Users},
 		publicURL:          cfg.PublicURL,
 		sessions:           cfg.Sessions,
@@ -328,10 +328,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	registerCommands(s, mux)
 	registerSettings(s, mux)
 	registerClients(s, mux)
-	registerUsers(s, mux)      // gap #3: operator accounts + API tokens (admin-only)
-	registerTickets(s, mux)    // gap #7: helpdesk tickets (queue, SLA, notes)
-	registerNotify(s, mux)     // gap #6: notification channels + policies
-	registerSession(s, mux)    // gap #1a: remote session + file download routes
+	registerUsers(s, mux)       // gap #3: operator accounts + API tokens (admin-only)
+	registerTickets(s, mux)     // gap #7: helpdesk tickets (queue, SLA, notes)
+	registerNotify(s, mux)      // gap #6: notification channels + policies
+	registerSession(s, mux)     // gap #1a: remote session + file download routes
 	registerMaintenance(s, mux) // gap #10b: maintenance windows + snooze
 	registerReports(s, mux)     // gap #8b: scheduled + on-demand reports
 }

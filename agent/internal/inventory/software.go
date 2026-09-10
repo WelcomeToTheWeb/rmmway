@@ -15,13 +15,13 @@ import (
 
 // SoftwareInfo describes an installed application.
 type SoftwareInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Vendor  string `json:"vendor"`
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Vendor      string `json:"vendor"`
 	InstallDate string `json:"install_date,omitempty"`
-	Arch    string `json:"arch,omitempty"`
-	Path    string `json:"path,omitempty"`
-	Source  string `json:"source"` // "dpkg" | "rpm" | "msi" | "registry" | "homebrew" | "pkg"
+	Arch        string `json:"arch,omitempty"`
+	Path        string `json:"path,omitempty"`
+	Source      string `json:"source"` // "dpkg" | "rpm" | "msi" | "registry" | "homebrew" | "pkg"
 }
 
 // CollectSoftware gathers installed software inventory.
@@ -107,12 +107,12 @@ func collectRpm(ctx context.Context) ([]SoftwareInfo, error) {
 // ToProto converts software list to wire format.
 func (s SoftwareInfo) ToProto() *agentv1.SoftwareInfo {
 	return &agentv1.SoftwareInfo{
-		Name:         s.Name,
-		Version:      s.Version,
-		Vendor:       s.Vendor,
-		InstallDate:  s.InstallDate,
-		Arch:         s.Arch,
-		Path:         s.Path,
-		Source:       s.Source,
+		Name:        s.Name,
+		Version:     s.Version,
+		Vendor:      s.Vendor,
+		InstallDate: s.InstallDate,
+		Arch:        s.Arch,
+		Path:        s.Path,
+		Source:      s.Source,
 	}
 }

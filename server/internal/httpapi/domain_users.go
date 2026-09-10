@@ -54,18 +54,18 @@ func (a usersAuthAdapter) Lookup(ctx context.Context, username string) (setup.Us
 //
 // Contract:
 //
-//	POST {"username", "password", "totp"?}
+//		POST {"username", "password", "totp"?}
 //
-//   - 200 {"token","expiry","capabilities","role","username"} — the token
-//     is a session JWT (role + username claims; legacy accounts are minted
-//     role "admin", grandfathered).
-//   - 401 {"error":"mfa_required"} — the matched users row has TOTP
-//     enrolled and no code was sent. The UI shows the 6-digit field and
-//     re-submits; this outcome does NOT count against the IP's failure
-//     budget (it's a challenge, not a credential failure).
-//   - 401 {"error":"invalid username or password"} — every other
-//     credential failure (wrong password, wrong TOTP code, disabled
-//     account, dead env pair). One shape, no enumeration oracle.
+//	  - 200 {"token","expiry","capabilities","role","username"} — the token
+//	    is a session JWT (role + username claims; legacy accounts are minted
+//	    role "admin", grandfathered).
+//	  - 401 {"error":"mfa_required"} — the matched users row has TOTP
+//	    enrolled and no code was sent. The UI shows the 6-digit field and
+//	    re-submits; this outcome does NOT count against the IP's failure
+//	    budget (it's a challenge, not a credential failure).
+//	  - 401 {"error":"invalid username or password"} — every other
+//	    credential failure (wrong password, wrong TOTP code, disabled
+//	    account, dead env pair). One shape, no enumeration oracle.
 //
 // Credential resolution (setup.Authenticate): users row → wizard
 // admin_users row → env pair (only while the users table is empty —
@@ -371,10 +371,10 @@ func (s *Server) patchUser(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	var in struct {
-		Role     *string  `json:"role"`
-		Enabled  *bool    `json:"enabled"`
+		Role     *string   `json:"role"`
+		Enabled  *bool     `json:"enabled"`
 		Clients  *[]string `json:"clients"`
-		Password string   `json:"password"`
+		Password string    `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)

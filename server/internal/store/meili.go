@@ -114,7 +114,7 @@ func (m *Meili) ensureIndex(ctx context.Context) error {
 		// B-2: tag groups filter by exact tag (the `tag:web` syntax in the
 		// UI/palette maps to `tags = "web"` here).
 		"filterableAttributes": []string{"tags"},
-		"displayedAttributes": []string{"*"},
+		"displayedAttributes":  []string{"*"},
 	}, nil)
 	if err != nil {
 		return err

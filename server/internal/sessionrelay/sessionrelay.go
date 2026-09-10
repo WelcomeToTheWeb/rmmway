@@ -32,7 +32,7 @@ type TransferState struct {
 
 // FrameEvent is one SSE frame sent to a viewer.
 type FrameEvent struct {
-	Kind      string      // "frame" | "status" | "hello"
+	Kind      string // "frame" | "status" | "hello"
 	SessionID string
 	Seq       uint64
 	Codec     string
@@ -71,8 +71,8 @@ type DeviceState struct {
 
 // Registry is the central session relay. Thread-safe.
 type Registry struct {
-	mu       sync.Mutex
-	devices  map[string]*DeviceState
+	mu        sync.Mutex
+	devices   map[string]*DeviceState
 	transfers map[string]*TransferState // command_id -> transfer
 }
 

@@ -60,7 +60,7 @@ type Capturer interface {
 type DriverConfig struct {
 	SendFrame   func(ctx context.Context, f *agentv1.SessionFrame) error
 	NewCapturer func() (Capturer, error)
-	InputRelay  InputRelayer    // phase 2: input relay for two-way control
+	InputRelay  InputRelayer // phase 2: input relay for two-way control
 	Logger      *slog.Logger
 }
 
@@ -355,7 +355,7 @@ func clampFPS(fps int) int {
 // errCapturer surfaces a capturer-factory failure as status frames.
 type errCapturer struct{ err error }
 
-func (e errCapturer) Name() string             { return "unavailable" }
+func (e errCapturer) Name() string { return "unavailable" }
 func (e errCapturer) Capture(context.Context) (*Frame, error) {
 	return &Frame{Status: "unavailable"}, nil
 }

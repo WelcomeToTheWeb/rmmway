@@ -20,10 +20,10 @@ func newPagerDutyChannel(cfg *ChannelConfig) *pagerDutyChannel {
 }
 
 type pdPayload struct {
-	RoutingKey   string `json:"routing_key"`
-	EventAction  string `json:"event_action"`
-	Description  string `json:"description"`
-	Payload      struct {
+	RoutingKey  string `json:"routing_key"`
+	EventAction string `json:"event_action"`
+	Description string `json:"description"`
+	Payload     struct {
 		Summary   string `json:"summary"`
 		Severity  string `json:"severity"`
 		Timestamp string `json:"timestamp"`

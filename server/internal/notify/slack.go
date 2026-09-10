@@ -20,11 +20,11 @@ func newSlackChannel(cfg *ChannelConfig) *slackChannel {
 }
 
 type slackPayload struct {
-	Channel    string `json:"channel,omitempty"`
-	Username   string `json:"username,omitempty"`
-	IconEmoji  string `json:"icon_emoji,omitempty"`
-	Text       string `json:"text"`
-	Blocks     []map[string]interface{} `json:"blocks,omitempty"`
+	Channel     string                   `json:"channel,omitempty"`
+	Username    string                   `json:"username,omitempty"`
+	IconEmoji   string                   `json:"icon_emoji,omitempty"`
+	Text        string                   `json:"text"`
+	Blocks      []map[string]interface{} `json:"blocks,omitempty"`
 	Attachments []map[string]interface{} `json:"attachments,omitempty"`
 }
 

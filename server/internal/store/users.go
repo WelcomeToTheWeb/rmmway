@@ -39,12 +39,12 @@ func ValidRole(r string) bool {
 // the PBKDF2-SHA256 pair (100k iterations / 32 bytes — the same params the
 // legacy admin_users rows use, so hashes are interchangeable).
 type User struct {
-	ID        string
-	Username  string
-	Role      string
-	Enabled   bool
-	Salt      []byte
-	Hash      []byte
+	ID         string
+	Username   string
+	Role       string
+	Enabled    bool
+	Salt       []byte
+	Hash       []byte
 	TotpSecret string // base32; "" = MFA not enrolled
 	// TotpVerified is non-nil once a code has been accepted (enrolled +
 	// verified); nil while enrolled-but-unverified (login still works,

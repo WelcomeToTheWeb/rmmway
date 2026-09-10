@@ -381,9 +381,7 @@ export default function Settings({ token, onUnauthorized }) {
             <div className="settings-mfa">
               <span>Two-factor authentication</span>
               <span className="muted">
-                {profile.mfa_enabled
-                  ? "enabled"
-                  : "not yet enabled"}
+                {profile.mfa_enabled ? "enabled" : "not yet enabled"}
               </span>
             </div>
           </section>

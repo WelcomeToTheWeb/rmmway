@@ -133,9 +133,9 @@ func (s *Server) handleSessionStop(w http.ResponseWriter, r *http.Request, devic
 
 	s.sessions.Close(deviceID, sessionID)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"stopped":     true,
-		"session_id":  sessionID,
-		"device_id":   deviceID,
+		"stopped":    true,
+		"session_id": sessionID,
+		"device_id":  deviceID,
 	})
 }
 

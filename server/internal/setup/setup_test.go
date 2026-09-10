@@ -11,7 +11,7 @@ import (
 
 // fakeReissuer records the ReissueRoot calls and returns the "new" root PEM.
 type fakeReissuer struct {
-	orgs   []string
+	orgs    []string
 	rootPEM []byte
 }
 

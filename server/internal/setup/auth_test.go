@@ -53,7 +53,7 @@ func lowerEq(a, b string) bool {
 func (f *fakeUsersAuth) add(username, role, password string, enrolled bool) {
 	salt := []byte("test-salt-16byte")
 	f.accounts[username] = UserCredential{
-		AccountID:  "usr-" + username, Username: username, Role: role, Enabled: true,
+		AccountID: "usr-" + username, Username: username, Role: role, Enabled: true,
 		Salt: salt, Hash: HashPassword(password, salt),
 		TotpSecret: enrolledSecret(enrolled),
 	}

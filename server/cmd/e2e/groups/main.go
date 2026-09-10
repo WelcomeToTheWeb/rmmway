@@ -440,7 +440,7 @@ func main() {
 
 	// ---- 1. operator tagging ------------------------------------------------
 	var outB map[string]any
-step("1. operator tags the cohort: PATCH /api/devices/{id} (web on all, +prod on A)")
+	step("1. operator tags the cohort: PATCH /api/devices/{id} (web on all, +prod on A)")
 	code, out := patchTags(r.httpAddr, opTok, devA, []string{"web", "prod"})
 	if code != 200 {
 		die("tag A: status %d (%v)", code, out)
@@ -499,7 +499,7 @@ step("1. operator tags the cohort: PATCH /api/devices/{id} (web on all, +prod on
 	step("2. ONE bulk command to tag:web -> A + B execute (per-device tokens), C reported offline")
 	code, out = bulk(r.httpAddr, opTok, map[string]any{
 		"action": "run_script", "lang": "sh", "script": b64("echo grp-b2"),
-		"tag":    "web",
+		"tag": "web",
 	})
 	if code != 200 {
 		die("bulk run_script: status %d (%v)", code, out)

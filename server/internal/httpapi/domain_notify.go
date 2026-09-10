@@ -205,11 +205,11 @@ func (s *Server) notifyPolicyCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Category  string   `json:"category"`
-		ClientID  *string  `json:"client_id"`
-		Role      *string  `json:"role"`
-		Channels  []string `json:"channels"`
-		Enabled   bool     `json:"enabled"`
+		Category string   `json:"category"`
+		ClientID *string  `json:"client_id"`
+		Role     *string  `json:"role"`
+		Channels []string `json:"channels"`
+		Enabled  bool     `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
@@ -249,11 +249,11 @@ func (s *Server) notifyPolicyUpdate(w http.ResponseWriter, r *http.Request, id s
 		return
 	}
 	var in struct {
-		Category  string   `json:"category"`
-		ClientID  *string  `json:"client_id"`
-		Role      *string  `json:"role"`
-		Channels  []string `json:"channels"`
-		Enabled   *bool    `json:"enabled"`
+		Category string   `json:"category"`
+		ClientID *string  `json:"client_id"`
+		Role     *string  `json:"role"`
+		Channels []string `json:"channels"`
+		Enabled  *bool    `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)

@@ -192,7 +192,7 @@ func (rb *RBAC) RequireClientScope(next http.HandlerFunc) http.HandlerFunc {
 		if c := r.URL.Query().Get("client"); c != "" && !sess.CanSeeClient(c) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"forbidden: no access to client "}` + jsonString(c)+`"}`))
+			_, _ = w.Write([]byte(`{"error":"forbidden: no access to client "}` + jsonString(c) + `"}`))
 			return
 		}
 		sess.ActiveClient = r.URL.Query().Get("client")

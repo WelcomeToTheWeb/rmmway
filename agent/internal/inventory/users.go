@@ -44,11 +44,11 @@ func collectLinuxUsers(ctx context.Context) ([]UserAccount, error) {
 		// Skip system accounts (uid < 1000) for cleanliness, but include them
 		// if needed. Include all for now.
 		users = append(users, UserAccount{
-			Username:   parts[0],
-			Uid:        parts[2],
-			HomeDir:    parts[5],
-			Shell:      parts[6],
-			Enabled:    true, // Can't easily determine from /etc/passwd
+			Username:    parts[0],
+			Uid:         parts[2],
+			HomeDir:     parts[5],
+			Shell:       parts[6],
+			Enabled:     true, // Can't easily determine from /etc/passwd
 			AccountType: "user",
 		})
 	}

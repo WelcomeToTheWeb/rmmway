@@ -219,13 +219,14 @@ func (s *Server) getTicket(w http.ResponseWriter, r *http.Request, id string) {
 // patchTicket — PATCH /{api|admin}/tickets/{id}
 //
 // Body: {"title"?: string, "description"?: string, "queue"?: string,
-//   "priority"?: string, "device_id"?: string, "client_id"?: string,
-//   "assigned_to"?: string}
 //
-//	200  the updated ticket
-//	400  bad body / bad priority
-//	404  unknown ticket
-//	503  ticket store not wired
+//	  "priority"?: string, "device_id"?: string, "client_id"?: string,
+//	  "assigned_to"?: string}
+//
+//		200  the updated ticket
+//		400  bad body / bad priority
+//		404  unknown ticket
+//		503  ticket store not wired
 func (s *Server) patchTicket(w http.ResponseWriter, r *http.Request, id string) {
 	if s.tickets == nil {
 		s.ticketsUnwired(w)

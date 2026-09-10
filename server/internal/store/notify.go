@@ -12,12 +12,12 @@ import (
 
 // NotificationPolicy defines routing rules for notification categories.
 type NotificationPolicy struct {
-	ID        string   `json:"id"`
-	Category  string   `json:"category"`
-	ClientID  *string  `json:"client_id,omitempty"`
-	Role      *string  `json:"role,omitempty"`
-	Channels  []string `json:"channels"`
-	Enabled   bool     `json:"enabled"`
+	ID        string    `json:"id"`
+	Category  string    `json:"category"`
+	ClientID  *string   `json:"client_id,omitempty"`
+	Role      *string   `json:"role,omitempty"`
+	Channels  []string  `json:"channels"`
+	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

@@ -26,31 +26,31 @@ const (
 
 // Schedule is one recurring report schedule.
 type Schedule struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	ReportType  string    `json:"report_type"`
-	ClientID    *string   `json:"client_id,omitempty"`
-	Schedule    string    `json:"schedule"`
-	OutputFormat string   `json:"output_format"`
-	Enabled     bool      `json:"enabled"`
-	Note        string    `json:"note"`
-	CreatedBy   string    `json:"created_by"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           int64     `json:"id"`
+	Name         string    `json:"name"`
+	ReportType   string    `json:"report_type"`
+	ClientID     *string   `json:"client_id,omitempty"`
+	Schedule     string    `json:"schedule"`
+	OutputFormat string    `json:"output_format"`
+	Enabled      bool      `json:"enabled"`
+	Note         string    `json:"note"`
+	CreatedBy    string    `json:"created_by"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Run is one report execution (scheduled or manual).
 type Run struct {
-	ID           int64     `json:"id"`
-	ScheduleID   *int64    `json:"schedule_id,omitempty"`
-	ReportType   string    `json:"report_type"`
-	ClientID     *string   `json:"client_id,omitempty"`
-	OutputFormat string    `json:"output_format"`
-	TriggeredBy  string    `json:"triggered_by"`
-	Status       string    `json:"status"`
-	ObjectKey    *string   `json:"object_key,omitempty"`
-	Error        *string   `json:"error,omitempty"`
-	StartedAt    time.Time `json:"started_at"`
+	ID           int64      `json:"id"`
+	ScheduleID   *int64     `json:"schedule_id,omitempty"`
+	ReportType   string     `json:"report_type"`
+	ClientID     *string    `json:"client_id,omitempty"`
+	OutputFormat string     `json:"output_format"`
+	TriggeredBy  string     `json:"triggered_by"`
+	Status       string     `json:"status"`
+	ObjectKey    *string    `json:"object_key,omitempty"`
+	Error        *string    `json:"error,omitempty"`
+	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 }
 
