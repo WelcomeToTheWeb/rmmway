@@ -2,6 +2,12 @@
 
 All notable changes to RMMWay will be documented in this file.
 
+## [1.0.1] - 2026-09-10
+
+### Fixed
+
+- Frontend retry logic on first boot: the initial `/api/setup/status` call now retries up to 10 times with a 2-second delay before falling back to degraded mode. This fixes the issue where on first boot, the frontend loads before the backend finishes initializing (migrations, service startup) and the UI shows the Login screen instead of the Setup wizard.
+
 ## [1.0.0] - 2026-09-10
 
 ### Added

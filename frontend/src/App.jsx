@@ -265,12 +265,35 @@ function Shell() {
   // A-2: first-boot state. null = still checking the server; when the DB is
   // fresh (available && !setup) the UI is the setup wizard, full stop.
   const [setupState, setSetupState] = useState(null);
+  const [setupRetryCount, setSetupRetryCount] = useState(0);
   useEffect(() => {
     let alive = true;
-    api
-      .setupStatus()
-      .then((s) => alive && setSetupState(s))
-      .catch(() => alive && setSetupState({ available: false, setup: true }));
+    let attempts = 0;
+    const maxAttempts = 10;
+    const retryDelay = 2000; // 2 seconds
+
+    const trySetupStatus = async () => {
+      while (alive && attempts < maxAttempts) {
+        try {
+          const s = await api.setupStatus();
+          if (alive) {
+            setSetupState(s);
+            return;
+          }
+        } catch (_e) {
+          attempts++;
+          if (alive && attempts < maxAttempts) {
+            setSetupRetryCount(attempts);
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          } else if (alive) {
+            // Give up and fall back to degraded mode
+            setSetupState({ available: false, setup: true });
+          }
+        }
+      }
+    };
+
+    trySetupStatus();
     return () => {
       alive = false;
     };
@@ -378,7 +401,12 @@ function Shell() {
   if (setupState === null) {
     return (
       <div className="login-wrap">
-        <div className="card muted">Checking server state…</div>
+        <div className="card muted">
+          Checking server state…
+          {setupRetryCount > 0 && (
+            <span className="muted tiny"> (retry {setupRetryCount})</span>
+          )}
+        </div>
       </div>
     );
   }
