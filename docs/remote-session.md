@@ -166,3 +166,8 @@ Uses AppleScript/CGEvent via `osascript`:
 - Set `RMMWAY_SESSION_SOURCE=test` to use the synthetic animated backend
 - The test backend produces deterministic animated frames that can be verified
 - Works on any platform (pure Go, no cgo)
+
+## Operator View
+
+For end-user operator documentation on using remote sessions, see
+[Remote Session — Operator Guide](remote-session-operator.md).
