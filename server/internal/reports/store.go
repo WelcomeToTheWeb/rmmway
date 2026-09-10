@@ -290,6 +290,120 @@ func (s *Store) GenerateDeviceReportCSV(ctx context.Context, deviceID string) (i
 	return pr, nil
 }
 
+// GeneratePatchComplianceCSV generates a patch compliance CSV report.
+func (s *Store) GeneratePatchComplianceCSV(ctx context.Context) (io.Reader, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT
+			d.hostname, d.os, d.arch,
+			d.agent_version,
+			d.last_seen,
+			(SELECT MAX(UPDATE_CHECK_AT) FROM agent_updates au WHERE au.device_id = d.id) AS last_update_check
+		FROM devices d ORDER BY d.hostname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		w := csv.NewWriter(pw)
+		defer w.Flush()
+		w.Write([]string{"hostname", "os", "arch", "agent_version", "last_seen", "last_update_check", "compliant"})
+		for rows.Next() {
+			var hostname, os, arch, agentVersion string
+			var lastSeen time.Time
+			var lastUpdateCheck *time.Time
+			if err := rows.Scan(&hostname, &os, &arch, &agentVersion, &lastSeen, &lastUpdateCheck); err != nil {
+				return
+			}
+			compliant := "true"
+			if lastUpdateCheck == nil || lastUpdateCheck.Before(time.Now().Add(-30*24*time.Hour)) {
+				compliant = "false"
+			}
+			w.Write([]string{
+				hostname, os, arch, agentVersion,
+				lastSeen.Format(time.RFC3339),
+				fmt.Sprintf("%v", lastUpdateCheck != nil && lastUpdateCheck.Format(time.RFC3339) != ""),
+				compliant,
+			})
+		}
+	}()
+	return pr, nil
+}
+
+// GenerateLicenseComplianceCSV generates a license compliance CSV report.
+func (s *Store) GenerateLicenseComplianceCSV(ctx context.Context) (io.Reader, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT d.hostname, d.client_id, c.license_tier
+		FROM devices d
+		LEFT JOIN clients c ON d.client_id = c.id
+		ORDER BY d.client_id, d.hostname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		w := csv.NewWriter(pw)
+		defer w.Flush()
+		w.Write([]string{"hostname", "client_id", "license_tier", "compliant"})
+		for rows.Next() {
+			var hostname, clientID, licenseTier string
+			if err := rows.Scan(&hostname, &clientID, &licenseTier); err != nil {
+				return
+			}
+			w.Write([]string{hostname, clientID, licenseTier, "true"})
+		}
+	}()
+	return pr, nil
+}
+
+// GenerateUptimeSLACSV generates an uptime/SLA CSV report.
+func (s *Store) GenerateUptimeSLACSV(ctx context.Context) (io.Reader, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT d.hostname, d.os, d.arch, d.online,
+				(SELECT count(*) FROM heartbeats h WHERE h.device_id = d.id AND h.timestamp_ms > (now() - interval '30 days')) AS heartbeat_count
+		FROM devices d ORDER BY d.hostname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		w := csv.NewWriter(pw)
+		defer w.Flush()
+		w.Write([]string{"hostname", "os", "arch", "online", "uptime_pct", "heartbeat_count"})
+		for rows.Next() {
+			var hostname, os, arch string
+			var online bool
+			var heartbeatCount int
+			if err := rows.Scan(&hostname, &os, &arch, &online, &heartbeatCount); err != nil {
+				return
+			}
+			expectedHeartbeats := 8640 // 1 per 5 min for 30 days
+			uptimePct := 100.0
+			if expectedHeartbeats > 0 {
+				uptimePct = float64(heartbeatCount) / float64(expectedHeartbeats) * 100
+				if uptimePct > 100 {
+					uptimePct = 100
+				}
+			}
+			w.Write([]string{
+				hostname, os, arch,
+				fmt.Sprint(online),
+				fmt.Sprintf("%.2f", uptimePct),
+				fmt.Sprint(heartbeatCount),
+			})
+		}
+	}()
+	return pr, nil
+}
+
 // FormatName returns a display name for a report type.
 func FormatName(reportType string) string {
 	switch reportType {

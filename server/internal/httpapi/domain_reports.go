@@ -180,16 +180,51 @@ func (s *Server) handleGenerateReport(w http.ResponseWriter, r *http.Request) {
 
 	// Generate the report content.
 	var content io.Reader
+	var format string
+	switch body.OutputFormat {
+	case "csv":
+		format = "csv"
+	case "pdf":
+		format = "pdf"
+	default:
+		format = "csv"
+	}
 	switch body.ReportType {
 	case reports.TypeFleetStatus:
-		content, err = s.reportsStore.GenerateFleetStatusCSV(ctx)
+		if format == "pdf" {
+			content, err = s.reportsStore.GenerateFleetStatusPDF(ctx)
+		} else {
+			content, err = s.reportsStore.GenerateFleetStatusCSV(ctx)
+		}
 	case reports.TypeDevice:
 		if body.DeviceID == nil || *body.DeviceID == "" {
 			s.reportsStore.FailRun(ctx, run.ID, "device_id required for device report")
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device_id required"})
 			return
 		}
-		content, err = s.reportsStore.GenerateDeviceReportCSV(ctx, *body.DeviceID)
+		if format == "pdf" {
+			content, err = s.reportsStore.GenerateDeviceReportPDF(ctx, *body.DeviceID)
+		} else {
+			content, err = s.reportsStore.GenerateDeviceReportCSV(ctx, *body.DeviceID)
+		}
+	case reports.TypePatchCompliance:
+		if format == "pdf" {
+			content, err = s.reportsStore.GeneratePatchCompliancePDF(ctx)
+		} else {
+			content, err = s.reportsStore.GeneratePatchComplianceCSV(ctx)
+		}
+	case reports.TypeLicenseCompliance:
+		if format == "pdf" {
+			content, err = s.reportsStore.GenerateLicenseCompliancePDF(ctx)
+		} else {
+			content, err = s.reportsStore.GenerateLicenseComplianceCSV(ctx)
+		}
+	case reports.TypeUptimeSLA:
+		if format == "pdf" {
+			content, err = s.reportsStore.GenerateUptimeSLAPDF(ctx)
+		} else {
+			content, err = s.reportsStore.GenerateUptimeSLACSV(ctx)
+		}
 	default:
 		s.reportsStore.FailRun(ctx, run.ID, "unsupported report type")
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported report type"})
@@ -207,8 +242,12 @@ func (s *Server) handleGenerateReport(w http.ResponseWriter, r *http.Request) {
 	case "csv":
 		w.Header().Set("Content-Type", "text/csv")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=report-%d.csv", run.ID))
+	case "pdf":
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=report-%d.pdf", run.ID))
 	case "json":
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=report-%d.json", run.ID))
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
