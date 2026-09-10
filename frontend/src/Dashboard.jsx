@@ -5,12 +5,10 @@ import { api } from "./api.js";
 // The new default route: one screen, the whole fleet's health. Every tile
 // composes EXISTING endpoints client-side (one /api/devices call feeds the
 // donut + OS bars + the hostname map; one /api/alerts pair; one
-// /api/baseline/anomalies; one /api/events journal page) — no new server
-// surface. Every tile degrades: a fetch failure renders a muted
+// /api/baseline/anomalies; one /api/events journal page; one /api/tickets
+// call for ticket counts; per-device inventory checks for compliance) — no
+// new server surface. Every tile degrades: a fetch failure renders a muted
 // "unavailable" note inside the tile, never a broken grid.
-//
-// Patch compliance + tickets are honest placeholders — the data lands with
-// wave 3 (#4 deep inventory, #7 tickets). No fake numbers.
 
 const REFRESH_MS = 30000; // devices + alert counts re-poll (live-ish home)
 
@@ -86,6 +84,13 @@ export default function Dashboard({ token, onUnauthorized }) {
   const [anomaliesErr, setAnomaliesErr] = useState(null);
   const [journal, setJournal] = useState(null);
   const [journalErr, setJournalErr] = useState(null);
+  // Wave 3 live data (tickets #7, inventory #4)
+  const [tickets, setTickets] = useState(null);
+  const [ticketsErr, setTicketsErr] = useState(null);
+  const [ticketCounts, setTicketCounts] = useState(null);
+  const [ticketCountsErr, setTicketCountsErr] = useState(null);
+  const [patchInfo, setPatchInfo] = useState(null);
+  const [patchErr, setPatchErr] = useState(null);
 
   const unauthorized = useCallback(
     (e) => e && e.unauthorized && onUnauthorized(),
@@ -146,6 +151,91 @@ export default function Dashboard({ token, onUnauthorized }) {
       });
   }, [token, unauthorized]);
 
+  // Wave 3: tickets (gap #7) — live open/in_progress tickets + status counts.
+  const loadTickets = useCallback(async () => {
+    try {
+      const res = await api.get(
+        "/api/tickets?status=open,in_progress&limit=5",
+      );
+      setTickets(res.data || []);
+      setTicketsErr(null);
+    } catch (e) {
+      if (!unauthorized(e)) setTicketsErr(e.message);
+    }
+    // Status breakdown for the header pills
+    const statuses = ["open", "in_progress", "resolved", "closed"];
+    const counts = {};
+    let anyErr = false;
+    for (const s of statuses) {
+      try {
+        const res = await api.get(
+          `/api/tickets?status=${s}&limit=1000`,
+        );
+        counts[s] = res.data ? res.data.length : 0;
+      } catch (e) {
+        if (!unauthorized(e)) {
+          counts[s] = null;
+          anyErr = true;
+        }
+      }
+    }
+    if (anyErr) {
+      setTicketCounts(null);
+      setTicketCountsErr("partial count failure");
+    } else {
+      setTicketCounts(counts);
+      setTicketCountsErr(null);
+    }
+  }, [token, unauthorized]);
+
+  // Wave 3: inventory compliance (gap #4) — sample a few devices' last
+  // inventory collection to derive a compliance view.
+  const loadPatchInfo = useCallback(async () => {
+    if (!devices || devices.length === 0) return;
+    const results = [];
+    let err = null;
+    for (const d of devices.slice(0, 5)) {
+      try {
+        const res = await api.deviceInventory(token, d.id);
+        results.push({
+          id: d.id,
+          hostname: d.hostname,
+          online: d.online,
+          collected_at: res.collected_at,
+          software_count: res.software ? res.software.length : 0,
+        });
+      } catch (e) {
+        if (!unauthorized(e)) err = err || e.message;
+        results.push({ id: d.id, hostname: d.hostname, online: d.online });
+      }
+    }
+    const now = Date.now();
+    const weekMs = 7 * 86400000;
+    const withRecent = results.filter(
+      (r) => r.collected_at && now - new Date(r.collected_at).getTime() < weekMs,
+    ).length;
+    setPatchInfo({
+      devices_checked: results.length,
+      devices_with_inventory: results.filter((r) => r.collected_at).length,
+      devices_recent: withRecent,
+      details: results,
+    });
+    setPatchErr(err);
+  }, [token, devices, unauthorized]);
+
+  useEffect(() => {
+    loadLive();
+    loadStatic();
+    loadTickets();
+    const id = setInterval(loadLive, REFRESH_MS);
+    return () => clearInterval(id);
+  }, [loadLive, loadStatic, loadTickets]);
+
+  // Re-check patch info when devices change.
+  useEffect(() => {
+    if (devices && devices.length > 0) loadPatchInfo();
+  }, [devices, loadPatchInfo]);
+
   useEffect(() => {
     loadLive();
     loadStatic();
@@ -194,6 +284,18 @@ export default function Dashboard({ token, onUnauthorized }) {
   const journalState = journalErr
     ? { error: journalErr }
     : journal === null
+      ? null
+      : {};
+  const ticketState = ticketsErr
+    ? { error: ticketsErr }
+    : ticketCountsErr
+      ? { error: ticketCountsErr }
+      : tickets === null
+        ? null
+        : {};
+  const patchState = patchErr
+    ? { error: patchErr }
+    : patchInfo === null
       ? null
       : {};
 
@@ -419,29 +521,98 @@ export default function Dashboard({ token, onUnauthorized }) {
           )}
         </div>
 
-        {/* Row 3: honest placeholders (wave 3) ----------------------------- */}
-        <div className="tile tile-6 tile-soon">
+        {/* Row 3: wave 3 live (inventory #4, tickets #7) -------------------- */}
+        <div className="tile tile-6">
           <header className="tile-head">
             <h3>Patch compliance</h3>
+            <a
+              className="tile-link"
+              href="#/devices"
+              title="Open the device table for inventory details"
+            >
+              devices →
+            </a>
           </header>
-          <div className="tile-body">
-            <p className="muted">
-              Arrives with wave 3 deep inventory (#4) — installed-software and
-              patch-level collectors, then per-OS compliance rollup.
+          {patchState === null ? (
+            <p className="muted tile-loading">loading inventory…</p>
+          ) : patchState.error ? (
+            <p className="muted tile-err" title={patchState.error}>
+              unavailable
             </p>
-          </div>
+          ) : patchInfo.devices_checked === 0 ? (
+            <p className="muted">No devices to check.</p>
+          ) : (
+            <div className="tile-body">
+              <p className="alert-counts">
+                <span className="pill pill-ok">
+                  {patchInfo.devices_recent}/{patchInfo.devices_checked} recent
+                </span>
+                <span className="pill pill-mut">
+                  {patchInfo.devices_with_inventory} have inventory
+                </span>
+              </p>
+              <ul className="activity-list">
+                {patchInfo.details.slice(0, 5).map((d) => (
+                  <li key={d.id}>
+                    <span className="host">{d.hostname}</span>
+                    {d.collected_at ? (
+                      <span className="muted a-time">
+                        {relTime(d.collected_at)}
+                      </span>
+                    ) : (
+                      <span className="muted">no inventory</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
-        <div className="tile tile-6 tile-soon">
+        <div className="tile tile-6">
           <header className="tile-head">
             <h3>Tickets</h3>
+            <a
+              className="tile-link"
+              href="#/tickets"
+              title="Open the ticket queue"
+            >
+              queue →
+            </a>
           </header>
-          <div className="tile-body">
-            <p className="muted">
-              Arrives with wave 3 ticketing (#7) — queues, SLA timers, and
-              heal-escalation into real tickets.
+          {ticketState === null ? (
+            <p className="muted tile-loading">loading tickets…</p>
+          ) : ticketState.error ? (
+            <p className="muted tile-err" title={ticketState.error}>
+              unavailable
             </p>
-          </div>
+          ) : (
+            <div className="tile-body">
+              <p className="alert-counts">
+                <span className="pill pill-open">
+                  {ticketCounts ? ticketCounts.open : "—"} open
+                </span>
+                <span className="pill pill-run">
+                  {ticketCounts ? ticketCounts.in_progress : "—"} in progress
+                </span>
+              </p>
+              {(tickets || []).length === 0 ? (
+                <p className="muted">No open tickets.</p>
+              ) : (
+                <ul className="alert-list">
+                  {(tickets || []).map((t) => (
+                    <li key={t.id}>
+                      <span className="host">{t.id}</span>
+                      <span className="muted a-name" title={t.title}>
+                        {t.title || "(untitled)"}
+                      </span>
+                      <span className="muted a-time">{relTime(t.created_at)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </section>
