@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import { Banner, EmptyState } from "./ui/index.js";
 
 // D-2: the global event journal browser. The live SSE stream (wired in
 // App.jsx) already pushes new envelopes; this page adds the layer the stream
@@ -321,14 +322,20 @@ export default function Events({
         </div>
       </div>
 
-      {error && <div className="banner err">{error}</div>}
+      {error && <Banner tone="err">{error}</Banner>}
       {!rows && !error && (
-        <div className="empty">Loading the event journal…</div>
+        <EmptyState
+          icon="📋"
+          title="Loading"
+          body="Fetching the event journal…"
+        />
       )}
       {rows && rows.length === 0 && (
-        <div className="empty">
-          No journal entries match the current filter.
-        </div>
+        <EmptyState
+          icon="📭"
+          title="No events"
+          body="No journal entries match the current filter. Try adjusting your filters."
+        />
       )}
       {rows && rows.length > 0 && (
         <div className="table-wrap">

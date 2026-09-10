@@ -13,6 +13,7 @@ export { default as Table } from "./Table.jsx";
 export { default as EmptyState } from "./EmptyState.jsx";
 export { default as ErrorBoundary } from "./ErrorBoundary.jsx";
 export { default as Spinner } from "./Spinner.jsx";
+export { default as Skeleton, TableRowSkeleton, CardListSkeleton } from "./Skeleton.jsx";
 export { default as CodeBlock } from "./CodeBlock.jsx";
 export { default as Tooltip } from "./Tooltip.jsx";
 export { default as SegmentedControl } from "./SegmentedControl.jsx";

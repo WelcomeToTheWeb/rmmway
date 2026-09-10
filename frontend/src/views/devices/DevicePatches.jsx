@@ -17,10 +17,12 @@ export default function DevicePatches({ token, device, onUnauthorized }) {
     setMessage(null);
     try {
       // Trigger patch query via command dispatch
-      const res = await api.dispatchCommand(token, device.id, {
+      const res = await api.dispatch(token, device.id, {
         action: "patch_query",
       });
-      setMessage("Patch query dispatched to agent. Results will appear after next heartbeat.");
+      setMessage(
+        "Patch query dispatched to agent. Results will appear after next heartbeat.",
+      );
     } catch (e) {
       if (e.unauthorized) onUnauthorized();
       else setError(e.message);
@@ -53,7 +55,7 @@ export default function DevicePatches({ token, device, onUnauthorized }) {
       // Encode patch IDs as base64 JSON array
       const idsJson = JSON.stringify([...selected]);
       const idsB64 = btoa(idsJson);
-      await api.dispatchCommand(token, device.id, {
+      await api.dispatch(token, device.id, {
         action: "patch_apply",
         script: idsB64,
       });

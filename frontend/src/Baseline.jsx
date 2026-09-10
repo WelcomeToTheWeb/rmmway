@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import { Banner, EmptyState } from "./ui/index.js";
 
 // D-5: the baseline anomaly explorer. Every metric is scored against its
 // own device's seasonal + trend baseline; this page is the current
@@ -103,10 +104,11 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
     return (
       <div className="view">
         <h2>Baseline</h2>
-        <div className="empty">
-          Per-device baselines need the full server stack (database) to run —
-          start the production stack to enable them.
-        </div>
+        <EmptyState
+          icon="📊"
+          title="Baselines not available"
+          body="Per-device baselines need the full server stack (database) to run — start the production stack to enable them."
+        />
       </div>
     );
   }
@@ -134,7 +136,7 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
         </div>
       </div>
 
-      {error && <div className="banner err">{error}</div>}
+      {error && <Banner tone="err">{error}</Banner>}
 
       <div className="baseline-filters row-actions">
         <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)}>
@@ -214,10 +216,15 @@ export default function Baseline({ token, onUnauthorized, onGoToDevice }) {
             </tbody>
           </table>
           {anomalies && visible.length === 0 && (
-            <div className="empty">
-              No anomalies match the current filters
-              {anomalies.length === 0 ? " — the fleet is at baseline" : ""}.
-            </div>
+            <EmptyState
+              icon="📈"
+              title="No anomalies"
+              body={
+                anomalies.length === 0
+                  ? "The fleet is scoring clean — everything is within normal parameters."
+                  : "Try adjusting your filters to see more results."
+              }
+            />
           )}
         </div>
       </section>

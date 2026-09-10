@@ -12,6 +12,7 @@ import {
 } from "react";
 import { api } from "../../api.js";
 import CodeBlock from "../../ui/CodeBlock.jsx";
+import { EmptyState } from "../../ui/index.js";
 import TimeSeriesChart, {
   humanizeMetric,
   metricCategory,
@@ -19,6 +20,11 @@ import TimeSeriesChart, {
 } from "../../ui/TimeSeriesChart.jsx";
 import Tabs from "../../ui/Tabs.jsx";
 import DeviceInventory from "./DeviceInventory.jsx";
+import DeviceIdentity from "./DeviceIdentity.jsx";
+import QuickHealth from "./QuickHealth.jsx";
+import InventorySnapshot from "./InventorySnapshot.jsx";
+import MultiMetricChart from "./MultiMetricChart.jsx";
+import CorrelatedMetrics from "./CorrelatedMetrics.jsx";
 
 // ---- agent log (recent indexed events) ------------------------------------
 
@@ -107,13 +113,15 @@ function DeviceEvents({ token, deviceId, onUnauthorized }) {
       </div>
       {error && <div className="banner err">{error}</div>}
       {events === null && !error ? (
-        <div className="empty">Loading events…</div>
+        <EmptyState title="Loading events…" icon="📋" />
       ) : events.length === 0 ? (
-        <div className="empty muted">
-          No log entries yet (the agent ships its log lines here).
-        </div>
+        <EmptyState
+          title="No log entries yet"
+          body="The agent ships its log lines here."
+          icon="📋"
+        />
       ) : visible.length === 0 ? (
-        <div className="empty muted">No log lines match the filter.</div>
+        <EmptyState title="No log lines match the filter." icon="🔍" />
       ) : (
         <div className="device-events-scroll">
           <table className="events">
@@ -270,9 +278,9 @@ function DeviceCommands({ token, deviceId, onUnauthorized, liveTick }) {
       </div>
       {error && <div className="banner err">{error}</div>}
       {rows === null && !error ? (
-        <div className="empty">Loading commands…</div>
+        <EmptyState title="Loading commands…" icon="⚡" />
       ) : rows.length === 0 ? (
-        <div className="empty muted">No commands dispatched yet.</div>
+        <EmptyState title="No commands dispatched yet." icon="⚡" />
       ) : (
         <table className="events cmds">
           <thead>
@@ -478,10 +486,22 @@ const METRIC_RANGES = ["1h", "6h", "24h", "7d", "30d"];
 function DeviceMetrics({ token, device, onUnauthorized }) {
   const [series, setSeries] = useState(null);
   const [selIdx, setSelIdx] = useState(0);
-  const [range, setRange] = useState("24h");
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const selRef = useRef(null); // the selected {name, source}, survives re-lists
+
+  // Auto-detect the best default range based on device age (Phase 3.2)
+  const defaultRange = useMemo(() => {
+    if (!device.first_seen) return "24h";
+    const deviceAgeMs = Date.now() - new Date(device.first_seen).getTime();
+    const deviceAgeHours = deviceAgeMs / 3600000;
+    if (deviceAgeHours < 2) return "1h";
+    if (deviceAgeHours < 24) return "6h";
+    if (deviceAgeHours < 168) return "24h";
+    return "7d";
+  }, [device.first_seen]);
+
+  const [range, setRange] = useState(defaultRange);
 
   const loadSeries = useCallback(async () => {
     try {
@@ -711,12 +731,15 @@ export default function DeviceDetail({
   onUnauthorized,
   liveTick,
   onSaved,
+  defaultTab,
 }) {
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState(defaultTab || "overview");
 
   const tabs = [
     { key: "overview", label: "Overview" },
     { key: "metrics", label: "Metrics" },
+    { key: "multi-metric", label: "Multi-Metric" },
+    { key: "correlated", label: "Correlated" },
     { key: "inventory", label: "Inventory" },
     { key: "commands", label: "Commands" },
     { key: "events", label: "Events" },
@@ -736,23 +759,36 @@ export default function DeviceDetail({
           >
             🔌 Connect
           </a>
-          <a
-            href={`#/commands/${device.id}`}
+          <button
             className="btn"
             title="Run commands on this device"
+            onClick={() => {
+              document.dispatchEvent(
+                new CustomEvent("device-open-tab", {
+                  detail: { id: device.id, tab: "commands" },
+                }),
+              );
+            }}
           >
             ⚡ Command
-          </a>
+          </button>
         </div>
       </div>
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
       <div className="device-detail-tab-content">
         {tab === "overview" && (
           <>
-            <DeviceExport
+            <DeviceIdentity device={device} clients={null} />
+            <QuickHealth
               token={token}
               device={device}
               onUnauthorized={onUnauthorized}
+            />
+            <InventorySnapshot
+              token={token}
+              device={device}
+              onUnauthorized={onUnauthorized}
+              onCollect={onSaved}
             />
             <TagEditor
               token={token}
@@ -760,10 +796,29 @@ export default function DeviceDetail({
               onUnauthorized={onUnauthorized}
               onSaved={onSaved}
             />
+            <DeviceExport
+              token={token}
+              device={device}
+              onUnauthorized={onUnauthorized}
+            />
           </>
         )}
         {tab === "metrics" && (
           <DeviceMetrics
+            token={token}
+            device={device}
+            onUnauthorized={onUnauthorized}
+          />
+        )}
+        {tab === "multi-metric" && (
+          <MultiMetricChart
+            token={token}
+            device={device}
+            onUnauthorized={onUnauthorized}
+          />
+        )}
+        {tab === "correlated" && (
+          <CorrelatedMetrics
             token={token}
             device={device}
             onUnauthorized={onUnauthorized}

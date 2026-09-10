@@ -477,7 +477,7 @@ func main() {
 	migrateOnly := flag.Bool("migrate-only", false, "apply SQL migrations and exit")
 	flag.Parse()
 
-	version := env("RMMWAY_VERSION", "1.0.3")
+	version := env("RMMWAY_VERSION", "1.1.0")
 	httpAddr := env("RMMWAY_ADDR", ":8080")
 	grpcAddr := env("RMMWAY_GRPC_ADDR", ":50051")
 	// W3-1: the mTLS agent channel. A second gRPC listener that REQUIRES a

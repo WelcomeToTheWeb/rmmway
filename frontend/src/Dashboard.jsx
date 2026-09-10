@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import { Skeleton } from "./ui/index.js";
 
 // ---- fleet dashboard home (gap #8a, wave 2 round 2, lane C) -------------------
 // The new default route: one screen, the whole fleet's health. Every tile
@@ -154,8 +155,11 @@ export default function Dashboard({ token, onUnauthorized }) {
   // Wave 3: tickets (gap #7) — live open/in_progress tickets + status counts.
   const loadTickets = useCallback(async () => {
     try {
-      const res = await api.get("/api/tickets?status=open,in_progress&limit=5");
-      setTickets(res.data || []);
+      const res = await api.tickets(token, {
+        status: "open,in_progress",
+        limit: 5,
+      });
+      setTickets(res || []);
       setTicketsErr(null);
     } catch (e) {
       if (!unauthorized(e)) setTicketsErr(e.message);
@@ -166,8 +170,8 @@ export default function Dashboard({ token, onUnauthorized }) {
     let anyErr = false;
     for (const s of statuses) {
       try {
-        const res = await api.get(`/api/tickets?status=${s}&limit=1000`);
-        counts[s] = res.data ? res.data.length : 0;
+        const res = await api.tickets(token, { status: s, limit: 1000 });
+        counts[s] = Array.isArray(res) ? res.length : 0;
       } catch (e) {
         if (!unauthorized(e)) {
           counts[s] = null;
@@ -361,7 +365,11 @@ export default function Dashboard({ token, onUnauthorized }) {
             <h3>Devices per OS</h3>
           </header>
           {devState === null ? (
-            <p className="muted tile-loading">loading…</p>
+            <div className="tile-body">
+              <Skeleton type="line" height="0.75rem" width="80%" />
+              <Skeleton type="line" height="0.75rem" width="60%" />
+              <Skeleton type="line" height="0.75rem" width="70%" />
+            </div>
           ) : devState.error ? (
             <p className="muted tile-err" title={devState.error}>
               unavailable
@@ -402,7 +410,11 @@ export default function Dashboard({ token, onUnauthorized }) {
             </a>
           </header>
           {alertState === null ? (
-            <p className="muted tile-loading">loading…</p>
+            <div className="tile-body">
+              <Skeleton type="line" height="0.75rem" width="50%" />
+              <Skeleton type="line" height="0.75rem" width="70%" />
+              <Skeleton type="line" height="0.75rem" width="60%" />
+            </div>
           ) : alertState.error ? (
             <p className="muted tile-err" title={alertState.error}>
               unavailable
@@ -449,7 +461,11 @@ export default function Dashboard({ token, onUnauthorized }) {
             </a>
           </header>
           {anomState === null ? (
-            <p className="muted tile-loading">loading…</p>
+            <div className="tile-body">
+              <Skeleton type="line" height="0.75rem" width="80%" />
+              <Skeleton type="line" height="0.75rem" width="60%" />
+              <Skeleton type="line" height="0.75rem" width="70%" />
+            </div>
           ) : anomState.error ? (
             <p className="muted tile-err" title={anomState.error}>
               unavailable
@@ -491,7 +507,11 @@ export default function Dashboard({ token, onUnauthorized }) {
             </a>
           </header>
           {journalState === null ? (
-            <p className="muted tile-loading">loading…</p>
+            <div className="tile-body">
+              <Skeleton type="line" height="0.75rem" width="60%" />
+              <Skeleton type="line" height="0.75rem" width="80%" />
+              <Skeleton type="line" height="0.75rem" width="50%" />
+            </div>
           ) : journalState.error ? (
             <p className="muted tile-err" title={journalState.error}>
               unavailable
@@ -522,16 +542,29 @@ export default function Dashboard({ token, onUnauthorized }) {
         <div className="tile tile-6">
           <header className="tile-head">
             <h3>Patch compliance</h3>
-            <a
-              className="tile-link"
-              href="#/devices"
-              title="Open the device table for inventory details"
-            >
-              devices →
-            </a>
+            <div className="tile-actions">
+              <button
+                className="btn btn-small"
+                onClick={loadPatchInfo}
+                title="Refresh patch compliance"
+              >
+                ↻
+              </button>
+              <a
+                className="tile-link"
+                href="#/devices"
+                title="Open the device table for inventory details"
+              >
+                devices →
+              </a>
+            </div>
           </header>
           {patchState === null ? (
-            <p className="muted tile-loading">loading inventory…</p>
+            <div className="tile-body">
+              <Skeleton type="line" height="0.75rem" width="60%" />
+              <Skeleton type="line" height="0.75rem" width="70%" />
+              <Skeleton type="line" height="0.75rem" width="50%" />
+            </div>
           ) : patchState.error ? (
             <p className="muted tile-err" title={patchState.error}>
               unavailable
@@ -578,7 +611,11 @@ export default function Dashboard({ token, onUnauthorized }) {
             </a>
           </header>
           {ticketState === null ? (
-            <p className="muted tile-loading">loading tickets…</p>
+            <div className="tile-body">
+              <Skeleton type="line" height="0.75rem" width="50%" />
+              <Skeleton type="line" height="0.75rem" width="70%" />
+              <Skeleton type="line" height="0.75rem" width="60%" />
+            </div>
           ) : ticketState.error ? (
             <p className="muted tile-err" title={ticketState.error}>
               unavailable

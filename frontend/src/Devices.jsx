@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
 import { api } from "./api.js";
 import DeviceDetail from "./views/devices/DeviceDetail.jsx";
-import { Menu } from "./ui/index.js";
+import { Menu, Banner, EmptyState } from "./ui/index.js";
 
 // ---- shareable table state (gap #10a, wave 2, lane C) -----------------------
 // The device table's view state lives in the URL hash, AFTER the route:
@@ -323,7 +323,7 @@ function GroupDispatchModal({ token, initialTag, onUnauthorized, onClose }) {
             </label>
           </>
         )}
-        {error && <div className="banner err">{error}</div>}
+        {error && <Banner tone="err">{error}</Banner>}
         <div className="bulk-actions">
           <button
             className="btn primary"
@@ -507,7 +507,7 @@ function AddDeviceModal({ token, onUnauthorized, onClose }) {
             dial this host on port 50052.
           </p>
         )}
-        {error && <div className="banner err">{error}</div>}
+        {error && <Banner tone="err">{error}</Banner>}
         {mint === null && !error && (
           <div className="empty">Minting a one-time enrollment token…</div>
         )}
@@ -678,6 +678,8 @@ export default function Devices({
   const [tick, setTick] = useState(0);
   // W6-1: the expanded device (recent indexed events panel below its row).
   const [open, setOpen] = useState(null);
+  // Which tab to open in the expanded device detail (from device-open-tab event).
+  const [openTab, setOpenTab] = useState(null);
   // #10b: mobile breakpoint — the card list's expanded detail only mounts
   // where it is visible (the table row keeps its own detail row).
   const isMobile = useIsMobile();
@@ -779,6 +781,18 @@ export default function Devices({
   useEffect(() => {
     if (liveTick && liveTick > 0) load();
   }, [liveTick, load]);
+
+  // Phase 1.2: handle the device-open-tab event (Command button opens device
+  // with its Commands tab active).
+  useEffect(() => {
+    const handler = (e) => {
+      if (!e.detail) return;
+      setOpen(e.detail.id);
+      setOpenTab(e.detail.tab);
+    };
+    document.addEventListener("device-open-tab", handler);
+    return () => document.removeEventListener("device-open-tab", handler);
+  }, []);
 
   // Force a re-render every 30s so the "Ns ago" labels stay honest.
   useEffect(() => {
@@ -931,39 +945,28 @@ export default function Devices({
         </div>
       </div>
 
-      {error && <div className="banner err">{error}</div>}
+      {error && <Banner tone="err">{error}</Banner>}
 
       {devices === null && !error ? (
-        <div className="empty">Loading devices…</div>
+        <EmptyState icon="🖥️" title="Loading" body="Fetching your devices…" />
       ) : filtered.length === 0 ? (
-        <div className="empty">
-          {total === 0 ? (
-            <div className="empty empty-adddev">
-              <p>No devices yet.</p>
-              <p className="muted">
-                Add your first device — the modal mints a one-time token and
-                gives you a single copy-paste command to run on the machine.
-              </p>
-              <button className="btn primary" onClick={() => setAddOpen(true)}>
-                + Add a device
-              </button>
-            </div>
-          ) : (
-            <p>
-              {needle ? (
-                <>
-                  No devices match <em>{q}</em>.
-                </>
-              ) : client ? (
-                <>
-                  No devices in <em>{clientLabel}</em>.
-                </>
-              ) : (
-                "No devices found."
-              )}
-            </p>
-          )}
-        </div>
+        total === 0 ? (
+          <EmptyState
+            icon="🖥️"
+            title="No devices yet"
+            body="Add your first device — the modal mints a one-time token and gives you a single copy-paste command to run on the machine."
+          >
+            <button className="btn primary" onClick={() => setAddOpen(true)}>
+              + Add a device
+            </button>
+          </EmptyState>
+        ) : (
+          <EmptyState
+            icon="🔍"
+            title={needle ? `No devices match "${q}"` : "No devices found"}
+            body={client ? `No devices assigned to ${clientLabel}.` : undefined}
+          />
+        )
       ) : (
         <div className="dev-table-desktop">
           <div className="table-wrap">
@@ -1034,6 +1037,7 @@ export default function Devices({
                             onUnauthorized={onUnauthorized}
                             liveTick={liveTick}
                             onSaved={saveDevice}
+                            defaultTab={openTab}
                           />
                         </td>
                       </tr>

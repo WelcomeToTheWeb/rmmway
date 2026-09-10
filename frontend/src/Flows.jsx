@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { api } from "./api.js";
+import { Banner } from "./ui/index.js";
 
 const OPS = [">", ">=", "==", "<", "<="];
 const STEP_TYPES = [
@@ -363,10 +364,10 @@ function FlowCard({ token, flow, devices, onUnauthorized, onChanged, onEdit }) {
               fire
             </button>
           </div>
-          {ok && <div className="banner ok2">{ok}</div>}
+          {ok && <Banner tone="ok">{ok}</Banner>}
         </div>
       )}
-      {err && <div className="banner err">{err}</div>}
+      {err && <Banner tone="err">{err}</Banner>}
     </div>
   );
 }
@@ -749,7 +750,7 @@ function Composer({ token, initial, onClose, onSaved, onUnauthorized }) {
         </div>
       </div>
 
-      {err && <div className="banner err">{err}</div>}
+      {err && <Banner tone="err">{err}</Banner>}
       <div className="row-actions comp-foot">
         <label className="field check">
           <input
@@ -811,7 +812,7 @@ function RunsTable({ token, onUnauthorized, pollKey }) {
     }
   };
 
-  if (err) return <div className="banner err">{err}</div>;
+  if (err) return <Banner tone="err">{err}</Banner>;
   if (runs === null) return <div className="empty">Loading runs…</div>;
   if (runs.length === 0)
     return (
@@ -950,7 +951,7 @@ export default function Flows({ token, onUnauthorized }) {
         </div>
       </div>
 
-      {error && <div className="banner err">{error}</div>}
+      {error && <Banner tone="err">{error}</Banner>}
 
       {composing !== null && (
         <Composer

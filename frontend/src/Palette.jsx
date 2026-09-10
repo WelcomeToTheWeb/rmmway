@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useAuth } from "./auth.jsx";
 import { api } from "./api.js";
+import { Skeleton } from "./ui/index.js";
 
 // Static "action" rows that appear above the device hits when the query
 // is empty or matches an action name.
@@ -287,7 +288,12 @@ export default function Palette({
           <span>↑↓ navigate</span>
           <span>↵ select</span>
           <span>esc close</span>
-          {loading && <span className="loading">searching…</span>}
+          {loading && (
+            <>
+              <Skeleton type="line" height="0.75rem" width="100%" />
+              <Skeleton type="line" height="0.75rem" width="80%" />
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import { Banner } from "./ui/index.js";
 
 // D-3: the self-healing playbook dashboard. The PLAYBOOKS panel shows the
 // engine's declarative detect→verify-safe→remediate→confirm rules (with
@@ -99,7 +100,7 @@ function PlaybooksPanel({
           </button>
         )}
       </div>
-      {error && <div className="banner err">{error}</div>}
+      {error && <Banner tone="err">{error}</Banner>}
       {form && (
         <CreatePlaybookForm
           onCancel={() => form.close()}
@@ -223,7 +224,7 @@ function CreatePlaybookForm({ onCancel, onSubmit }) {
 
   return (
     <form className="heal-form" onSubmit={submit}>
-      {err && <div className="banner err">{err}</div>}
+      {err && <Banner tone="err">{err}</Banner>}
       <div className="heal-form-grid">
         <label>
           Name
@@ -384,7 +385,7 @@ function RunsPanel({
           </select>
         </div>
       </div>
-      {error && <div className="banner err">{error}</div>}
+      {error && <Banner tone="err">{error}</Banner>}
       {selectedRun ? (
         <RunDetail
           run={selectedRun.run}
@@ -677,7 +678,7 @@ export default function Heal({ token, onUnauthorized, onGoToDevice }) {
         </div>
       </div>
 
-      {error && <div className="banner err">{error}</div>}
+      {error && <Banner tone="err">{error}</Banner>}
 
       <div className="heal-panels">
         <PlaybooksPanel

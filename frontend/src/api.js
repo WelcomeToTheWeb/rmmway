@@ -122,6 +122,17 @@ export const api = {
   bulkDispatch: (token, body) =>
     request("/api/devices/bulk/commands", { method: "POST", token, body }),
 
+  // ---- Tickets (Wave 3, gap #7) ----------------------------------------
+  // GET /api/tickets?status=&limit= -> Ticket[] (id, title, status, priority,
+  // device_id, client_id, created_at, updated_at, ...) 503 in-memory mode.
+  tickets: (token, { status = "", limit = 100 } = {}) => {
+    const q = new URLSearchParams();
+    if (status) q.set("status", status);
+    if (limit) q.set("limit", String(limit));
+    const qs = q.toString();
+    return request(`/api/tickets${qs ? "?" + qs : ""}`, { token });
+  },
+
   // ---- D-2: global event journal -----------------------------------------
   // GET /api/events?after=&limit=&category=&device=&type= -> Envelope[]
   // (oldest first; journal entries with seq > after, up to limit — server
@@ -410,13 +421,15 @@ export const api = {
 
   // ---- gap #4: deep inventory (lane A, wave 3) -----------------------------
   // GET /api/devices/{id}/inventory -> { hardware: {...}, software: [...], collected_at: "..." }
-  deviceInventory: (token, id) => request(`/api/devices/${id}/inventory`, { token }),
+  deviceInventory: (token, id) =>
+    request(`/api/devices/${id}/inventory`, { token }),
 
   // POST /api/devices/{id}/inventory/collect -> { command_id }
-  collectDeviceInventory: (token, id) => request(`/api/devices/${id}/inventory/collect`, {
-    token,
-    method: "POST",
-  }),
+  collectDeviceInventory: (token, id) =>
+    request(`/api/devices/${id}/inventory/collect`, {
+      token,
+      method: "POST",
+    }),
 
   // ---- C #10a: settings (wave 1) -------------------------------------------
   // Operator-gated (JWT required) recurring settings surface — the setup
@@ -601,11 +614,19 @@ export const api = {
   // ---- gap #1a: remote session (Lane A owns backend, Lane C owns viewer) ---
   // POST /api/devices/{id}/session/start { fps? } -> { session_id, fps, device_id }
   startSession: (token, deviceID, body) =>
-    request(`/api/devices/${deviceID}/session/start`, { method: "POST", token, body }),
+    request(`/api/devices/${deviceID}/session/start`, {
+      method: "POST",
+      token,
+      body,
+    }),
 
   // POST /api/devices/{id}/session/stop { session_id } -> { stopped: true }
   stopSession: (token, deviceID, body) =>
-    request(`/api/devices/${deviceID}/session/stop`, { method: "POST", token, body }),
+    request(`/api/devices/${deviceID}/session/stop`, {
+      method: "POST",
+      token,
+      body,
+    }),
 
   // SSE stream: GET /api/devices/{id}/session/stream?token=... -> text/event-stream
   // (handled directly by EventSource in SessionViewer.jsx)

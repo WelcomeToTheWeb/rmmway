@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, useCallback } from "react";
+import { Fragment, useEffect, useState, useCallback, useMemo } from "react";
 import { AuthProvider, useAuth } from "./auth.jsx";
 import { api } from "./api.js";
 import { openEventStream } from "./sse.js";
@@ -14,11 +14,13 @@ import Heal from "./Heal.jsx";
 import Webhooks from "./Webhooks.jsx";
 import Baseline from "./Baseline.jsx";
 import Reports from "./Reports.jsx";
+import Tickets from "./Tickets.jsx";
 import SessionViewer from "./SessionViewer.jsx";
 import Settings from "./Settings.jsx";
 import Palette from "./Palette.jsx";
 import { ThemeToggle } from "./ui/theme.jsx";
 import { ErrorBoundary } from "./ui/index.js";
+import Breadcrumb from "./ui/Breadcrumb.jsx";
 
 // ---- data-driven nav (F3, wave 0) -----------------------------------------
 // NAV_ITEMS is the single source of truth for the top-nav. Other lanes add
@@ -39,12 +41,13 @@ const NAV_ITEMS = [
     badge: "alerts",
   },
   { label: "Clients", path: "clients", group: "Fleet", kind: "route" },
+  { label: "Tickets", path: "tickets", group: "Fleet", kind: "route" },
   { label: "Flows", path: "flows", group: "Ops", kind: "route" },
   { label: "Events", path: "events", group: "Ops", kind: "route" },
   { label: "Heal", path: "heal", group: "Ops", kind: "route" },
   { label: "Webhooks", path: "webhooks", group: "System", kind: "route" },
-  { label: "Baseline", path: "baseline", group: "System", kind: "route" },
-  { label: "Reports", path: "reports", group: "Ops", kind: "route" },
+  { label: "Anomalies", path: "baseline", group: "Ops", kind: "route" },
+  { label: "Reports", path: "reports", group: "System", kind: "route" },
   { label: "Settings", path: "settings", group: "System", kind: "route" },
   {
     label: "Search",
@@ -62,6 +65,10 @@ const NAV_ITEMS = [
 // fall back there; #/devices stays a live deep link for shared table URLs.
 function parseRoute() {
   const h = window.location.hash;
+  // Check sub-routes first (they are not in NAV_ITEMS)
+  if (h.startsWith("#/session/")) return h.slice(2); // "session/dev-abc..."
+  if (h.startsWith("#/commands/")) return h.slice(2); // "commands/dev-abc..."
+  // Then check NAV_ITEMS
   for (const item of NAV_ITEMS) {
     if (item.kind === "route" && h.startsWith("#/" + item.path)) {
       return item.path;
@@ -380,6 +387,51 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [token]);
 
+  // Breadcrumb navigation based on route
+  const breadcrumbs = useMemo(() => {
+    const items = [];
+    if (route === "dashboard") {
+      items.push({ label: "Dashboard" });
+    } else if (route === "devices") {
+      items.push({ label: "Fleet", href: "#/dashboard" });
+      items.push({ label: "Devices" });
+    } else if (route === "alerts") {
+      items.push({ label: "Fleet", href: "#/dashboard" });
+      items.push({ label: "Alerts" });
+    } else if (route === "clients") {
+      items.push({ label: "Fleet", href: "#/dashboard" });
+      items.push({ label: "Clients" });
+    } else if (route === "tickets") {
+      items.push({ label: "Fleet", href: "#/dashboard" });
+      items.push({ label: "Tickets" });
+    } else if (route === "flows") {
+      items.push({ label: "Ops", href: "#/dashboard" });
+      items.push({ label: "Flows" });
+    } else if (route === "events") {
+      items.push({ label: "Ops", href: "#/dashboard" });
+      items.push({ label: "Events" });
+    } else if (route === "heal") {
+      items.push({ label: "Ops", href: "#/dashboard" });
+      items.push({ label: "Heal" });
+    } else if (route === "baseline") {
+      items.push({ label: "Ops", href: "#/dashboard" });
+      items.push({ label: "Anomalies" });
+    } else if (route === "webhooks") {
+      items.push({ label: "System", href: "#/dashboard" });
+      items.push({ label: "Webhooks" });
+    } else if (route === "reports") {
+      items.push({ label: "System", href: "#/dashboard" });
+      items.push({ label: "Reports" });
+    } else if (route === "settings") {
+      items.push({ label: "System", href: "#/dashboard" });
+      items.push({ label: "Settings" });
+    } else if (route.startsWith("session/")) {
+      items.push({ label: "Fleet", href: "#/devices" });
+      items.push({ label: "Session" });
+    }
+    return items;
+  }, [route]);
+
   const goToDevice = useCallback((id, hostname) => {
     window.location.hash = "#/devices";
     setFocusFilter(hostname || id);
@@ -419,6 +471,7 @@ function Shell() {
   return (
     <div className="shell">
       <Header route={route} openCount={openCount} onOpenPalette={openPalette} />
+      <Breadcrumb items={breadcrumbs} />
       <main className="content">
         {/* One boundary per route: a caught error panels that view but
             never blocks navigating to the rest of the app. */}
@@ -462,6 +515,8 @@ function Shell() {
             />
           ) : route === "reports" ? (
             <Reports token={token} onUnauthorized={logout} />
+          ) : route === "tickets" ? (
+            <Tickets token={token} onUnauthorized={logout} />
           ) : route.startsWith("session/") ? (
             <SessionViewer
               deviceID={route.slice("session/".length)}
