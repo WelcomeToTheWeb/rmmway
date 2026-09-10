@@ -680,14 +680,15 @@ func (u *Uplink) collectInventoryCommand(ctx context.Context, stream agentv1.Age
 
 	// Users
 	if users, err := inventory.CollectUsers(ctx); err == nil {
-		for _, u := range users {
+		for i := 0; i < len(users); i++ {
+			user := users[i]
 			inv.Users = append(inv.Users, &agentv1.UserAccount{
-				Username:    u.Username,
-				Uid:         u.Uid,
-				HomeDir:     u.HomeDir,
-				Shell:       u.Shell,
-				Enabled:     u.Enabled,
-				AccountType: u.AccountType,
+				Username:    user.Username,
+				Uid:         user.Uid,
+				HomeDir:     user.HomeDir,
+				Shell:       user.Shell,
+				Enabled:     user.Enabled,
+				AccountType: user.AccountType,
 			})
 		}
 	} else {
@@ -775,23 +776,30 @@ func (u *Uplink) patchApplyCommand(ctx context.Context, stream agentv1.AgentServ
 	}()
 
 	// Report progress
-	for progress := range progressCh {
-		status := &agentv1.PatchStatus{
-			CommandId:  cmd.GetId(),
-			StatusAtMs: time.Now().UnixMilli(),
+	for {
+		select {
+		case progress, ok := <-progressCh:
+			if !ok {
+				goto done
+			}
+			status := &agentv1.PatchStatus{
+				CommandId:  cmd.GetId(),
+				StatusAtMs: time.Now().UnixMilli(),
+			}
+			status.Apply = &agentv1.PatchApplyProgress{
+				Phase:           progress.Phase,
+				Message:         progress.Message,
+				ProgressPercent: progress.ProgressPercent,
+				RebootRequired:  progress.RebootRequired,
+				Errors:          progress.Errors,
+			}
+			if err := stream.Send(&agentv1.StreamRequest{
+				Payload: &agentv1.StreamRequest_PatchStatus{PatchStatus: status},
+			}); err != nil {
+				return err
+			}
 		}
-		status.Apply = &agentv1.PatchApplyProgress{
-			Phase:           progress.Phase,
-			Message:         progress.Message,
-			ProgressPercent: progress.ProgressPercent,
-			RebootRequired:  progress.RebootRequired,
-			Errors:          progress.Errors,
-		}
-		if err := stream.Send(&agentv1.StreamRequest{
-			Payload: &agentv1.StreamRequest_PatchStatus{PatchStatus: status},
-		}); err != nil {
-			return err
-		}
+	done:
 	}
 
 	u.cfg.Logger.Info("patch_apply: completed", "cmd", cmd.GetId())

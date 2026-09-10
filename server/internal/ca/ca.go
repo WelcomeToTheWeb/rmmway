@@ -307,6 +307,6 @@ func x509v3SubjectKeyId(c *x509.Certificate) []byte {
 	if len(c.SubjectKeyId) > 0 {
 		return c.SubjectKeyId
 	}
-	h := sha1.Sum(c.RawSubjectPublicKeyInfo)
-	return h[:]
+	h := sha256.Sum256(c.RawSubjectPublicKeyInfo)
+	return h[:32]
 }
