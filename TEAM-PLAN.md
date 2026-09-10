@@ -459,3 +459,59 @@ viewer + #8b reports; Lane B #6 notifications).
 - [todo] Wave 4 kickoff: M4 milestones — scheduled compliance reports (PDF),
   two-way remote input (Windows), patch mgmt production hardening, integration
   e2e across all lanes, release cut.
+
+### 2026-09-10 — Wave 4 execution session (pi supervisor + 3 parallel worker subagents via Herdr)
+
+- Setup: 3 workers in isolated Herdr workspaces with git worktrees off `c34728b`
+  (post-wave-3 baseline). Each subagent was a separate pi instance launched via
+  `herdr agent start --kind pi`, given a focused task brief for their lane's
+  Wave 4/M4 scope from the plan. Supervisor coordinated via `herdr agent prompt`
+  and `herdr agent read`, waiting for completion, then merging each lane to main.
+- **Lane A — #1b Windows two-way input API + #4 patch mgmt production hardening (shipped):**
+  - Implemented Windows SendInput API in agent/internal/session/input_windows.go
+    (replaced stub): mouse events (move, down, up, click, wheel with absolute
+    coordinate normalization to SendInput's 0-65535 range), keyboard events
+    (modifier handling, VK code mapping via VkKeyScanW, up/down/key event types).
+    Each event verified against SendInput's return value.
+  - Unit tests for session driver input routing (4 tests) in session_test.go.
+  - Patch management production hardening: retry logic with exponential backoff
+    (configurable, 3 retries/2s base/2x backoff/60s max), idempotency tracking
+    (skips already-installed patches on duplicate Apply), installing state
+    tracking for concurrent operations, timeout handling (5-min query, 2-hr
+    install, context-aware), structured output parsing for per-patch results.
+  - 7 patch management unit tests. Added missing inventory stubs for darwin/windows.
+  - Committed 6 commits, merged to main fast-forward → `947743a`.
+- **Lane B — PDF report generation for all 5 report types + 3-lane integration e2e (shipped):**
+  - Added github.com/jung-kurt/gofpdf dependency. Created server/internal/reports/pdf.go
+    (shared PDF generation utilities: header, table, summary box rendering) and
+    pdf_generators.go (PDF variants of all 5 report types).
+  - All 5 report types now support both CSV and PDF output: Fleet Status, Device
+    Report, Patch Compliance, License Compliance, Uptime/SLA. Added the 3 missing
+    CSV generators. Updated API to accept output_format parameter.
+  - Created server/cmd/e2e-integration/ package with comprehensive 3-lane
+    integration test exercising the full journey: enroll → client → alert →
+    ticket → notify → report.
+  - PDF generation unit tests (85 assertions) and API route tests (138 assertions).
+  - Committed 2 commits, merged to main → `4d92f33`.
+- **Lane C — 5k device load test + documentation + release prep (shipped):**
+  - Created scripts/load-test/ Go-based load test harness simulating synthetic
+    agents via gRPC. Supports configurable device count, duration, intervals,
+    alert rate. Collects and reports enrollment, stream, heartbeat, and metric
+    throughput. Built and verified working.
+  - docs/load-test.md: load test methodology, expected results, bottleneck analysis.
+  - docs/operator-guide.md: comprehensive operator guide (installation, enrollment,
+    client/RBAC management, alerting, ticketing, reporting, patch management,
+    monitoring, backup, security).
+  - docs/remote-session-operator.md: operator view of remote sessions.
+  - docs/releases/v1.0.0.md: M4 release notes.
+  - RELEASE.md: release process documentation. CHANGELOG.md: all M4/M5 features.
+  - Updated README with M4 feature highlights. Version bumped to 1.0.0.
+  - Committed 2 commits, merged to main → `1797127`.
+- **Supervisor verification post-merge:** make build green (server + agent),
+  make test green (all 28 test packages pass), make agent green (6 static binaries
+  built), make verify-agent green (statically linked binaries verified).
+- **Wave 4 gate PASSED (2026-09-10)** at `1797127`. All M4 milestones complete:
+  Windows two-way input API, patch mgmt hardening, PDF report generation for all
+  5 report types, 3-lane integration e2e test, 5k device load test, documentation,
+  release prep (v1.0.0).
+- [todo] Push to origin, update Obsidian plan note, mark M4/M5 as complete.
