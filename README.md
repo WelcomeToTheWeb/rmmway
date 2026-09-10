@@ -60,6 +60,14 @@ automation all stay under your control.
   only ever install a binary that verifies against a release key pinned
   inside the agent. A tampered or unsigned build is refused
 
+**Reporting & compliance**
+
+- **Scheduled & on-demand reports** — 5 report types (Fleet Status, Device
+  Report, Patch Compliance, License Compliance, Uptime/SLA) in CSV or PDF
+  format. Configure recurring report schedules per client or run manually
+  from the UI. Reports are stored in MinIO and downloadable from the Reports
+  dashboard.
+
 **Integrations & data ownership**
 
 - **Webhooks** (HMAC-SHA256 signed, Stripe-style) and a public **SSE event
