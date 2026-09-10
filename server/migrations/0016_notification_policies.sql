@@ -17,8 +17,7 @@ CREATE TABLE IF NOT EXISTS notification_policies (
     category   text NOT NULL
                CHECK (category IN ('alert', 'escalation')),
     client_id  text REFERENCES clients (id) ON DELETE SET NULL,
-    role       text REFERENCES users (role) ON DELETE SET NULL
-               CHECK (role IN ('admin', 'tech', 'viewer')),
+    role       text CHECK (role IS NULL OR role IN ('admin', 'tech', 'viewer')),
     channels   text[] NOT NULL DEFAULT '{}',  -- channel IDs to fire
     enabled    boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT now(),

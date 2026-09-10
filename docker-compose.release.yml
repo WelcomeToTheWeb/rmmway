@@ -1,0 +1,213 @@
+# RMMWay PRODUCTION — pre-built images (pull and run, no build step).
+#
+# Usage:
+#   cp .env.prod.example .env.prod   # then set secrets
+#   docker compose -f docker-compose.release.yml up -d
+#
+# Requires .env.prod with RMMWAY_PG_PASSWORD, RMMWAY_MINIO_PASSWORD,
+# RMMWAY_MEILI_MASTER_KEY, RMMWAY_JWT_SECRET, RMMWAY_ADMIN_PASSWORD.
+#
+# Public ports: 80/443 (Caddy TLS edge), 50052 (agent mTLS gRPC).
+# All other services are internal only.
+
+name: rmmway-prod
+
+networks:
+  rmmway:
+    name: rmmway-prod
+
+services:
+  timescale:
+    image: timescale/timescaledb:2.29.2-pg16
+    environment:
+      POSTGRES_DB: rmmway
+      POSTGRES_USER: ${RMMWAY_PG_USER:-rmmway}
+      POSTGRES_PASSWORD: ${RMMWAY_PG_PASSWORD:?set RMMWAY_PG_PASSWORD in .env.prod}
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${RMMWAY_PG_USER:-rmmway} -d rmmway"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+
+  nats:
+    image: nats:2.11-alpine
+    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "4222"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+
+  redis:
+    image: redis:7
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--maxmemory",
+        "512mb",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID, DAC_OVERRIDE]
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${RMMWAY_MINIO_USER:-rmmway}
+      MINIO_ROOT_PASSWORD: ${RMMWAY_MINIO_PASSWORD:?set RMMWAY_MINIO_PASSWORD in .env.prod}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    environment:
+      MEILI_MASTER_KEY: ${RMMWAY_MEILI_MASTER_KEY:?set RMMWAY_MEILI_MASTER_KEY in .env.prod}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meili-data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  loki:
+    image: grafana/loki:3.5.4
+    command: ["-config.file=/etc/loki/loki-local-config.yaml"]
+    volumes:
+      - ./loki:/etc/loki:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  server:
+    image: ghcr.io/welcometotheweb/rmmway-server:1.0.0
+    environment:
+      RMMWAY_VERSION: "1.0.0"
+      RMMWAY_ADDR: ":8080"
+      RMMWAY_GRPC_ADDR: ":50051"
+      RMMWAY_GRPC_MTLS_ADDR: ":50052"
+      RMMWAY_PUBLIC_URL: ${RMMWAY_PUBLIC_URL:-}
+      RMMWAY_GRPC_MTLS_SANs: ${RMMWAY_GRPC_MTLS_SANs:-}
+      RMMWAY_DOMAIN: ${RMMWAY_DOMAIN:-localhost}
+      RMMWAY_ENV: prod
+      RMMWAY_PG_DSN: postgres://${RMMWAY_PG_USER:-rmmway}:${RMMWAY_PG_PASSWORD}@timescale:5432/rmmway?sslmode=disable
+      RMMWAY_NATS_URL: nats://nats:4222
+      RMMWAY_REDIS_ADDR: redis:6379
+      RMMWAY_MINIO_ENDPOINT: http://minio:9000
+      RMMWAY_MEILI_ENDPOINT: http://meilisearch:7700
+      RMMWAY_MEILI_MASTER_KEY: ${RMMWAY_MEILI_MASTER_KEY}
+      RMMWAY_JWT_SECRET: ${RMMWAY_JWT_SECRET:?set RMMWAY_JWT_SECRET in .env.prod}
+      RMMWAY_ADMIN_USER: ${RMMWAY_ADMIN_USER:-admin}
+      RMMWAY_ADMIN_PASSWORD: ${RMMWAY_ADMIN_PASSWORD:?set RMMWAY_ADMIN_PASSWORD in .env.prod}
+      RMMWAY_MIGRATIONS_DIR: /migrations
+    ports:
+      - "${RMMWAY_AGENT_MTLS_PORT:-50052}:50052"
+    volumes:
+      - ./server/migrations:/migrations:ro
+    depends_on:
+      timescale:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  frontend:
+    image: ghcr.io/welcometotheweb/rmmway-frontend:1.0.0
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [SETPCAP, NET_BIND_SERVICE]
+
+  caddy:
+    image: caddy:2.11-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      RMMWAY_DOMAIN: ${RMMWAY_DOMAIN:-localhost}
+      RMMWAY_ACME_EMAIL: ${RMMWAY_ACME_EMAIL:-admin@localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      server:
+        condition: service_started
+      frontend:
+        condition: service_started
+    networks: [rmmway]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [SETPCAP, NET_BIND_SERVICE]
+
+volumes:
+  timescale-data:
+  nats-data:
+  redis-data:
+  minio-data:
+  meili-data:
+  loki-data:
+  caddy-data:
+  caddy-config:
