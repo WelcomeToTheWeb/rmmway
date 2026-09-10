@@ -130,9 +130,9 @@ services:
     cap_drop: [ALL]
 
   server:
-    image: ghcr.io/welcometotheweb/rmmway-server:1.0.1
+    image: ghcr.io/welcometotheweb/rmmway-server:1.0.2
     environment:
-      RMMWAY_VERSION: "1.0.1"
+      RMMWAY_VERSION: "1.0.2"
       RMMWAY_ADDR: ":8080"
       RMMWAY_GRPC_ADDR: ":50051"
       RMMWAY_GRPC_MTLS_ADDR: ":50052"
@@ -174,7 +174,7 @@ services:
     cap_drop: [ALL]
 
   frontend:
-    image: ghcr.io/welcometotheweb/rmmway-frontend:1.0.1
+    image: ghcr.io/welcometotheweb/rmmway-frontend:1.0.2
     ports:
       - "${RMMWAY_FRONTEND_PORT:-8081}:8080"
     networks: [rmmway]
